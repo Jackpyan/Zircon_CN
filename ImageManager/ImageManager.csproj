@@ -27,7 +27,7 @@
     <NoWarn>1701;1702;CA1416</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="DevExpress.Win" Version="22.2.3" />
+<PackageReference Include="DevExpress.Win" Version="22.2.3" />
     <PackageReference Include="DevExpress.Win.BonusSkins" Version="22.2.3" />
     <PackageReference Include="DevExpress.Win.Design" Version="22.2.3" />
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
