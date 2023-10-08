@@ -1,5 +1,4 @@
 ﻿using Library;
-using Library.Network.ClientPackets;
 using Server.DBModels;
 using Server.Envir;
 using System;
@@ -35,7 +34,7 @@ namespace Server.Models.Magics
 
         public override void MagicComplete(params object[] data)
         {
-            if (Player.Buffs.Any(x => x.Type == BuffType.MagicShield)) return;
+            if (Player.Buffs.Any(x => x.Type == BuffType.MagicShield) || Player.Buffs.Any(x => x.Type == BuffType.SuperiorMagicShield)) return;
 
             Stats buffStats = new Stats
             {
