@@ -24,14 +24,8 @@ namespace Server.Models.Magics.Warrior
                 Ob = null
             };
 
-            if (!Functions.InRange(CurrentLocation, location, Globals.MagicRange))
-            {
-                response.Cast = false;
-                return response;
-            }
-
-            response.Locations.Add(location);
-            var cells = CurrentMap.GetCells(location, 0, 2);
+            response.Locations.Add(Player.CurrentLocation);
+            var cells = CurrentMap.GetCells(Player.CurrentLocation, 0, 2);
 
             var delay = SEnvir.Now.AddMilliseconds(1500);
 
