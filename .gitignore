@@ -12,3 +12,5 @@ packages/
 **/node_modules/
 .DS_Store
 /tmp
+/Exports/*
+/artifacts

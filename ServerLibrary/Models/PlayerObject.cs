@@ -6500,7 +6500,7 @@ namespace Server.Models
                                     LevelMagic(potionMastery.Magic);
                             }
 
-                            if (GetMagic(MagicType.AdvancedPotionMastery, out AdvancedPotionMastery advancedPotionMastery))
+                            if (GetMagic(MagicType.AugmentPotionMastery, out AugmentPotionMastery advancedPotionMastery))
                             {
                                 health += health * advancedPotionMastery.Magic.GetPower() / 100;
                                 mana += mana * advancedPotionMastery.Magic.GetPower() / 100;
