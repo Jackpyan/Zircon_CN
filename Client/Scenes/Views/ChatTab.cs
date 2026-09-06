@@ -369,6 +369,7 @@ namespace Client.Scenes.Views
                 AutoSize = false,
                 Text = message,
                 Outline = false,
+                SeparateBackground = true,
                 DrawFormat = TextFormatFlags.WordBreak | TextFormatFlags.WordEllipsis,
                 Parent = TextPanel,
             };
@@ -432,6 +433,7 @@ namespace Client.Scenes.Views
                         AutoSize = false,
                         Text = "你已经死亡，点击此处在城镇复活。",
                         Outline = false,
+                        SeparateBackground = true,
                         DrawFormat = TextFormatFlags.WordBreak | TextFormatFlags.WordEllipsis,
                         Parent = TextPanel,
                     };
