@@ -2928,17 +2928,11 @@ namespace Client.Scenes.Views
             Location = new Point(0, GameScene.Game.NPCBox.Size.Height);
             DropShadow = true;
 
-            TitleLabel = new DXLabel
+            TitleLabel = new DXWindowTitleLabel
             {
                 Text = "任务列表",
                 Parent = this,
-                Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
-                ForeColour = Constants.PrimaryColour,
-                Outline = true,
-                OutlineColour = Color.Black,
-                IsControl = false,
             };
-            TitleLabel.Location = new Point((DisplayArea.Width - TitleLabel.Size.Width) / 2, 8);
 
             AcceptableLabel = new DXLabel
             {
@@ -3372,17 +3366,11 @@ namespace Client.Scenes.Views
             Location = new Point(GameScene.Game.NPCBox.Size.Width, 0);
             DropShadow = true;
 
-            TitleLabel = new DXLabel
+            TitleLabel = new DXWindowTitleLabel
             {
                 Text = "任务",
                 Parent = this,
-                Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
-                ForeColour = Constants.PrimaryColour,
-                Outline = true,
-                OutlineColour = Color.Black,
-                IsControl = false,
             };
-            TitleLabel.Location = new Point((DisplayArea.Width - TitleLabel.Size.Width) / 2, 8);
 
             CloseButton = new DXButton
             {
@@ -4101,17 +4089,11 @@ namespace Client.Scenes.Views
             CloseButton.Location = new Point(DisplayArea.Width - CloseButton.Size.Width - 3, 3);
             CloseButton.MouseClick += (o, e) => Visible = false;
 
-            TitleLabel = new DXLabel
+            TitleLabel = new DXWindowTitleLabel
             {
                 Text = "领养宠物",
                 Parent = this,
-                Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
-                ForeColour = Constants.PrimaryColour,
-                Outline = true,
-                OutlineColour = Color.Black,
-                IsControl = false,
             };
-            TitleLabel.Location = new Point((DisplayArea.Width - TitleLabel.Size.Width) / 2, 8);
 
             CompanionDisplayPoint = new Point(105, 130);
 
@@ -4547,17 +4529,11 @@ namespace Client.Scenes.Views
             CloseButton.Location = new Point(DisplayArea.Width - CloseButton.Size.Width - 3, 3);
             CloseButton.MouseClick += (o, e) => Visible = false;
 
-            TitleLabel = new DXLabel
+            TitleLabel = new DXWindowTitleLabel
             {
                 Text = "宠物寄存",
                 Parent = this,
-                Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
-                ForeColour = Constants.PrimaryColour,
-                Outline = true,
-                OutlineColour = Color.Black,
-                IsControl = false,
             };
-            TitleLabel.Location = new Point((DisplayArea.Width - TitleLabel.Size.Width) / 2, 8);
 
             CompanionDisplayPoint = new Point(55, 90);
 
