@@ -785,6 +785,7 @@ namespace Client.Envir
                         GameScene.Game.CompanionBox.RefreshFilter();
 
                         GameScene.Game.CharacterBox.UpdateDiscipline();
+                        GameScene.Game.CharacterBox.RefreshCrafting();
 
                         break;
                 }
@@ -2114,10 +2115,12 @@ namespace Client.Envir
             }
 
             GameScene.Game.AddItems(p.Items);
+            RefreshCrafting();
         }
         public void Process(S.ItemMove p)
         {
             DXItemCell fromCell, toCell;
+            bool craftingMaterialsChanged = p.FromGrid is GridType.Inventory or GridType.Storage || p.ToGrid is GridType.Inventory or GridType.Storage;
 
             switch (p.FromGrid)
             {
@@ -2177,7 +2180,6 @@ namespace Client.Envir
 
             if (!p.Success) return;
 
-
             if (p.FromGrid != p.ToGrid)
             {
                 if (p.FromGrid == GridType.Inventory) //Moving FROM bag
@@ -2235,6 +2237,8 @@ namespace Client.Envir
                     toCell.Item.Count += fromCell.Item.Count;
                     fromCell.Item = null;
                     toCell.RefreshItem();
+                    if (craftingMaterialsChanged)
+                        RefreshCrafting();
 
                     return;
                 }
@@ -2243,6 +2247,8 @@ namespace Client.Envir
                 toCell.Item.Count = toCell.Item.Info.StackSize;
                 fromCell.RefreshItem();
                 toCell.RefreshItem();
+                if (craftingMaterialsChanged)
+                    RefreshCrafting();
                 return;
             }
 
@@ -2250,6 +2256,8 @@ namespace Client.Envir
 
             toCell.Item = fromCell.Item;
             fromCell.Item = temp;
+            if (craftingMaterialsChanged)
+                RefreshCrafting();
 
             //if (p.ToGrid == GridType.GuildStorage || p.FromGrid == GridType.GuildStorage)
             //    GameScene.Game.GuildPanel.StorageControl.ItemCount = GameScene.Game.GuildStorage.Count(x => x != null);
@@ -2279,6 +2287,8 @@ namespace Client.Envir
             {
                 GameScene.Game.BigPatchBox?.Helper?.GainedHuntGold(gained);
             }
+
+            RefreshCrafting(false);
         }
 
         public void Process(S.ItemChanged p)
@@ -2319,7 +2329,6 @@ namespace Client.Envir
 
             if (!p.Success) return;
 
-
             if (!fromCell.Item.Info.ShouldLinkInfo)
             {
                 for (int i = 0; i < GameScene.Game.BeltBox.Links.Length; i++)
@@ -2344,6 +2353,8 @@ namespace Client.Envir
                 fromCell.Item.Count = p.Link.Count;
 
             fromCell.RefreshItem();
+            if (p.Link.GridType is GridType.Inventory or GridType.Storage)
+                RefreshCrafting();
         }
         public void Process(S.ItemsChanged p)
         {
@@ -2407,6 +2418,18 @@ namespace Client.Envir
             }
 
             DXItemCell.SelectedCell = null;
+            if (p.Links.Any(x => x.GridType is GridType.Inventory or GridType.Storage))
+                RefreshCrafting();
+        }
+
+        private static void RefreshCrafting(bool refreshMaterials = true)
+        {
+            GameScene game = GameScene.Game;
+            if (game == null || game.Observer || game.CraftingRecipeBox == null) return;
+            if (game.CharacterBox?.CraftingVisible != true && game.CraftingRecipeBox.Visible != true && game.CraftingProgressBox?.Visible != true) return;
+
+            game.CraftingRecipeBox.RefreshAll(refreshMaterials);
+            game.CraftingProgressBox?.RefreshActionButton();
         }
 
         public void Process(S.ItemStatsChanged p)
@@ -2734,6 +2757,7 @@ namespace Client.Envir
 
             cell.Item = null;
             cell.RefreshItem();
+            RefreshCrafting();
         }
 
         public void Process(S.ItemExperience p)
@@ -5146,6 +5170,35 @@ namespace Client.Envir
             if (info == null) return;
 
             GameScene.Game.MilestoneAchievedBox.Show(info);
+        }
+
+        public void Process(S.CraftingState p)
+        {
+            UserObject user = GameScene.Game?.User;
+            if (user == null) return;
+
+            user.CraftingLevel = p.Level;
+            user.CraftingExperience = p.Experience;
+            user.FavouriteCraftingRecipeIndex = p.FavouriteRecipeIndex;
+            RefreshCrafting(false);
+        }
+
+        public void Process(S.CraftingStarted p)
+        {
+            CraftingRecipeInfo recipe = Globals.CraftingRecipeInfoList.Binding.FirstOrDefault(x => x.Index == p.RecipeIndex);
+            GameScene.Game.CraftingProgressBox.Start(recipe, p.Design, p.Duration);
+        }
+
+        public void Process(S.CraftingEnded p)
+        {
+            UserObject user = GameScene.Game?.User;
+            if (user != null)
+            {
+                user.CraftingLevel = p.Level;
+                user.CraftingExperience = p.Experience;
+            }
+            GameScene.Game.CraftingProgressBox.End(p.Result, p.Interrupted);
+            RefreshCrafting(false);
         }
     }
 }

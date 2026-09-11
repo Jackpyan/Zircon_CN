@@ -2411,6 +2411,22 @@ namespace Library
         Success
     }
 
+    public enum CraftingCategory : byte
+    {
+        Weapon = 0,
+        Armour = 1,
+        Accessories = 2,
+        Consumable = 3,
+        Ingredients = 4,
+    }
+
+    public enum CraftingResult : byte
+    {
+        Success,
+        Failed,
+        Cancelled,
+    }
+
     #endregion
 
     #region Sound
