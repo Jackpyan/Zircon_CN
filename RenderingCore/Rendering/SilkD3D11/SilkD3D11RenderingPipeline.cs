@@ -200,7 +200,9 @@ namespace Shared.Rendering.SilkD3D11
                 SetD3DRenderTarget(_currentTarget);
                 Clear(RenderClearFlags.Target, GdiColor.Black, 0, 0);
 
-                drawScene();
+                RenderDiagnostics.BeginScene();
+                try { drawScene(); }
+                finally { RenderDiagnostics.EndScene(); }
 
                 EndSpriteBatch();
                 FlushLines();
@@ -373,6 +375,7 @@ namespace Shared.Rendering.SilkD3D11
                 }
             }
 
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.LineBatches);
             _lineBatch.Clear();
         }
 
@@ -407,8 +410,11 @@ namespace Shared.Rendering.SilkD3D11
                 physicalRectangle.Width / scaleX,
                 physicalRectangle.Height / scaleY);
 
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.LineVertices, 6);
             DrawSolidRectangle(logicalRectangle, colour, opacity);
         }
+
+        public bool IsPresentationSurface => _currentTarget?.IsBackBuffer == true;
 
         public void DrawTexture(RenderTexture texture, Rectangle sourceRectangle, RectangleF destinationRectangle, GdiColor colour)
         {
@@ -417,6 +423,7 @@ namespace Shared.Rendering.SilkD3D11
                 destinationRectangle = RenderingPipelineManager.AlignTextDestination(destinationRectangle, _currentTarget.Size, sourceRectangle.Size);
                 destinationRectangle = RenderingPipelineManager.AlignBorderBackground(destinationRectangle, _currentTarget.Size);
             }
+            destinationRectangle = RenderingPipelineManager.MapUICacheDestination(destinationRectangle, sourceRectangle.Size);
             DrawTextureCore(texture, sourceRectangle, destinationRectangle, Matrix3x2.Identity, colour);
         }
 
@@ -433,6 +440,7 @@ namespace Shared.Rendering.SilkD3D11
 
             finalTransform.M31 += translation.X;
             finalTransform.M32 += translation.Y;
+            finalTransform = RenderingPipelineManager.MapUICacheTransform(finalTransform);
             DrawTextureCore(texture, source, destination, finalTransform, colour);
         }
 
@@ -451,7 +459,8 @@ namespace Shared.Rendering.SilkD3D11
                     if (_spriteBatch.Count >= MaxSprites)
                         EndSpriteBatch();
 
-                    _spriteBatch.Add(CreateSpriteBatchItem(resource, sourceRectangle, destinationRectangle, Matrix3x2.Identity, colour, _opacity, null));
+                    RenderDiagnostics.Count(RenderDiagnostics.Counter.SpritesQueued);
+                    _spriteBatch.Add(CreateSpriteBatchItem(resource, sourceRectangle, destinationRectangle, RenderingPipelineManager.MapUICacheTransform(Matrix3x2.Identity), colour, _opacity, null));
                 }
             }
         }
@@ -489,6 +498,7 @@ namespace Shared.Rendering.SilkD3D11
 
             EndSpriteBatch();
             FlushLines();
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.TargetSwitches);
             _currentTarget = target;
             SetD3DRenderTarget(_currentTarget);
         }
@@ -556,6 +566,7 @@ namespace Shared.Rendering.SilkD3D11
                 return;
             }
 
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.TargetClears);
             _deviceContext.ClearRenderTargetView(_currentTarget.RenderTargetView, (float*)&color);
         }
 
@@ -754,7 +765,9 @@ namespace Shared.Rendering.SilkD3D11
 
             FlushLinesIfNeeded();
 
-            SpriteEffect? effect = null;
+            SpriteEffect? effect = RenderingPipelineManager.PresentingUICache
+                ? new SpriteEffect(SpriteEffectMode.PremultipliedCache, 0, resource.Size, Vector4.Zero, null)
+                : null;
             RenderingPipelineManager.SpriteShaderEffectRequest? request = RenderingPipelineManager.GetSpriteShaderEffect();
             if (request.HasValue)
             {
@@ -794,6 +807,7 @@ namespace Shared.Rendering.SilkD3D11
                 if (_spriteBatch.Count >= MaxSprites)
                     EndSpriteBatch();
 
+                RenderDiagnostics.Count(RenderDiagnostics.Counter.SpritesQueued);
                 _spriteBatch.Add(CreateSpriteBatchItem(resource, source, destination, transform, colour, _opacity, effect));
             }
         }
@@ -924,11 +938,13 @@ namespace Shared.Rendering.SilkD3D11
 
             _deviceContext.PSSetShaderResources(0, MaxBatchTextures, srvs);
             bool useLinearSampler = !item.ForcePointSampling &&
-                                    (_textureFilter == TextureFilterMode.Linear || UsesFractionalBackBufferScale(_currentTarget) || item.UseLinearSampling);
+                                    (_textureFilter == TextureFilterMode.Linear || UsesFractionalBackBufferScale(_currentTarget) || RenderingPipelineManager.CacheUsesFractionalScale || item.UseLinearSampling);
             ID3D11SamplerState* sampler = (useLinearSampler ? _linearSampler : _pointSampler).Handle;
             _deviceContext.PSSetSamplers(0, 1, &sampler);
 
             ApplyBlendState(item.BlendMode, item.BlendRate);
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.SpriteSubmissions);
+            RenderDiagnostics.Count(RenderDiagnostics.Counter.SpritesSubmitted, spriteCount);
             _deviceContext.Draw((uint)(6 * spriteCount), 0);
 
             ID3D11ShaderResourceView** nullSrvs = stackalloc ID3D11ShaderResourceView*[MaxBatchTextures];
@@ -1004,7 +1020,10 @@ namespace Shared.Rendering.SilkD3D11
         private void FlushLinesIfNeeded()
         {
             if (_lineBatch.Count > 0)
+            {
+                RenderDiagnostics.Count(RenderDiagnostics.Counter.PendingLineFlushes);
                 FlushLines();
+            }
         }
 
         private void CreateDevice()
@@ -1059,6 +1078,7 @@ namespace Shared.Rendering.SilkD3D11
 
         private void CreateBackBuffer()
         {
+            RenderingPipelineManager.InvalidateUICacheGeneration();
             ComPtr<ID3D11Texture2D> texture = default;
             texture = _swapChain.GetBuffer<ID3D11Texture2D>(0);
             Texture2DDesc desc;
@@ -1207,7 +1227,7 @@ namespace Shared.Rendering.SilkD3D11
         private void ReadTexture(SilkD3D11TextureResource resource)
         {
             EnsureStagingTexture(resource);
-            _deviceContext.CopyResource((ID3D11Resource*)resource.Texture.Handle, (ID3D11Resource*)resource.StagingTexture.Handle);
+            _deviceContext.CopyResource((ID3D11Resource*)resource.StagingTexture.Handle, (ID3D11Resource*)resource.Texture.Handle);
             MappedSubresource mapped = default;
             Check(_deviceContext.Map((ID3D11Resource*)resource.StagingTexture.Handle, 0, D3DMap.Read, 0, &mapped), "map D3D11 staging texture");
             try
@@ -1869,7 +1889,7 @@ namespace Shared.Rendering.SilkD3D11
                 BlendMode = blendMode;
                 BlendRate = blendRate;
                 Effect = effect;
-                ForcePointSampling = RenderingPipelineManager.DrawingDpiText;
+                ForcePointSampling = RenderingPipelineManager.ForcePointSampling;
                 UseLinearSampling = RenderingPipelineManager.UsesFractionalUIScale;
             }
         }
