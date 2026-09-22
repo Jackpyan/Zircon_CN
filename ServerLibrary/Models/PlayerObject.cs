@@ -8711,7 +8711,13 @@ namespace Server.Models
         }
         public void PickUp()
         {
-            PickUp(Point.Empty);
+            PickUp(0, Point.Empty);
+        }
+
+        /// <summary>拾取指定 ObjectID 的物品（上游滚动拾取：客户端 Ctrl+滚轮选中单件）。</summary>
+        public void PickUp(uint objectID)
+        {
+            PickUp(objectID, Point.Empty);
         }
 
         /// <summary>
@@ -8720,11 +8726,20 @@ namespace Server.Models
         /// </summary>
         public void PickUp(Point location)
         {
+            PickUp(0, location);
+        }
+
+        /// <summary>
+        /// 拾取。优先级：<paramref name="objectID"/> &gt; <paramref name="location"/> &gt; 原范围扫描。
+        /// </summary>
+        public void PickUp(uint objectID, Point location)
+        {
             if (Dead) return;
 
             int range = Stats[Stat.PickUpRadius];
 
-            if (!location.IsEmpty)
+            // 指定格子（且未指定具体物品）→ 只拾该格
+            if (objectID == 0 && !location.IsEmpty)
             {
                 PickUpAt(location, range);
                 return;
@@ -8751,6 +8766,7 @@ namespace Server.Models
                             if (cellObject.Race != ObjectType.Item) continue;
 
                             ItemObject item = (ItemObject)cellObject;
+                            if (objectID != 0 && item.ObjectID != objectID) continue;
 
                             if (item.PickUpItem(this)) return;
                         }

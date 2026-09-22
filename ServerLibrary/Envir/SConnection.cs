@@ -566,7 +566,7 @@ namespace Server.Envir
         {
             if (Stage != GameStage.Game) return;
 
-            Player.PickUp(p.Location);
+            Player.PickUp(p.ObjectID, p.Location);
         }
         public void Process(C.AutoFightConfChanged p)
         {

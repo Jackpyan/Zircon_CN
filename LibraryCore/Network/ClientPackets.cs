@@ -238,8 +238,6 @@ namespace Library.Network.ClientPackets
     ///
     /// 注意：B端没有 PacketMark 机制，包 ID = 类型在 LibraryCore 中按「命名空间→类型名」排序后的索引。
     /// 新增本包会让排序在其后的所有包 ID 整体偏移，因此客户端与服务端必须同步重新编译发布。
-    ///
-    /// 阶段 4 仅定义本包，暂不发送；服务端处理（AutoFightConfig 表 + SConnection + PlayerObject）在阶段 6 实现。
     /// </summary>
     public sealed class AutoFightConfChanged : Packet
     {
@@ -251,11 +249,14 @@ namespace Library.Network.ClientPackets
 
     /// <summary>
     /// 拾取。
-    /// `Location` 为空 → 保持原有行为（扫描 PickUpRadius 范围内第一件物品）；
-    /// `Location` 非空 → 只拾取该格上的物品（辅助功能的过滤自动拾取用）。
+    /// 优先级：<see cref="ObjectID"/> &gt; <see cref="Location"/> &gt; 原有范围扫描。
+    /// - `ObjectID` 非 0 → 只拾取该 ObjectID 的物品（上游滚动拾取，客户端 Ctrl+滚轮选中单件）；
+    /// - 否则 `Location` 非空 → 只拾取该格上的物品（辅助功能的过滤自动拾取用）；
+    /// - 两者都为空 → 保持原有行为（扫描 PickUpRadius 范围内第一件物品）。
     /// </summary>
     public sealed class PickUp : Packet
     {
+        public uint ObjectID { get; set; }
         public Point Location { get; set; }
     }
 
