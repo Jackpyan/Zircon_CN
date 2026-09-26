@@ -1008,6 +1008,7 @@ namespace Server.Models
 
                 StruckEnabled = Config.EnableStruck,
                 HermitEnabled = Config.EnableHermit,
+                GroupLootEnabled = Config.EnableGroupLoot,
 
                 MaxGemPurity = Config.MaxGemPurity
             };
@@ -2227,7 +2228,12 @@ namespace Server.Models
                 }
             }
 
-            Enqueue(new S.WeightUpdate { BagWeight = BagWeight, WearWeight = WearWeight, HandWeight = HandWeight });
+            if (GroupMembers != null && GroupLoot != null)
+                BroadcastGroupLootUpdate();
+            else
+            {
+                Enqueue(new S.WeightUpdate { BagWeight = BagWeight, WearWeight = WearWeight, HandWeight = HandWeight });
+            }
         }
         public override void RefreshStats()
         {
@@ -5901,6 +5907,7 @@ namespace Server.Models
 
                 GroupInvitation.GroupSwitch(true);
                 GroupInvitation.GroupMembers = new List<PlayerObject> { GroupInvitation };
+                GroupInvitation.GroupLoot = GroupInvitation.CreateGroupLootState();
                 GroupInvitation.Enqueue(new S.GroupMember { ObjectID = GroupInvitation.ObjectID, Name = GroupInvitation.Name }); //<-- Setting group leader?
             }
             else if (GroupInvitation.GroupMembers[0] != GroupInvitation)
@@ -5930,6 +5937,7 @@ namespace Server.Models
             }
 
             GroupMembers = GroupInvitation.GroupMembers;
+            GroupLoot = GroupInvitation.GroupLoot ??= GroupInvitation.CreateGroupLootState();
             GroupMembers.Add(this);
 
             foreach (PlayerObject ob in GroupMembers)
@@ -5959,6 +5967,7 @@ namespace Server.Models
 
             RefreshStats();
             Enqueue(new S.GroupMember { ObjectID = ObjectID, Name = Name });
+            BroadcastGroupLootUpdate();
         }
         public void GroupDecline(string name)
         {
@@ -5982,10 +5991,13 @@ namespace Server.Models
         public void GroupLeave(bool disableLFG = true)
         {
             Packet p = new S.GroupRemove { ObjectID = ObjectID };
+            GroupLootState oldLoot = GroupLoot;
 
             GroupMembers.Remove(this);
             List<PlayerObject> oldGroup = GroupMembers;
             GroupMembers = null;
+            GroupLoot = null;
+            SendGroupLootUpdate();
 
             if (Buffs.Any(x => x.Type == BuffType.SoulResonance))
                 SoulResonance.Remove(this);
@@ -6001,7 +6013,12 @@ namespace Server.Models
             if (oldGroup.Count > 0)
                 oldGroup[0].LFGSettings.NeedUpdate = true;
 
-            if (oldGroup.Count == 1) oldGroup[0].GroupLeave(false);
+            if (oldGroup.Count == 1)
+                oldGroup[0].GroupLeave(false);
+            else if (oldGroup.Count == 0)
+                DropGroupLoot(oldLoot);
+            else
+                oldGroup[0].BroadcastGroupLootUpdate();
 
             GroupMembers = null;
 
@@ -6040,6 +6057,8 @@ namespace Server.Models
 
         public void ProcessGroup()
         {
+            ProcessGroupLoot();
+
             if (LFGSettings.Enabled && SEnvir.Now > LFGSettings.EnabledDateTime)
             {
                 LFGSettings.Enabled = false;
@@ -6224,10 +6243,10 @@ namespace Server.Models
                     {
                         case ItemType.Amulet:
                         case ItemType.Poison:
-                            if (BagWeight + check.Info.Weight > Stats[Stat.BagWeight]) return false;
+                            if (!CanCarryInventoryWeight(check.Info.Weight)) return false;
                             break;
                         default:
-                            if (BagWeight + check.Info.Weight * count > Stats[Stat.BagWeight]) return false;
+                            if (!CanCarryInventoryWeight(check.Info.Weight * count)) return false;
                             break;
                     }
                 }

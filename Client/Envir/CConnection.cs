@@ -3505,6 +3505,45 @@ namespace Client.Envir
             }
         }
 
+        public void Process(S.GroupLootUpdate p)
+        {
+            GameScene.Game.GroupBagBox.Update(p.Loot);
+            foreach (GroupLootSettingsDialog dialog in DXWindow.Windows.OfType<GroupLootSettingsDialog>().ToList())
+                dialog.Update(p.Loot);
+
+            if (!p.Loot.Sharing && GameScene.Game.GroupLootVoteBox != null)
+            {
+                GameScene.Game.GroupLootVoteBox.CancelWithoutVote();
+                GameScene.Game.GroupLootVoteBox = null;
+            }
+        }
+
+        public void Process(S.GroupLootVotePrompt p)
+        {
+            if (GameScene.Game.GroupLootVoteBox != null)
+                GameScene.Game.GroupLootVoteBox.CancelWithoutVote();
+
+            GameScene.Game.GroupLootVoteBox = new GroupLootVoteDialog(p.Item, p.Duration, p.CanNeed);
+        }
+
+        public void Process(S.GroupLootResult p)
+        {
+            string itemName = p.ItemName;
+            if (string.IsNullOrEmpty(itemName))
+                itemName = GameScene.Game.GroupBagBox.Info.Items.FirstOrDefault(x => x.Index == p.ItemIndex)?.Info?.ItemName ?? p.ItemIndex.ToString();
+
+            string message = string.IsNullOrEmpty(p.Winner)
+                ? string.Format(CEnvir.Language.GroupLootNoWinner, itemName)
+                : string.Format(CEnvir.Language.GroupLootWon, p.Winner, itemName);
+            GameScene.Game.ReceiveChat(message, MessageType.Group);
+
+            if (GameScene.Game.GroupLootVoteBox?.ItemArray?[0]?.Index == p.ItemIndex)
+            {
+                GameScene.Game.GroupLootVoteBox.CancelWithoutVote();
+                GameScene.Game.GroupLootVoteBox = null;
+            }
+        }
+
         public void Process(S.GroupInvite p)
         {
             DXMessageBox messageBox = new DXMessageBox($"{p.Name} 邀请你加入队伍，是否接受？", "组队邀请", DXMessageBoxButtons.YesNo);

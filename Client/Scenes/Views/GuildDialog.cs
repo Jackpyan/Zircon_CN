@@ -1412,7 +1412,7 @@ namespace Client.Scenes.Views
                 Font = new Font(Config.FontName, CEnvir.FontSize(8F), FontStyle.Regular),
                 Size = new Size(110, 16),
                 Border = false,
-                Location = new Point(label.Location.X + label.Size.Width + 2, label.Location.Y),
+                Location = new Point(label.Location.X + label.Size.Width + 6, label.Location.Y),
             };
             ItemNameTextBox.TextBox.TextChanged += (o, e) => ApplyStorageFilter();
 
@@ -1427,7 +1427,7 @@ namespace Client.Scenes.Views
             {
                 Border = false,
                 Parent = filterPanel,
-                Location = new Point(label.Location.X + label.Size.Width + 1, label.Location.Y + 1),
+                Location = new Point(label.Location.X + label.Size.Width + 6, label.Location.Y + 1),
                 Size = new Size(122, DXComboBox.DefaultNormalHeight)
             };
             ItemTypeComboBox.SelectedItemChanged += (o, e) => ApplyStorageFilter();
