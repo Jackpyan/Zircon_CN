@@ -32,20 +32,19 @@ namespace Server.Envir
 
                     MailMessage message = new MailMessage(new MailAddress(Config.MailFrom, Config.MailDisplayName), new MailAddress(account.EMailAddress))
                     {
-                        Subject = "Zircon Account Activation",
+                        Subject = "请激活你的账户",
                         IsBodyHtml = true,
 
                         Body = $"Dear {account.RealName}, <br><br>" +
-                               $"Thank you for registering a Zircon account, before you can log in to the game, you are required to activate your account.<br><br>" +
-                               $"To complete your registration and activate the account please visit the following link:<br>" +
-                               $"<a href=\"{Config.WebCommandLink}?Type={WebServer.ActivationCommand}&{WebServer.ActivationKey}={account.ActivationKey}\">Click here to Activate</a><br><br>" +
-                               $"If the above link does not work please use the following Activation Key when you next attempt to log in to your account<br>" +
-                               $"Activation Key: {account.ActivationKey}<br><br>" +
+                               $"感谢您注册了账户，登录游戏前，你需要先激活您的账户<br><br>" +
+                               $"要完成注册并激活账户，请点击以下链接:<br>" +
+                               $"<a href=\"{Config.WebCommandLink}?Type={WebServer.ActivationCommand}&{WebServer.ActivationKey}={account.ActivationKey}\">点击这里激活账户</a><br><br>" +
+                               $"如果上述链接无效，请在下次登录账户时使用以下激活密钥<br>" +
+                               $"激活密钥: {account.ActivationKey}<br><br>" +
                                (account.Referral != null ? $"You were referred by: {account.Referral.EMailAddress}<br><br>" : "") +
-                               $"If you did not create this account and want to cancel the registration to delete this account please visit the following link:<br>" +
-                               $"<a href=\"{Config.WebCommandLink}?Type={WebServer.DeleteCommand}&{WebServer.DeleteKey}={account.ActivationKey}\">Click here to Delete Account</a><br><br>" +
-                               $"We'll see you in game<br>" +
-                               $"<a href=\"http://www.zirconserver.com\">Zircon Server</a>"
+                               $"如果您未创建此账户，且想取消注册以删除此账户，请访问以下链接:<br>" +
+                               $"<a href=\"{Config.WebCommandLink}?Type={WebServer.DeleteCommand}&{WebServer.DeleteKey}={account.ActivationKey}\">点击这里删除账户</a><br><br>" +
+                               $"游戏见<br>"
                     };
 
                     client.Send(message);
@@ -84,16 +83,15 @@ namespace Server.Envir
                         Subject = "Zircon Account Activation",
                         IsBodyHtml = false,
 
-                        Body = $"Dear {account.RealName}\n" +
+                        Body = $"亲爱的 {account.RealName}\n" +
                                $"\n" +
-                               $"Thank you for registering a Zircon account, before you can log in to the game, you are required to activate your account.\n" +
+                               $"感谢您注册了账户，登录游戏前必须先激活账户.\n" +
                                $"\n" +
-                               $"Please use the following Activation Key when you next attempt to log in to your account\n" +
-                               $"Activation Key: {account.ActivationKey}\n\n" +
-                               $"We'll see you in game\n" +
-                               $"Zircon Server\n" +
+                               $"下次尝试登录账户时，请使用以下激活密钥.\n" +
+                               $"激活密钥: {account.ActivationKey}\n\n" +
+                               $"游戏中见\n" +
                                $"\n" +
-                               $"This E-Mail has been sent without formatting to reduce failure",
+                               $"为确保发送成功，本邮件使用纯文本发送。",
                     };
 
                     client.Send(message);
