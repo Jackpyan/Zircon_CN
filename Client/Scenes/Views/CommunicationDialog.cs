@@ -4,7 +4,9 @@ using Client.Models;
 using Client.UserModels;
 using Library;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -535,7 +537,7 @@ namespace Client.Scenes.Views
                 new DXListBoxItem
                 {
                     Parent = FriendViewStatusBox.ListBox,
-                    Label = { Text = val.ToString() },
+                    Label = { Text = val.GetType().GetMember(val.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? val.ToString() },
                     Item = val
                 };
             }

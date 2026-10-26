@@ -918,7 +918,7 @@ namespace Client.Scenes.Views
 
                 ClientUserItem item = new ClientUserItem(SelectedCell.Good.Item, (int)Math.Min(int.MaxValue, maxCount));
 
-                DXItemAmountWindow window = new DXItemAmountWindow("Buy Item", item);
+                DXItemAmountWindow window = new DXItemAmountWindow("购买物品", item);
                 if (isCurrencyGood)
                 {
                     window.AmountBox.Change = Math.Max(1, SelectedCell.Good.NormaliseCurrencyPurchaseAmount(Currency, 1));
@@ -4181,7 +4181,7 @@ namespace Client.Scenes.Views
 
         private void AdoptButton_MouseClick(object sender, MouseEventArgs e)
         {
-            DXInputWindow window = new DXInputWindow("Name your companion", "Companion Name")
+            DXInputWindow window = new DXInputWindow("为你的伙伴命名", "伙伴名称")
             {
                 ConfirmButton = { Enabled = false },
                 Modal = true

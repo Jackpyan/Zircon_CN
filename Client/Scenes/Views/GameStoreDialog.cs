@@ -5,10 +5,12 @@ using Client.UserModels;
 using Library;
 using Library.SystemModels;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
+using System.Reflection;
 using System.Windows.Forms;
 using C = Library.Network.ClientPackets;
 
@@ -382,7 +384,12 @@ namespace Client.Scenes.Views
         {
             DXTreeNode node = new DXTreeNode(text, new GameStoreTreeFilter(category));
             foreach (ItemType type in items.Where(x => matches(x.Item.ItemType)).Select(x => x.Item.ItemType).Distinct().OrderBy(x => x.ToString()))
-                node.Children.Add(new DXTreeNode(type.ToString(), new GameStoreTreeFilter(category, type)));
+            {
+                var member = type.GetType().GetMember(type.ToString()).FirstOrDefault();
+                var description = member?.GetCustomAttribute<DescriptionAttribute>();
+                var typeText = description?.Description ?? type.ToString();
+                node.Children.Add(new DXTreeNode(typeText, new GameStoreTreeFilter(category, type)));
+            }
 
             if (node.Children.Count > 0)
                 nodes.Add(node);

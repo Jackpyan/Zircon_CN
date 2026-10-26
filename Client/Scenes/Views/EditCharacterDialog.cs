@@ -80,7 +80,14 @@ namespace Client.Scenes.Views
                     break;
             }
 
-            SelectedClassLabel.Text = SelectedClass.ToString();
+            SelectedClassLabel.Text = SelectedClass switch
+            {
+                MirClass.Warrior => "战士",
+                MirClass.Wizard => "法师",
+                MirClass.Taoist => "道士",
+                MirClass.Assassin => "刺客",
+                _ => SelectedClass.ToString(),
+            };
         }
 
         #endregion
@@ -132,7 +139,12 @@ namespace Client.Scenes.Views
                     break;
 
             }
-            SelectedGenderLabel.Text = SelectedGender.ToString();
+            SelectedGenderLabel.Text = SelectedGender switch
+            {
+                MirGender.Male => "男",
+                MirGender.Female => "女",
+                _ => SelectedGender.ToString(),
+            };
         }
 
         #endregion

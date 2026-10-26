@@ -1058,7 +1058,7 @@ namespace Client.Controls
 
                 if (Item?.Count > 1)
                 {
-                    DXItemAmountWindow window = new DXItemAmountWindow("Amount", Item);
+                    DXItemAmountWindow window = new DXItemAmountWindow("数量", Item);
 
                     window.ConfirmButton.MouseClick += (o, e) =>
                     {
@@ -1143,7 +1143,7 @@ namespace Client.Controls
                             default:
                                 if (Item.Count > 1 && !skipCount)
                                 {
-                                    DXItemAmountWindow window = new DXItemAmountWindow("Amount", Item);
+                                    DXItemAmountWindow window = new DXItemAmountWindow("数量", Item);
 
                                     window.ConfirmButton.MouseClick += (o, e) =>
                                     {
@@ -1871,7 +1871,7 @@ namespace Client.Controls
                     {
                         if (Item == null || (GridType != GridType.Inventory && GridType != GridType.Storage && GridType != GridType.PartsStorage && GridType != GridType.GuildStorage && GridType != GridType.CompanionInventory) || Item.Count <= 1) return;
 
-                        DXItemAmountWindow window = new DXItemAmountWindow("Item Split", Item);
+                        DXItemAmountWindow window = new DXItemAmountWindow("物品分割", Item);
 
                         window.ConfirmButton.MouseClick += (o, e1) =>
                         {

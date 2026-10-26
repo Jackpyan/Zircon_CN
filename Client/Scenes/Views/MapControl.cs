@@ -1,4 +1,4 @@
-﻿using Client.Controls;
+using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.Models.Particles;
@@ -666,7 +666,7 @@ namespace Client.Scenes.Views
                     return;
                 }
 
-                DXItemAmountWindow window = new DXItemAmountWindow("Drop Item", cell.Item);
+                DXItemAmountWindow window = new DXItemAmountWindow("丢弃物品", cell.Item);
 
                 window.ConfirmButton.MouseClick += (o, a) =>
                 {
@@ -690,7 +690,7 @@ namespace Client.Scenes.Views
 
                 int index = GameScene.Game.CurrencyPickedUp.Info.Index;
 
-                DXItemAmountWindow window = new DXItemAmountWindow("Drop Item", new ClientUserItem(GameScene.Game.CurrencyPickedUp.Info.DropItem, GameScene.Game.CurrencyPickedUp.Amount));
+                DXItemAmountWindow window = new DXItemAmountWindow("丢弃物品", new ClientUserItem(GameScene.Game.CurrencyPickedUp.Info.DropItem, GameScene.Game.CurrencyPickedUp.Amount));
 
                 window.ConfirmButton.MouseClick += (o, a) =>
                 {

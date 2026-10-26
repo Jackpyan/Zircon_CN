@@ -1,4 +1,4 @@
-﻿using Library;
+using Library;
 
 namespace Client.Envir.Translations
 {
@@ -329,10 +329,10 @@ namespace Client.Envir.Translations
 
         public override string NewCharacterTitle { get; set; } = "Create Character";
         public override string NewCharacterCreateButtonLabel { get; set; } = "Create";
-        public override string NewCharacterSelectClassLabel { get; set; } = "Select Class";
-        public override string NewCharacterSelectedClassLabel { get; set; } = "Warrior";
-        public override string NewCharacterSelectGenderLabel { get; set; } = "Select Gender";
-        public override string NewCharacterSelectedGenderLabel { get; set; } = "Male";
+        public override string NewCharacterSelectClassLabel { get; set; } = "职业选择";
+        public override string NewCharacterSelectedClassLabel { get; set; } = "战士";
+        public override string NewCharacterSelectGenderLabel { get; set; } = "性别选择";
+        public override string NewCharacterSelectedGenderLabel { get; set; } = "男";
         public override string NewCharacterCustomizationLabel { get; set; } = "Customization";
         public override string NewCharacterHairTypeLabel { get; set; } = "Hair Type:";
         public override string NewCharacterHairColorLabel { get; set; } = "Hair Colour:";
@@ -341,51 +341,51 @@ namespace Client.Envir.Translations
         public override string NewCharacterCharacterNameLabel { get; set; } = "Name:";
         public override string NewCharacterCharacterNameHelpHint { get; set; } = "Character Name.\nAccepted characters: a-z A-Z 0-9.\nLength: between {0} and {1} characters.\nCan use previous names on same account.";
 
-        public override string SelectNameLabel { get; set; } = "Name";
-        public override string SelectClassLabel { get; set; } = "Class";
-        public override string SelectLevelLabel { get; set; } = "Level";
-        public override string SelectLocationLabel { get; set; } = "Location";
+        public override string SelectNameLabel { get; set; } = "名称";
+        public override string SelectClassLabel { get; set; } = "职业";
+        public override string SelectLevelLabel { get; set; } = "等级";
+        public override string SelectLocationLabel { get; set; } = "位置";
 
-        public override string AutoPotionTitle { get; set; } = "Auto Potion";
-        public override string AutoPotionEnabledLabel { get; set; } = "Enabled";
+        public override string AutoPotionTitle { get; set; } = "自动喝药";
+        public override string AutoPotionEnabledLabel { get; set; } = "开启";
 
         public override string CharacterCharacterTabLabel { get; set; } = "Character";
         public override string CharacterHermitTabLabel { get; set; } = "Hermit";
         public override string CharacterDisciplineTabLabel { get; set; } = "Discipline";
-        public override string CharacterCharacterTabStatsAttackTabLabel { get; set; } = "Att";
-        public override string CharacterCharacterTabStatsDefenseTabLabel { get; set; } = "Def";
-        public override string CharacterCharacterTabStatsWeightTabLabel { get; set; } = "Wt";
-        public override string CharacterCharacterTabStatsOtherTabLabel { get; set; } = "Oth";
-        public override string CharacterCharacterTabStatsElementAttackTabLabel { get; set; } = "E.Att";
-        public override string CharacterCharacterTabStatsElementAdvantageTabLabel { get; set; } = "E.Adv";
-        public override string CharacterCharacterTabStatsElementDisadvantageTabLabel { get; set; } = "E.Dis";
-        public override string CharacterCharacterTabStatsAttackTabHint { get; set; } = "Attack";
-        public override string CharacterCharacterTabStatsDefenseTabHint { get; set; } = "Defence";
-        public override string CharacterCharacterTabStatsWeightTabHint { get; set; } = "Weight";
-        public override string CharacterCharacterTabStatsOtherTabHint { get; set; } = "Other";
-        public override string CharacterCharacterTabStatsElementAttackTabHint { get; set; } = "Element Attack";
-        public override string CharacterCharacterTabStatsElementAdvantageTabHint { get; set; } = "Element Advantage";
-        public override string CharacterCharacterTabStatsElementDisadvantageTabHint { get; set; } = "Element Disadvantage";
+        public override string CharacterCharacterTabStatsAttackTabLabel { get; set; } = "攻击";
+        public override string CharacterCharacterTabStatsDefenseTabLabel { get; set; } = "防御";
+        public override string CharacterCharacterTabStatsWeightTabLabel { get; set; } = "负重";
+        public override string CharacterCharacterTabStatsOtherTabLabel { get; set; } = "其它";
+        public override string CharacterCharacterTabStatsElementAttackTabLabel { get; set; } = "元素攻击";
+        public override string CharacterCharacterTabStatsElementAdvantageTabLabel { get; set; } = "元素优势";
+        public override string CharacterCharacterTabStatsElementDisadvantageTabLabel { get; set; } = "元素劣势";
+        public override string CharacterCharacterTabStatsAttackTabHint { get; set; } = "攻击";
+        public override string CharacterCharacterTabStatsDefenseTabHint { get; set; } = "防御";
+        public override string CharacterCharacterTabStatsWeightTabHint { get; set; } = "负重";
+        public override string CharacterCharacterTabStatsOtherTabHint { get; set; } = "其它";
+        public override string CharacterCharacterTabStatsElementAttackTabHint { get; set; } = "元素攻击";
+        public override string CharacterCharacterTabStatsElementAdvantageTabHint { get; set; } = "元素优势";
+        public override string CharacterCharacterTabStatsElementDisadvantageTabHint { get; set; } = "元素劣势";
 
-        public override string CharacterCharacterTabStatsAttackTabMCLabel { get; set; } = "MC:";
-        public override string CharacterCharacterTabStatsAttackTabSCLabel { get; set; } = "SC:";
-        public override string CharacterCharacterTabStatsAttackTabCritDamageLabel { get; set; } = "Crit. Damage:";
-        public override string CharacterCharacterTabStatsAttackTabAccuracyLabel { get; set; } = "Accuracy:";
-        public override string CharacterCharacterTabStatsAttackTabASpeedLabel { get; set; } = "A. Speed:";
-        public override string CharacterCharacterTabStatsAttackTabLuckLabel { get; set; } = "Luck:";
-        public override string CharacterCharacterTabStatsAttackTabCritChanceLabel { get; set; } = "Crit. Chance:";
+        public override string CharacterCharacterTabStatsAttackTabMCLabel { get; set; } = "魔攻:";
+        public override string CharacterCharacterTabStatsAttackTabSCLabel { get; set; } = "道攻:";
+        public override string CharacterCharacterTabStatsAttackTabCritDamageLabel { get; set; } = "暴击伤害:";
+        public override string CharacterCharacterTabStatsAttackTabAccuracyLabel { get; set; } = "准确:";
+        public override string CharacterCharacterTabStatsAttackTabASpeedLabel { get; set; } = "攻速:";
+        public override string CharacterCharacterTabStatsAttackTabLuckLabel { get; set; } = "幸运:";
+        public override string CharacterCharacterTabStatsAttackTabCritChanceLabel { get; set; } = "暴击几率:";
 
-        public override string CharacterCharacterTabStatsDefenseTabAgilityLabel { get; set; } = "Agility:";
-        public override string CharacterCharacterTabStatsDefenseTabLifeStealLabel { get; set; } = "Life Steal:";
+        public override string CharacterCharacterTabStatsDefenseTabAgilityLabel { get; set; } = "敏捷:";
+        public override string CharacterCharacterTabStatsDefenseTabLifeStealLabel { get; set; } = "吸血:";
 
-        public override string CharacterCharacterTabStatsWeightTabBodyWLabel { get; set; } = "Body W:";
-        public override string CharacterCharacterTabStatsWeightTabHandWLabel { get; set; } = "Hand W:";
+        public override string CharacterCharacterTabStatsWeightTabBodyWLabel { get; set; } = "体力:";
+        public override string CharacterCharacterTabStatsWeightTabHandWLabel { get; set; } = "腕力:";
 
-        public override string CharacterCharacterTabStatsAdditionalTabComfortLabel { get; set; } = "Comfort:";
-        public override string CharacterCharacterTabStatsAdditionalTabPickupRadiusLabel { get; set; } = "Pickup Radius:";
-        public override string CharacterCharacterTabStatsAdditionalTabGoldRateLabel { get; set; } = "Gold Rate:";
-        public override string CharacterCharacterTabStatsAdditionalTabDropRateLabel { get; set; } = "Drop Rate:";
-        public override string CharacterCharacterTabStatsAdditionalTabExpRateLabel { get; set; } = "Exp. Rate:";
+        public override string CharacterCharacterTabStatsAdditionalTabComfortLabel { get; set; } = "舒适度:";
+        public override string CharacterCharacterTabStatsAdditionalTabPickupRadiusLabel { get; set; } = "拾取范围:";
+        public override string CharacterCharacterTabStatsAdditionalTabGoldRateLabel { get; set; } = "金币倍数:";
+        public override string CharacterCharacterTabStatsAdditionalTabDropRateLabel { get; set; } = "掉落倍数:";
+        public override string CharacterCharacterTabStatsAdditionalTabExpRateLabel { get; set; } = "经验倍数:";
 
         public override string CharacterHermitTabShowConfirmationLabel { get; set; } = "Show Confirmation";
         public override string CharacterHermitTabUnspentPointsLabel { get; set; } = "Unspent Points:";
@@ -825,5 +825,71 @@ namespace Client.Envir.Translations
 
         public override string SocketCombineDialogTitle { get; set; } = "Combine Gems";
         public override string SocketCombineDialogStartButtonLabel { get; set; } = "Start";
+
+        [ConfigSection("Buff")]
+        public override string BuffServerSettings { get; set; } = "Server Settings";
+        public override string BuffHuntGold { get; set; } = "Hunt Gold";
+        public override string BuffObservableTitle { get; set; } = "Observable";
+        public override string BuffObservableDesc { get; set; } = "You are allowing people to watch you play.";
+        public override string BuffVeteran { get; set; } = "Veteran";
+        public override string BuffBrown { get; set; } = "Brown";
+        public override string BuffPKPoints { get; set; } = "PK Points";
+        public override string BuffRedemptionKeyStone { get; set; } = "Redemption Key Stone";
+        public override string BuffCastleOwner { get; set; } = "Castle Owner";
+        public override string BuffGuild { get; set; } = "Guild";
+        public override string BuffMapEffect { get; set; } = "Map Effect";
+        public override string BuffInstanceEffect { get; set; } = "Instance Effect";
+        public override string BuffPermanentItemBuffs { get; set; } = "Permanent Item Buffs";
+        public override string BuffCompanion { get; set; } = "Companion";
+        public override string BuffRedGemTitle { get; set; } = "Red Gem";
+        public override string BuffRedGemDesc { get; set; } = "Your weapon gains a red aura.";
+        public override string BuffBlueGemTitle { get; set; } = "Blue Gem";
+        public override string BuffBlueGemDesc { get; set; } = "Your armour gains a blue aura.";
+        public override string BuffCursedGemTitle { get; set; } = "Cursed Gem";
+        public override string BuffCursedGemDesc { get; set; } = "Your equipment gains a cursed aura.";
+        public override string BuffDefiance { get; set; } = "Defiance";
+        public override string BuffMight { get; set; } = "Might";
+        public override string BuffEndurance { get; set; } = "Endurance";
+        public override string BuffReflectDamage { get; set; } = "Reflect Damage";
+        public override string BuffRenounce { get; set; } = "Renounce";
+        public override string BuffMagicShield { get; set; } = "Magic Shield";
+        public override string BuffFrostBite { get; set; } = "Frost Bite";
+        public override string BuffJudgementOfHeaven { get; set; } = "Judgement Of Heaven";
+        public override string BuffHeal { get; set; } = "Heal";
+        public override string BuffInvisibilityTitle { get; set; } = "Invisibility";
+        public override string BuffInvisibilityDesc { get; set; } = "Hide in plain sight.";
+        public override string BuffMagicResistance { get; set; } = "Magic Resistance";
+        public override string BuffResilience { get; set; } = "Resilience";
+        public override string BuffElementalSuperiority { get; set; } = "Elemental Superiority";
+        public override string BuffBloodLust { get; set; } = "Blood Lust";
+        public override string BuffStrengthOfFaith { get; set; } = "Strength Of Faith";
+        public override string BuffCelestialLight { get; set; } = "Celestial Light";
+        public override string BuffTransparency { get; set; } = "Transparency";
+        public override string BuffLifeSteal { get; set; } = "Life Steal";
+        public override string BuffSpiritualism { get; set; } = "Spiritualism";
+        public override string BuffPoisonousCloud { get; set; } = "Poisonous Cloud";
+        public override string BuffFullBloom { get; set; } = "Full Bloom";
+        public override string BuffWhiteLotus { get; set; } = "White Lotus";
+        public override string BuffRedLotus { get; set; } = "Red Lotus";
+        public override string BuffCloak { get; set; } = "Cloak";
+        public override string BuffGhostWalkTitle { get; set; } = "Ghost Walk";
+        public override string BuffGhostWalkDesc { get; set; } = "Allows you to move faster whilst cloaked.";
+        public override string BuffTheNewBeginning { get; set; } = "The New Beginning";
+        public override string BuffDarkConversion { get; set; } = "Dark Conversion";
+        public override string BuffDragonRepulse { get; set; } = "Dragon Repulse";
+        public override string BuffEvasion { get; set; } = "Evasion";
+        public override string BuffRagingWind { get; set; } = "Raging Wind";
+        public override string BuffConcentration { get; set; } = "Concentration";
+        public override string BuffLastStand { get; set; } = "Last Stand";
+        public override string BuffInvincibility { get; set; } = "Invincibility";
+        public override string BuffElementalHurricane { get; set; } = "Elemental Hurricane";
+        public override string BuffSuperiorMagicShield { get; set; } = "Superior Magic Shield";
+        public override string BuffDefensiveBlow { get; set; } = "Defensive Blow";
+        public override string BuffSoulResonance { get; set; } = "Soul Resonance";
+        public override string BuffMagicWeaknessTitle { get; set; } = "Magic Weakness";
+        public override string BuffMagicWeaknessDesc { get; set; } = "Your Magic Resistance has been greatly reduced.";
+        public override string BuffDuration { get; set; } = "Duration: {0}";
+        public override string BuffPaused { get; set; } = "Paused (Not in Effect).";
+        public override string BuffUnknownType { get; set; } = "{0}";
     }
 }

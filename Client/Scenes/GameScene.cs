@@ -1,4 +1,4 @@
-﻿using Client.Controls;
+using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.Scenes.Views;
@@ -1662,9 +1662,16 @@ namespace Client.Scenes
 
             string itemName = displayInfo.ItemName;
             if (MouseItem.Info.ItemEffect == ItemEffect.ItemPart)
-                itemName += " - [Part]";
+                itemName += " - [部件]";
 
-            builder.AddHeader(itemName, Color.Yellow, displayInfo.Rarity.ToString(), GetItemLabelRarityColour(displayInfo.Rarity));
+            string rarityText = displayInfo.Rarity switch
+            {
+                Rarity.Common => "普通",
+                Rarity.Superior => "优秀",
+                Rarity.Elite => "稀有",
+                _ => displayInfo.Rarity.ToString(),
+            };
+            builder.AddHeader(itemName, Color.Yellow, rarityText, GetItemLabelRarityColour(displayInfo.Rarity));
 
             builder.StartSection();
             AddItemLabelMetadata(builder, displayInfo);
@@ -1718,9 +1725,9 @@ namespace Client.Scenes
                         builder.StartSection();
 
                         if (CEnvir.Now >= MouseItem.NextSpecialRepair)
-                            builder.AddLine("Can Special Repair", Color.LimeGreen);
+                            builder.AddLine("可特修.", Color.LimeGreen);
                         else
-                            builder.AddLine($"Special Repair in {Functions.ToString(MouseItem.NextSpecialRepair - CEnvir.Now, true)}", Color.Red);
+                            builder.AddLine($"特修冷却中：{Functions.ToString(MouseItem.NextSpecialRepair - CEnvir.Now, true)}", Color.Red);
                         break;
                 }
             }
@@ -1728,7 +1735,7 @@ namespace Client.Scenes
             if ((MouseItem.Flags & UserItemFlags.Expirable) == UserItemFlags.Expirable)
             {
                 builder.StartSection();
-                builder.AddLine($"Expires in {Functions.ToString(MouseItem.ExpireTime, true)}", Color.Chocolate);
+                builder.AddLine($"剩余有效期：{Functions.ToString(MouseItem.ExpireTime, true)}", Color.Chocolate);
             }
 
             if (itemStats[Stat.ItemReviveTime] > 0)
@@ -1737,9 +1744,9 @@ namespace Client.Scenes
 
                 builder.StartSection();
                 if (CEnvir.Now >= value)
-                    builder.AddLine("Revival ready", Color.LimeGreen);
+                    builder.AddLine("可复活.", Color.LimeGreen);
                 else
-                    builder.AddLine($"Revival ready in {Functions.ToString(value - CEnvir.Now, true)}", Color.Red);
+                    builder.AddLine($"复活冷却中：{Functions.ToString(value - CEnvir.Now, true)}", Color.Red);
             }
 
             if (MouseItem.Info.Set != null)
@@ -1761,32 +1768,32 @@ namespace Client.Scenes
             if ((MouseItem.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage)
             {
                 builder.StartSection();
-                builder.AddLine("Wedding Ring.", Color.MediumOrchid);
+                builder.AddLine("结婚戒指.", Color.MediumOrchid);
             }
 
             if ((MouseItem.Flags & UserItemFlags.GameMaster) == UserItemFlags.GameMaster)
             {
                 builder.StartSection();
-                builder.AddLine("Created by a Game Master.", Color.LightSeaGreen);
+                builder.AddLine("GM 创建.", Color.LightSeaGreen);
             }
 
             if (NPCItemFragmentBox.IsVisible && MouseItem.CanFragment())
             {
                 builder.StartSection();
-                builder.AddLine($"Fragment Cost: {MouseItem.FragmentCost():#,##0}", Color.MediumAquamarine);
-                builder.AddLine($"Fragments: {(MouseItem.Info.Rarity == Rarity.Common ? "Fragment" : "Fragment (II)")} x{MouseItem.FragmentCount():#,##0}", Color.MediumAquamarine);
+                builder.AddLine($"碎片费用：{MouseItem.FragmentCost():#,##0}", Color.MediumAquamarine);
+                builder.AddLine($"碎片数量：{(MouseItem.Info.Rarity == Rarity.Common ? "碎片" : "碎片(II)")} x{MouseItem.FragmentCount():#,##0}", Color.MediumAquamarine);
             }
 
             if (CEnvir.Now < MouseItem.NextReset)
             {
                 builder.StartSection();
-                builder.AddLine($"Reset Available in {Functions.ToString(MouseItem.NextReset - CEnvir.Now, true)}", Color.Red);
+                builder.AddLine($"可重置剩余：{Functions.ToString(MouseItem.NextReset - CEnvir.Now, true)}", Color.Red);
             }
 
             if ((MouseItem.Flags & UserItemFlags.Locked) == UserItemFlags.Locked)
             {
                 builder.StartSection();
-                builder.AddIconLine("Locked: Prevents accidentally selling or throwing away\n[Middle Mouse Button] or [Scroll Lock] to Unlock.", Color.FromArgb(150, 135, 105), LibraryFile.GameInter, 370);
+                builder.AddIconLine("已锁定：防止意外出售或丢弃\n[中键] 或 [Scroll Lock] 解锁.", Color.FromArgb(150, 135, 105), LibraryFile.GameInter, 370);
             }
 
             builder.Complete();
@@ -1887,23 +1894,23 @@ namespace Client.Scenes
                 }
                 else
                 {
-                    text = $"Max Level";
+                    text = "已达最大等级";
                 }
 
-                builder.AddLine($"Current Level: {level}    Experience: {text}", Color.LimeGreen);
+                builder.AddLine($"当前等级：{level}    经验：{text}", Color.LimeGreen);
             }
             else
             {
-                builder.AddLine($"Not learned", Color.Red);
+                builder.AddLine("未学习", Color.Red);
             }
 
             builder.StartSection();
-            builder.AddLine($"Rank 1 Requirement: Level {MouseMagic.NeedLevel1}    Experience: {MouseMagic.Experience1:#,##0}", User.Level < MouseMagic.NeedLevel1 ? Color.Red : Color.White);
-            builder.AddLine($"Rank 2 Requirement: Level {MouseMagic.NeedLevel2}    Experience: {MouseMagic.Experience2:#,##0}", User.Level < MouseMagic.NeedLevel2 ? Color.Red : Color.White);
-            builder.AddLine($"Rank 3 Requirement: Level {MouseMagic.NeedLevel3}    Experience: {MouseMagic.Experience3:#,##0}", User.Level < MouseMagic.NeedLevel3 ? Color.Red : Color.White);
+            builder.AddLine($"等级 1 要求：等级 {MouseMagic.NeedLevel1}    经验：{MouseMagic.Experience1:#,##0}", User.Level < MouseMagic.NeedLevel1 ? Color.Red : Color.White);
+            builder.AddLine($"等级 2 要求：等级 {MouseMagic.NeedLevel2}    经验：{MouseMagic.Experience2:#,##0}", User.Level < MouseMagic.NeedLevel2 ? Color.Red : Color.White);
+            builder.AddLine($"等级 3 要求：等级 {MouseMagic.NeedLevel3}    经验：{MouseMagic.Experience3:#,##0}", User.Level < MouseMagic.NeedLevel3 ? Color.Red : Color.White);
 
             if (!disciplineSkill)
-                builder.AddLine($"Rank 4+ Requirement: Books", magic?.Level < 3 ? Color.Red : Color.White);
+                builder.AddLine($"等级 4+ 要求：技能书", magic?.Level < 3 ? Color.Red : Color.White);
 
             if (!string.IsNullOrEmpty(MouseMagic.Description))
             {
@@ -2278,7 +2285,18 @@ namespace Client.Scenes
                 MemberInfo member = typeof(ItemType).GetMember(displayInfo.ItemType.ToString()).FirstOrDefault();
                 DescriptionAttribute description = member?.GetCustomAttribute<DescriptionAttribute>();
 
-                builder.AddLine($"Type: {description?.Description ?? displayInfo.ItemType.ToString()}", Color.White);
+                string typeName = description?.Description ?? displayInfo.ItemType.ToString();
+                // ItemType 如 Consumable/Armour 等没有 Description，直接给中文映射
+                if (typeName == "Consumable") typeName = "消耗品";
+                else if (typeName == "Armour") typeName = "护甲";
+                else if (typeName == "Weapon") typeName = "武器";
+                else if (typeName == "Helmet") typeName = "头盔";
+                else if (typeName == "Necklace") typeName = "项链";
+                else if (typeName == "Bracelet") typeName = "手镯";
+                else if (typeName == "Ring") typeName = "戒指";
+                else if (typeName == "Shoes") typeName = "鞋子";
+                else if (typeName == "Torch") typeName = "火把";
+                builder.AddLine($"类型：{typeName}", Color.White);
             }
 
             if (MouseItem.Info.Durability > 0)
@@ -2288,58 +2306,58 @@ namespace Client.Scenes
                 switch (displayInfo.ItemType)
                 {
                     case ItemType.Book:
-                        builder.AddLine($"Pages: {MouseItem.CurrentDurability}/{MouseItem.MaxDurability}", durabilityColour);
+                        builder.AddLine($"页数：{MouseItem.CurrentDurability}/{MouseItem.MaxDurability}", durabilityColour);
                         break;
                     case ItemType.Meat:
-                        builder.AddLine($"Quality: {Math.Round(MouseItem.CurrentDurability / 1000M)}/{Math.Round(MouseItem.MaxDurability / 1000M)}", durabilityColour);
+                        builder.AddLine($"品质：{Math.Round(MouseItem.CurrentDurability / 1000M)}/{Math.Round(MouseItem.MaxDurability / 1000M)}", durabilityColour);
                         break;
                     case ItemType.Ore:
-                        builder.AddLine($"Purity: {Math.Round(MouseItem.CurrentDurability / 1000M)}", MouseItem.CurrentDurability == 0 ? Color.Red : Color.White);
+                        builder.AddLine($"纯度：{Math.Round(MouseItem.CurrentDurability / 1000M)}", MouseItem.CurrentDurability == 0 ? Color.Red : Color.White);
                         break;
                     case ItemType.SocketGem:
 
                         string gemType = MouseItem.Info.Shape switch
                         {
-                            0 => "Piercing",
-                            1 => "Weapon",
-                            2 => "Armour",
-                            3 => "Curse",
-                            4 => "Reset",
-                            _ => "Unknown"
+                            0 => "刺穿",
+                            1 => "武器",
+                            2 => "护甲",
+                            3 => "诅咒",
+                            4 => "重置",
+                            _ => "未知"
                         };
 
-                        builder.AddLine($"Gem Type: {gemType}", Color.Aquamarine);
+                        builder.AddLine($"宝石类型：{gemType}", Color.Aquamarine);
 
                         decimal socketPurity = MouseItem.CurrentDurability / 1000M;
                         decimal maximumSocketPurity = Math.Max(0, Globals.MaxGemPurity);
                         string socketPurityText;
 
                         if (socketPurity <= maximumSocketPurity * 0.2M)
-                            socketPurityText = "Lowest";
+                            socketPurityText = "最低";
                         else if (socketPurity <= maximumSocketPurity * 0.4M)
-                            socketPurityText = "Low";
+                            socketPurityText = "低";
                         else if (socketPurity <= maximumSocketPurity * 0.6M)
-                            socketPurityText = "Medium";
+                            socketPurityText = "中";
                         else if (socketPurity <= maximumSocketPurity * 0.8M)
-                            socketPurityText = "High";
+                            socketPurityText = "高";
                         else
-                            socketPurityText = "Supreme";
+                            socketPurityText = "至高";
 
-                        builder.AddLine($"Purity: {socketPurityText}", MouseItem.CurrentDurability == 0 ? Color.Red : Color.White);
+                        builder.AddLine($"纯度：{socketPurityText}", MouseItem.CurrentDurability == 0 ? Color.Red : Color.White);
                         break;
                     default:
                         if (MouseItem.Info.StackSize == 1)
-                            builder.AddLine($"Durability: {Math.Round(MouseItem.CurrentDurability / 1000M)}/{Math.Round(MouseItem.MaxDurability / 1000M)}", durabilityColour);
+                            builder.AddLine($"耐久度：{Math.Round(MouseItem.CurrentDurability / 1000M)}/{Math.Round(MouseItem.MaxDurability / 1000M)}", durabilityColour);
                         break;
                 }
             }
 
             if (CEnvir.IsCurrencyItem(MouseItem.Info) || MouseItem.Info.ItemEffect == ItemEffect.Experience)
-                builder.AddLine($"Amount: {MouseItem.Count:#,##0}", Color.White);
+                builder.AddLine($"数量：{MouseItem.Count:#,##0}", Color.White);
             else if (MouseItem.Info.ItemEffect == ItemEffect.ItemPart)
-                builder.AddLine($"Parts: {MouseItem.Count}/{displayInfo.PartCount}.", Color.White);
+                builder.AddLine($"部件：{MouseItem.Count}/{displayInfo.PartCount}.", Color.White);
             else if (MouseItem.Info.StackSize > 1)
-                builder.AddLine($"Count: {MouseItem.Count}/{MouseItem.Info.StackSize}", Color.White);
+                builder.AddLine($"数量：{MouseItem.Count}/{MouseItem.Info.StackSize}", Color.White);
 
             if (displayInfo.ItemType == ItemType.LootBox)
             {
@@ -2356,16 +2374,16 @@ namespace Client.Scenes
                             openCount++;
                     }
 
-                    builder.AddLine($"Open Count: {openCount}/{LootBoxInfo.SlotSize}", Color.White);
+                    builder.AddLine($"开启次数：{openCount}/{LootBoxInfo.SlotSize}", Color.White);
                 }
                 else
                 {
-                    builder.AddLine($"Reroll Count: {remainingRerolls}/{Globals.LootBoxRerollCount}", Color.White);
+                    builder.AddLine($"重抽次数：{remainingRerolls}/{Globals.LootBoxRerollCount}", Color.White);
                 }
             }
 
             if (MouseItem.Info.Weight > 0)
-                builder.AddLine($"Weight: {MouseItem.Info.Weight}", GetItemLabelWeightColour());
+                builder.AddLine($"重量：{MouseItem.Info.Weight}", GetItemLabelWeightColour());
         }
 
         private void AddItemLabelSocketInfo(ItemLabelBuilder builder, ItemInfo displayInfo)
@@ -2386,7 +2404,7 @@ namespace Client.Scenes
                         sectionStarted = true;
                     }
 
-                    builder.AddLine("Empty Socket", Color.Gray);
+                    builder.AddLine("空插槽", Color.Gray);
                     continue;
                 }
 
@@ -2541,14 +2559,14 @@ namespace Client.Scenes
                     if ((MouseItem.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable) return;
 
                     builder.StartSection();
-                    builder.AddLine($"{displayInfo.ItemType} Level: " + (MouseItem.Level < Globals.WeaponExperienceList.Count ? MouseItem.Level.ToString() : "Max"), Color.White);
+                    builder.AddLine($"武器等级：{(MouseItem.Level < Globals.WeaponExperienceList.Count ? MouseItem.Level.ToString() : "满级")}", Color.White);
 
                     if (MouseItem.Level >= Globals.WeaponExperienceList.Count) return;
 
                     if ((MouseItem.Flags & UserItemFlags.Refinable) == UserItemFlags.Refinable)
-                        builder.AddLine("Ready for Refine", Color.LightGreen);
+                        builder.AddLine("可精炼", Color.LightGreen);
                     else
-                        builder.AddLine($"{displayInfo.ItemType} Training Points: {MouseItem.Experience / Globals.WeaponExperienceList[MouseItem.Level]:0.##%}", Color.White);
+                        builder.AddLine($"武器训练点数：{MouseItem.Experience / Globals.WeaponExperienceList[MouseItem.Level]:0.##%}", Color.White);
                     break;
                 case ItemType.Necklace:
                 case ItemType.Bracelet:
@@ -2556,14 +2574,14 @@ namespace Client.Scenes
                     if ((MouseItem.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable) return;
 
                     builder.StartSection();
-                    builder.AddLine($"{displayInfo.ItemType} Level: " + (MouseItem.Level < Globals.AccessoryExperienceList.Count ? MouseItem.Level.ToString() : "Max"), Color.White);
+                    builder.AddLine($"首饰等级：{(MouseItem.Level < Globals.AccessoryExperienceList.Count ? MouseItem.Level.ToString() : "满级")}", Color.White);
 
                     if (MouseItem.Level >= Globals.AccessoryExperienceList.Count) return;
 
                     if ((MouseItem.Flags & UserItemFlags.Refinable) == UserItemFlags.Refinable)
-                        builder.AddLine("Ready for Refine", Color.LightGreen);
+                        builder.AddLine("可精炼", Color.LightGreen);
                     else
-                        builder.AddLine($"{displayInfo.ItemType} Training Points: {MouseItem.Experience / Globals.AccessoryExperienceList[MouseItem.Level]:0.##%}", Color.White);
+                        builder.AddLine($"首饰训练点数：{MouseItem.Experience / Globals.AccessoryExperienceList[MouseItem.Level]:0.##%}", Color.White);
                     break;
             }
         }
@@ -2597,7 +2615,7 @@ namespace Client.Scenes
             }
 
             if (MouseItem.Info.Durability > 0)
-                builder.AddLine($"Cooldown: {Functions.ToString(TimeSpan.FromMilliseconds(MouseItem.Info.Durability), true)}", Color.White);
+                builder.AddLine($"冷却时间：{Functions.ToString(TimeSpan.FromMilliseconds(MouseItem.Info.Durability), true)}", Color.White);
         }
 
         private void AddItemLabelRequirements(ItemLabelBuilder builder, ItemInfo displayInfo)
@@ -2625,7 +2643,11 @@ namespace Client.Scenes
                         break;
                 }
 
-                builder.AddLine($"Required Gender: {displayInfo.RequiredGender}", colour);
+                string genderText = displayInfo.RequiredGender == RequiredGender.Male ? "男" :
+                                    displayInfo.RequiredGender == RequiredGender.Female ? "女" :
+                                    displayInfo.RequiredGender == RequiredGender.None ? "男女皆可" :
+                                    displayInfo.RequiredGender.ToString();
+                builder.AddLine($"性别要求：{genderText}", colour);
             }
 
             if (displayInfo.RequiredClass != RequiredClass.All)
@@ -2661,7 +2683,7 @@ namespace Client.Scenes
                 MemberInfo[] infos = type.GetMember(displayInfo.RequiredClass.ToString());
                 DescriptionAttribute description = infos[0].GetCustomAttribute<DescriptionAttribute>();
 
-                builder.AddLine($"Required Class: {description?.Description ?? displayInfo.RequiredClass.ToString()}", colour);
+                builder.AddLine($"职业要求：{description?.Description ?? displayInfo.RequiredClass.ToString()}", colour);
             }
 
             if (displayInfo.RequiredAmount <= 0) return;
@@ -2674,72 +2696,72 @@ namespace Client.Scenes
             switch (displayInfo.RequiredType)
             {
                 case RequiredType.Level:
-                    text = $"Required Level: {displayInfo.RequiredAmount}";
+                    text = $"等级要求：{displayInfo.RequiredAmount}";
                     if (User.Level < displayInfo.RequiredAmount && User.Stats[Stat.Rebirth] == 0)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.MaxLevel:
-                    text = $"Max Level: {displayInfo.RequiredAmount}";
+                    text = $"最高等级：{displayInfo.RequiredAmount}";
                     if (User.Level > displayInfo.RequiredAmount || User.Stats[Stat.Rebirth] > 0)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.AC:
-                    text = $"Required AC: {displayInfo.RequiredAmount}";
+                    text = $"需要物防：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.MaxAC] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.MR:
-                    text = $"Required MR: {displayInfo.RequiredAmount}";
+                    text = $"需要魔防：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.MaxMR] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.DC:
-                    text = $"Required DC: {displayInfo.RequiredAmount}";
+                    text = $"需要物攻：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.MaxDC] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.MC:
-                    text = $"Required MC: {displayInfo.RequiredAmount}";
+                    text = $"需要魔攻：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.MaxMC] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.SC:
-                    text = $"Required SC: {displayInfo.RequiredAmount}";
+                    text = $"需要道攻：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.MaxSC] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.Health:
-                    text = $"Required Health: {displayInfo.RequiredAmount}";
+                    text = $"需要生命：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.Health] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.Mana:
-                    text = $"Required Mana: {displayInfo.RequiredAmount}";
+                    text = $"需要魔法：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.Mana] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.CompanionLevel:
-                    text = $"Companion Level: {displayInfo.RequiredAmount}";
+                    text = $"宠物等级：{displayInfo.RequiredAmount}";
                     if (Companion == null || Companion.Level < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.MaxCompanionLevel:
-                    text = $"Max Companion Level: {displayInfo.RequiredAmount}";
+                    text = $"最大宠物等级：{displayInfo.RequiredAmount}";
                     if (Companion == null || Companion.Level > displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.RebirthLevel:
-                    text = $"Rebirth Level: {displayInfo.RequiredAmount}";
+                    text = $"转生等级：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.Rebirth] < displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 case RequiredType.MaxRebirthLevel:
-                    text = $"Rebirth Level: {displayInfo.RequiredAmount}";
+                    text = $"转生等级：{displayInfo.RequiredAmount}";
                     if (User.Stats[Stat.Rebirth] > displayInfo.RequiredAmount)
                         requiredColour = Color.Red;
                     break;
                 default:
-                    text = "Unknown Type Required";
+                    text = "未知要求类型";
                     break;
             }
 
@@ -2755,7 +2777,7 @@ namespace Client.Scenes
             {
                 builder.StartSection();
                 hasLines = true;
-                builder.AddLine($"Sell Value: {sale}", Color.LightGoldenrodYellow);
+                builder.AddLine($"出售价值：{sale}", Color.LightGoldenrodYellow);
             }
 
             if (MouseItem.Info.Durability > 0 && !MouseItem.Info.CanRepair && MouseItem.Info.StackSize == 1)
@@ -2775,7 +2797,7 @@ namespace Client.Scenes
                             builder.StartSection();
                             hasLines = true;
                         }
-                        builder.AddLine("Cannot be repaired.", Color.Yellow);
+                        builder.AddLine("不可修复.", Color.Yellow);
                         break;
                 }
             }
@@ -2787,7 +2809,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Cannot be sold.", Color.Yellow);
+                builder.AddLine("无法出售.", Color.Yellow);
             }
 
             if (!MouseItem.Info.CanStore)
@@ -2797,7 +2819,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Cannot be stored.", Color.Yellow);
+                builder.AddLine("不能存放.", Color.Yellow);
             }
 
             if (!MouseItem.Info.CanTrade || (MouseItem.Flags & UserItemFlags.Bound) == UserItemFlags.Bound)
@@ -2807,7 +2829,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Cannot be traded.", Color.Yellow);
+                builder.AddLine("无法交易.", Color.Yellow);
             }
 
             if (!MouseItem.Info.CanDrop)
@@ -2817,7 +2839,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Cannot be dropped.", Color.Yellow);
+                builder.AddLine("无法丢弃.", Color.Yellow);
             }
 
             if (!MouseItem.Info.CanDeathDrop || (MouseItem.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless || (MouseItem.Flags & UserItemFlags.Bound) == UserItemFlags.Bound)
@@ -2827,7 +2849,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Cannot be dropped on death.", Color.Yellow);
+                builder.AddLine("死亡无法掉落.", Color.Yellow);
             }
 
             if ((MouseItem.Flags & UserItemFlags.Bound) == UserItemFlags.Bound)
@@ -2837,7 +2859,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Bound Item.", Color.Yellow);
+                builder.AddLine(CEnvir.Language.CommonStatusPhysical, Color.Yellow); // 或者使用 "Bound Item" 的中文等价词
             }
 
             if ((MouseItem.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable)
@@ -2849,9 +2871,9 @@ namespace Client.Scenes
                 }
 
                 if (MouseItem.Info.ItemType == ItemType.Book)
-                    builder.AddLine("Does not contain Level 4 Pages.", Color.Red);
+                    builder.AddLine("不包含 4 级页.", Color.Red);
                 else
-                    builder.AddLine("Cannot be Refined or Upgraded.", Color.Yellow);
+                    builder.AddLine("不可精炼或升级.", Color.Yellow);
             }
             else if (MouseItem.Info.ItemType == ItemType.Book)
             {
@@ -2860,7 +2882,7 @@ namespace Client.Scenes
                     builder.StartSection();
                     hasLines = true;
                 }
-                builder.AddLine("Contains high level Pages.", Color.Green);
+                builder.AddLine("包含高等级页.", Color.Green);
             }
 
             AddItemLabelDescription(builder, displayInfo, hasLines);
@@ -2883,9 +2905,9 @@ namespace Client.Scenes
 
         private void AddSetItemInfo(ItemLabelBuilder builder, SetInfo set)
         {
-            builder.AddLine("Item Set:", Color.LimeGreen);
+            builder.AddLine("物品套装:", Color.LimeGreen);
             builder.AddLine($"    {set.SetName}", Color.LimeGreen);
-            builder.AddLine("Parts:", Color.LimeGreen);
+            builder.AddLine("部件:", Color.LimeGreen);
 
             bool hasFullSet = true;
             List<int> counted = new List<int>();
@@ -2962,7 +2984,7 @@ namespace Client.Scenes
 
                 if (!setBonusTitleAdded)
                 {
-                    builder.AddLine("Set Bonus:", Color.LimeGreen);
+                    builder.AddLine("套装属性:", Color.LimeGreen);
                     setBonusTitleAdded = true;
                 }
 
@@ -3946,7 +3968,14 @@ namespace Client.Scenes
         {
             if (User == null) return;
 
-            MainPanel.ClassLabel.Text = User.Class.ToString();
+            MainPanel.ClassLabel.Text = User.Class switch
+            {
+                MirClass.Warrior => "战士",
+                MirClass.Wizard => "法师",
+                MirClass.Taoist => "道士",
+                MirClass.Assassin => "刺客",
+                _ => User.Class.ToString(),
+            };
 
             foreach (NPCGoodsCell cell in NPCGoodsBox.Cells)
                 cell.UpdateColours();
@@ -4242,13 +4271,13 @@ namespace Client.Scenes
             switch (task.Task)
             {
                 case QuestTaskType.KillMonster:
-                    builder.AppendFormat("Kill {0} ", task.Amount);
+                    builder.AppendFormat("击杀 {0} ", task.Amount);
                     break;
                 case QuestTaskType.GainItem:
-                    builder.AppendFormat("Collect {0} {1}", task.Amount, task.ItemParameter?.ItemName);
+                    builder.AppendFormat("收集 {0} {1}", task.Amount, task.ItemParameter?.ItemName);
                     break;
                 case QuestTaskType.VisitRegion:
-                    builder.AppendFormat("Goto {0} in {1}", task.RegionParameter?.Description, task.RegionParameter?.Map.PlayerDescription);
+                    builder.AppendFormat("前往 {0} 在 {1}", task.RegionParameter?.Description, task.RegionParameter?.Map.PlayerDescription);
                     break;
             }
 
@@ -4256,7 +4285,7 @@ namespace Client.Scenes
             {
                 if (task.Task == QuestTaskType.GainItem && task.MonsterDetails.Count > 0)
                 {
-                    builder.Append(" from ");
+                    builder.Append(" 来自 ");
                 }
 
                 bool needComma = false;
@@ -4271,7 +4300,7 @@ namespace Client.Scenes
                     }
 
                     if (needComma)
-                        builder.Append(" or ");
+                        builder.Append(" 或 ");
 
                     needComma = true;
 
@@ -4287,7 +4316,7 @@ namespace Client.Scenes
                 {
                     if (task.MonsterDetails.Count > 0)
                     {
-                        builder.Append(" from ");
+                        builder.Append(" 来自 ");
                         builder.Append(task.MobDescription);
                     }
                 }
@@ -4300,7 +4329,7 @@ namespace Client.Scenes
             if (userQuest != null)
             {
                 if (userTask != null && userTask.Completed)
-                    builder.Append(" (Completed)");
+                    builder.Append(" (已完成)");
                 else
                 {
                     if (task.Task != QuestTaskType.VisitRegion)

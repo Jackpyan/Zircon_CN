@@ -834,7 +834,14 @@ namespace Client.Scenes
                         break;
                 }
 
-                SelectedClassLabel.Text = SelectedClass.ToString();
+                SelectedClassLabel.Text = SelectedClass switch
+                {
+                    MirClass.Warrior => "战士",
+                    MirClass.Wizard => "法师",
+                    MirClass.Taoist => "道士",
+                    MirClass.Assassin => "刺客",
+                    _ => SelectedClass.ToString(),
+                };
             }
 
             #endregion
@@ -886,7 +893,12 @@ namespace Client.Scenes
                         break;
 
                 }
-                SelectedGenderLabel.Text = SelectedGender.ToString();
+                SelectedGenderLabel.Text = SelectedGender switch
+                {
+                    MirGender.Male => "男",
+                    MirGender.Female => "女",
+                    _ => SelectedGender.ToString(),
+                };
             }
 
             #endregion
@@ -1634,7 +1646,14 @@ namespace Client.Scenes
                 Visible = true;
                 ClassIcon.Index = 27 + (int)SelectInfo.Class;
                 NameLabel.Text = SelectInfo.CharacterName;
-                ClassLabel.Text = SelectInfo.Class.ToString();
+                ClassLabel.Text = SelectInfo.Class switch
+                {
+                    MirClass.Warrior => "战士",
+                    MirClass.Wizard => "法师",
+                    MirClass.Taoist => "道士",
+                    MirClass.Assassin => "刺客",
+                    _ => SelectInfo.Class.ToString(),
+                };
                 LevelLabel.Text = SelectInfo.Level.ToString();
                 LocationLabel.Text = Globals.MapInfoList.Binding.FirstOrDefault(x => x.Index == SelectInfo.Location)?.Description ?? "新角色";
             }

@@ -328,7 +328,7 @@ namespace Client.Scenes.Views
         public MagicTab(MagicSchool school)
         {
             TabButton.LibraryFile = LibraryFile.Interface;
-            TabButton.Hint = school.ToString();
+            TabButton.Hint = school.GetType().GetMember(school.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? school.ToString();
 
             BackColour = Color.Empty;
             Border = false;

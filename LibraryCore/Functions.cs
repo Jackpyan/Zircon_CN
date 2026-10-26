@@ -1,4 +1,4 @@
-﻿using Library.SystemModels;
+using Library.SystemModels;
 using MirDB;
 using System;
 using System.Collections.Generic;
@@ -630,26 +630,26 @@ namespace Library
             string textS = null;
 
             // Days
-            if (time.Days >= 2) textD = $"{time.Days} {(small ? "Ds" : "Days")}";
-            else if (time.Days == 1) textD = $"{time.Days} {(small ? "D" : "Day")}";
+            if (time.Days >= 2) textD = $"{time.Days} {(small ? "天" : "天")}";
+            else if (time.Days == 1) textD = $"{time.Days} {(small ? "天" : "天")}";
 
             // Hours
-            if (time.Hours >= 2) textH = $"{time.Hours} {(small ? "Hrs" : "Hours")}";
-            else if (time.Hours == 1) textH = $"{time.Hours} {(small ? "H" : "Hour")}";
+            if (time.Hours >= 2) textH = $"{time.Hours} {(small ? "小时" : "小时")}";
+            else if (time.Hours == 1) textH = $"{time.Hours} {(small ? "小时" : "小时")}";
 
             // Minutes
-            if (time.Minutes >= 2) textM = $"{time.Minutes} {(small ? "Mins" : "Minutes")}";
-            else if (time.Minutes == 1) textM = $"{time.Minutes} {(small ? "Min" : "Minute")}";
+            if (time.Minutes >= 2) textM = $"{time.Minutes} {(small ? "分钟" : "分钟")}";
+            else if (time.Minutes == 1) textM = $"{time.Minutes} {(small ? "分钟" : "分钟")}";
 
             // Seconds
-            if (time.Seconds >= 2) textS = $"{time.Seconds} {(small ? "Secs" : "Seconds")}";
-            else if (time.Seconds == 1) textS = $"{time.Seconds} {(small ? "Sec" : "Second")}";
+            if (time.Seconds >= 2) textS = $"{time.Seconds} {(small ? "秒" : "秒")}";
+            else if (time.Seconds == 1) textS = $"{time.Seconds} {(small ? "秒" : "秒")}";
             else if (time.TotalSeconds > 0 && time.TotalSeconds < 1)
-                textS = "less than a second";
+                textS = "不足一秒";
 
             // Return the appropriate level of detail
             if (!details)
-                return textD ?? textH ?? textM ?? textS ?? "0 Seconds";
+                return textD ?? textH ?? textM ?? textS ?? "0 秒";
 
             if (textD != null)
                 return textD + " " + (textH ?? textM ?? textS ?? string.Empty);

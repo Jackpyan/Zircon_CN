@@ -1,10 +1,12 @@
-﻿using Client.Controls;
+using Client.Controls;
 using Client.Envir;
 using Client.UserModels;
 using Library;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
+using System.Reflection;
 using System.Windows.Forms;
 using C = Library.Network.ClientPackets;
 
@@ -37,7 +39,7 @@ namespace Client.Scenes.Views
             ModeChanged?.Invoke(this, EventArgs.Empty);
 
             if (ChatModeButton != null)
-                ChatModeButton.Label.Text = Mode.ToString();
+                ChatModeButton.Label.Text = Mode.GetType().GetMember(Mode.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? Mode.ToString();
         }
 
         #endregion
@@ -96,7 +98,7 @@ namespace Client.Scenes.Views
             {
                 ButtonType = ButtonType.SmallButton,
                 Size = new Size(60, SmallButtonHeight),
-                Label = { Text = Mode.ToString() },
+                Label = { Text = Mode.GetType().GetMember(Mode.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? Mode.ToString() },
                 Parent = this,
             };
             ChatModeButton.MouseClick += (o, e) => Mode = (ChatMode)(((int)(Mode) + 1) % 7);
@@ -483,12 +485,19 @@ namespace Client.Scenes.Views
 
     public enum ChatMode
     {
+        [Description("本地")]
         Local,
+        [Description("私聊")]
         Whisper,
+        [Description("编组")]
         Group,
+        [Description("行会")]
         Guild,
+        [Description("喊话")]
         Shout,
+        [Description("全局")]
         Global,
+        [Description("观察")]
         Observer,
     }
 

@@ -580,7 +580,7 @@ namespace Client.Scenes.Views
             Visible = true;
 
             NameLabel.Text = InstanceInfo.Name;
-            TypeLabel.Text = InstanceInfo.Type.ToString();
+            TypeLabel.Text = InstanceInfo.Type.GetType().GetMember(InstanceInfo.Type.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? InstanceInfo.Type.ToString();
             LevelLabel.Text = $"等级：{GetLevel(InstanceInfo)}";
             CountLabel.Text = $"玩家人数：{GetPlayerCount(InstanceInfo)}";
             //FreeSlotLabel.Text = $"空位：0 / {InstanceInfo.MaxInstances}";
@@ -595,7 +595,7 @@ namespace Client.Scenes.Views
         {
             if (instance.MinPlayerLevel == 0 && instance.MaxPlayerLevel == 0)
             {
-                return "Any";
+                return "任意";
             }
             else if (instance.MinPlayerLevel > 0 && instance.MaxPlayerLevel == 0)
             {
@@ -611,7 +611,7 @@ namespace Client.Scenes.Views
         {
             if (instance.MaxPlayerCount == 0)
             {
-                return "Any";
+                return "任意";
             }
 
             return $"{InstanceInfo.MinPlayerCount} - {InstanceInfo.MaxPlayerCount}";

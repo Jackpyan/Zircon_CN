@@ -1,19 +1,25 @@
-﻿using System;
+using System;
 using System.ComponentModel;
 
 namespace Library
 {
     public enum MirGender : byte
     {
+        [Description("男")]
         Male = 0,
+        [Description("女")]
         Female = 1
     }
 
     public enum MirClass : byte
     {
+        [Description("战士")]
         Warrior = 0,
+        [Description("法师")]
         Wizard = 1,
+        [Description("道士")]
         Taoist = 2,
+        [Description("刺客")]
         Assassin = 3,
     }
 
@@ -81,7 +87,9 @@ namespace Library
     [Flags]
     public enum RequiredGender : byte
     {
+        [Description("男")]
         Male = 1,
+        [Description("女")]
         Female = 2,
         None = Male | Female
     }
@@ -335,8 +343,11 @@ namespace Library
 
     public enum Rarity : byte
     {
+        [Description("普通")]
         Common,
+        [Description("优秀")]
         Superior,
+        [Description("稀有")]
         Elite,
     }
 
@@ -366,9 +377,13 @@ namespace Library
 
     public enum InstanceType : byte
     {
+        [Description("个人")]
         Player = 0,
+        [Description("组队")]
         Group = 1,
+        [Description("行会")]
         Guild = 2,
+        [Description("城堡")]
         Castle = 3
     }
 
@@ -411,20 +426,35 @@ namespace Library
     {
         Nothing = 0,
 
+        [Description("消耗品")]
         Consumable = 1,
+        [Description("武器")]
         Weapon = 2,
+        [Description("护甲")]
         Armour = 3,
+        [Description("火把")]
         Torch = 4,
+        [Description("头盔")]
         Helmet = 5,
+        [Description("项链")]
         Necklace = 6,
+        [Description("手镯")]
         Bracelet = 7,
+        [Description("戒指")]
         Ring = 8,
+        [Description("鞋子")]
         Shoes = 9,
+        [Description("毒药")]
         Poison = 10,
+        [Description("护身符")]
         Amulet = 11,
+        [Description("肉类")]
         Meat = 12,
+        [Description("矿石")]
         Ore = 13,
+        [Description("书籍")]
         Book = 14,
+        [Description("卷轴")]
         Scroll = 15,
         [Description("黑暗石")]
         DarkStone = 16,
@@ -432,6 +462,7 @@ namespace Library
         RefineSpecial = 17,
         [Description("马铠")]
         HorseArmour = 18,
+        [Description("花")]
         Flower = 19,
         [Description("宠物食物")]
         CompanionFood = 20,
@@ -441,18 +472,29 @@ namespace Library
         CompanionHead = 22,
         [Description("宠物背饰")]
         CompanionBack = 23,
+        [Description("系统")]
         System = 24,
         [Description("物品碎片")]
         ItemPart = 25,
+        [Description("徽章")]
         Emblem = 26,
+        [Description("盾牌")]
         Shield = 27,
+        [Description("时装")]
         Costume = 28,
+        [Description("鱼钩")]
         Hook = 29,
+        [Description("漂浮")]
         Float = 30,
+        [Description("鱼饵")]
         Bait = 31,
+        [Description("寻找")]
         Finder = 32,
+        [Description("渔轮")]
         Reel = 33,
+        [Description("货币")]
         Currency = 34,
+        [Description("捆绑包")]
         Bundle = 35,
         [Description("战利品箱")]
         LootBox = 36,
@@ -593,23 +635,39 @@ namespace Library
     {
         None,
 
+        [Description("被动")]
         Passive = 1,
+        [Description("主动")]
         Active,
+        [Description("开关")]
         Toggle,
+        [Description("火系")]
         Fire,
+        [Description("冰系")]
         Ice,
+        [Description("雷系")]
         Lightning,
+        [Description("风系")]
         Wind,
+        [Description("神圣系")]
         Holy,
+        [Description("暗黑系")]
         Dark,
+        [Description("幻影系")]
         Phantom,
+        [Description("物理")]
         Physical,
+        [Description("狂暴")]
         Atrocity,
+        [Description("击杀")]
         Kill,
+        [Description("刺杀")]
         Assassination,
 
+        [Description("骑术")]
         Horse,
 
+        [Description("修仙")]
         Discipline = 20
     }
 
@@ -1874,9 +1932,13 @@ namespace Library
 
     public enum OnlineState : byte
     {
+        [Description("在线")]
         Online,
+        [Description("忙碌")]
         Busy,
+        [Description("离开")]
         Away,
+        [Description("离线")]
         Offline
     }
 

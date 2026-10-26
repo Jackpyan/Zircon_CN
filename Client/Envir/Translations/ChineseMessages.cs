@@ -1,4 +1,4 @@
-﻿using Library;
+using Library;
 
 namespace Client.Envir.Translations
 {
@@ -824,5 +824,71 @@ namespace Client.Envir.Translations
 
         public override string SocketCombineDialogTitle { get; set; } = "宝石合成";
         public override string SocketCombineDialogStartButtonLabel { get; set; } = "开始";
+
+        [ConfigSection("Buff")]
+        public override string BuffServerSettings { get; set; } = "服务器设置";
+        public override string BuffHuntGold { get; set; } = "狩猎币";
+        public override string BuffObservableTitle { get; set; } = "可观察";
+        public override string BuffObservableDesc { get; set; } = "你正允许他人观察你的游戏。";
+        public override string BuffVeteran { get; set; } = "老兵";
+        public override string BuffBrown { get; set; } = "褐名";
+        public override string BuffPKPoints { get; set; } = "PK 点数";
+        public override string BuffRedemptionKeyStone { get; set; } = "赎回 Keystone";
+        public override string BuffCastleOwner { get; set; } = "城堡主人";
+        public override string BuffGuild { get; set; } = "行会";
+        public override string BuffMapEffect { get; set; } = "地图效果";
+        public override string BuffInstanceEffect { get; set; } = "副本效果";
+        public override string BuffPermanentItemBuffs { get; set; } = "永久物品增益";
+        public override string BuffCompanion { get; set; } = "宠物";
+        public override string BuffRedGemTitle { get; set; } = "红宝石";
+        public override string BuffRedGemDesc { get; set; } = "你的武器获得红色光环。";
+        public override string BuffBlueGemTitle { get; set; } = "蓝宝石";
+        public override string BuffBlueGemDesc { get; set; } = "你的护甲获得蓝色光环。";
+        public override string BuffCursedGemTitle { get; set; } = "诅咒宝石";
+        public override string BuffCursedGemDesc { get; set; } = "你的装备获得诅咒光环。";
+        public override string BuffDefiance { get; set; } = "挑战";
+        public override string BuffMight { get; set; } = "力量";
+        public override string BuffEndurance { get; set; } = "耐力";
+        public override string BuffReflectDamage { get; set; } = "反射伤害";
+        public override string BuffRenounce { get; set; } = "放弃";
+        public override string BuffMagicShield { get; set; } = "魔法盾";
+        public override string BuffFrostBite { get; set; } = "寒冻";
+        public override string BuffJudgementOfHeaven { get; set; } = "天审";
+        public override string BuffHeal { get; set; } = "治疗";
+        public override string BuffInvisibilityTitle { get; set; } = "隐身";
+        public override string BuffInvisibilityDesc { get; set; } = "隐于眼前。";
+        public override string BuffMagicResistance { get; set; } = "魔法抗性";
+        public override string BuffResilience { get; set; } = "韧性";
+        public override string BuffElementalSuperiority { get; set; } = "元素优势";
+        public override string BuffBloodLust { get; set; } = "嗜血";
+        public override string BuffStrengthOfFaith { get; set; } = "信仰之力";
+        public override string BuffCelestialLight { get; set; } = "天光";
+        public override string BuffTransparency { get; set; } = "透明";
+        public override string BuffLifeSteal { get; set; } = "吸血";
+        public override string BuffSpiritualism { get; set; } = "灵性";
+        public override string BuffPoisonousCloud { get; set; } = "毒云";
+        public override string BuffFullBloom { get; set; } = "盛开";
+        public override string BuffWhiteLotus { get; set; } = "白莲";
+        public override string BuffRedLotus { get; set; } = "红莲";
+        public override string BuffCloak { get; set; } = "披风";
+        public override string BuffGhostWalkTitle { get; set; } = "幽灵步";
+        public override string BuffGhostWalkDesc { get; set; } = "披风状态下移动更快。";
+        public override string BuffTheNewBeginning { get; set; } = "新的开始";
+        public override string BuffDarkConversion { get; set; } = "暗黑转换";
+        public override string BuffDragonRepulse { get; set; } = "驱龙";
+        public override string BuffEvasion { get; set; } = "闪避";
+        public override string BuffRagingWind { get; set; } = "狂风";
+        public override string BuffConcentration { get; set; } = "专注";
+        public override string BuffLastStand { get; set; } = "最后抵抗";
+        public override string BuffInvincibility { get; set; } = "无敌";
+        public override string BuffElementalHurricane { get; set; } = "元素飓风";
+        public override string BuffSuperiorMagicShield { get; set; } = "高级魔法盾";
+        public override string BuffDefensiveBlow { get; set; } = "防御重击";
+        public override string BuffSoulResonance { get; set; } = "灵魂共鸣";
+        public override string BuffMagicWeaknessTitle { get; set; } = "魔法虚弱";
+        public override string BuffMagicWeaknessDesc { get; set; } = "魔法抗性大幅降低。";
+        public override string BuffDuration { get; set; } = "持续时间：{0}";
+        public override string BuffPaused { get; set; } = "已暂停（未生效）";
+        public override string BuffUnknownType { get; set; } = "未知增益类型";
     }
 }

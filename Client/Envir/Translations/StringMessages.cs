@@ -1,4 +1,4 @@
-﻿using Library;
+using Library;
 
 namespace Client.Envir.Translations
 {
@@ -824,5 +824,71 @@ namespace Client.Envir.Translations
         public abstract string SocketDialogStartButtonLabel { get; set; }
         public abstract string SocketCombineDialogTitle { get; set; }
         public abstract string SocketCombineDialogStartButtonLabel { get; set; }
+
+        [ConfigSection("Buff")]
+        public abstract string BuffServerSettings { get; set; }
+        public abstract string BuffHuntGold { get; set; }
+        public abstract string BuffObservableTitle { get; set; }
+        public abstract string BuffObservableDesc { get; set; }
+        public abstract string BuffVeteran { get; set; }
+        public abstract string BuffBrown { get; set; }
+        public abstract string BuffPKPoints { get; set; }
+        public abstract string BuffRedemptionKeyStone { get; set; }
+        public abstract string BuffCastleOwner { get; set; }
+        public abstract string BuffGuild { get; set; }
+        public abstract string BuffMapEffect { get; set; }
+        public abstract string BuffInstanceEffect { get; set; }
+        public abstract string BuffPermanentItemBuffs { get; set; }
+        public abstract string BuffCompanion { get; set; }
+        public abstract string BuffRedGemTitle { get; set; }
+        public abstract string BuffRedGemDesc { get; set; }
+        public abstract string BuffBlueGemTitle { get; set; }
+        public abstract string BuffBlueGemDesc { get; set; }
+        public abstract string BuffCursedGemTitle { get; set; }
+        public abstract string BuffCursedGemDesc { get; set; }
+        public abstract string BuffDefiance { get; set; }
+        public abstract string BuffMight { get; set; }
+        public abstract string BuffEndurance { get; set; }
+        public abstract string BuffReflectDamage { get; set; }
+        public abstract string BuffRenounce { get; set; }
+        public abstract string BuffMagicShield { get; set; }
+        public abstract string BuffFrostBite { get; set; }
+        public abstract string BuffJudgementOfHeaven { get; set; }
+        public abstract string BuffHeal { get; set; }
+        public abstract string BuffInvisibilityTitle { get; set; }
+        public abstract string BuffInvisibilityDesc { get; set; }
+        public abstract string BuffMagicResistance { get; set; }
+        public abstract string BuffResilience { get; set; }
+        public abstract string BuffElementalSuperiority { get; set; }
+        public abstract string BuffBloodLust { get; set; }
+        public abstract string BuffStrengthOfFaith { get; set; }
+        public abstract string BuffCelestialLight { get; set; }
+        public abstract string BuffTransparency { get; set; }
+        public abstract string BuffLifeSteal { get; set; }
+        public abstract string BuffSpiritualism { get; set; }
+        public abstract string BuffPoisonousCloud { get; set; }
+        public abstract string BuffFullBloom { get; set; }
+        public abstract string BuffWhiteLotus { get; set; }
+        public abstract string BuffRedLotus { get; set; }
+        public abstract string BuffCloak { get; set; }
+        public abstract string BuffGhostWalkTitle { get; set; }
+        public abstract string BuffGhostWalkDesc { get; set; }
+        public abstract string BuffTheNewBeginning { get; set; }
+        public abstract string BuffDarkConversion { get; set; }
+        public abstract string BuffDragonRepulse { get; set; }
+        public abstract string BuffEvasion { get; set; }
+        public abstract string BuffRagingWind { get; set; }
+        public abstract string BuffConcentration { get; set; }
+        public abstract string BuffLastStand { get; set; }
+        public abstract string BuffInvincibility { get; set; }
+        public abstract string BuffElementalHurricane { get; set; }
+        public abstract string BuffSuperiorMagicShield { get; set; }
+        public abstract string BuffDefensiveBlow { get; set; }
+        public abstract string BuffSoulResonance { get; set; }
+        public abstract string BuffMagicWeaknessTitle { get; set; }
+        public abstract string BuffMagicWeaknessDesc { get; set; }
+        public abstract string BuffDuration { get; set; }
+        public abstract string BuffPaused { get; set; }
+        public abstract string BuffUnknownType { get; set; }
     }
 }

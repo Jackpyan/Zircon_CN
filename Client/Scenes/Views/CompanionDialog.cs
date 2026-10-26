@@ -5,7 +5,9 @@ using Client.UserModels;
 using Library;
 using Library.SystemModels;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
@@ -922,10 +924,10 @@ namespace Client.Scenes.Views
             int row = 0;
             foreach (ItemType itemType in itemTypes)
             {
-                string item = itemType.ToString();
-                if (item == "Nothing" || item == "Consumable" || item == "Torch" || item == "Poison" || item == "Amulet" || item == "Meat" || item == "Ore" || item == "Currency"
-                || item == "DarkStone" || item == "RefineSpecial" || item == "HorseArmour" || item == "CompanionFood" || item == "System" || item == "ItemPart" || item.Contains("Companion")
-                || item == "Hook" || item == "Float" || item == "Bait" || item == "Finder" || item == "Reel")
+                string item = itemType.GetType().GetMember(itemType.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? itemType.ToString();
+                if (itemType == ItemType.Nothing || itemType == ItemType.Consumable || itemType == ItemType.Torch || itemType == ItemType.Poison || itemType == ItemType.Amulet || itemType == ItemType.Meat || itemType == ItemType.Ore || itemType == ItemType.Currency
+                || itemType == ItemType.DarkStone || itemType == ItemType.RefineSpecial || itemType == ItemType.HorseArmour || itemType == ItemType.CompanionFood || itemType == ItemType.System || itemType == ItemType.ItemPart || itemType.ToString().Contains("Companion")
+                || itemType == ItemType.Hook || itemType == ItemType.Float || itemType == ItemType.Bait || itemType == ItemType.Finder || itemType == ItemType.Reel)
                 {
                     continue;
                 }
@@ -933,7 +935,7 @@ namespace Client.Scenes.Views
                 FilterType[itemType] = new DXCheckBox
                 {
                     Parent = FilterControl,
-                    Hint = "拾取 " + item.ToLower() + " 类物品",
+                    Hint = "拾取 " + item + " 类物品",
                 };
                 FilterType[itemType].Location = new Point(10 + (110 * index), 150 + (18 * row));
 
@@ -944,7 +946,7 @@ namespace Client.Scenes.Views
                     ForeColour = Color.AntiqueWhite,
                     OutlineColour = Color.Black,
                     IsControl = false,
-                    Text = char.ToUpper(item[0]) + item.Substring(1)
+                    Text = item,
                 };
                 label.Location = new Point(25 + (110 * index++), 150 + (18 * row));
                 if (index % 2 == 0)
@@ -965,7 +967,7 @@ namespace Client.Scenes.Views
                 FilterClass[mirClass] = new DXCheckBox
                 {
                     Parent = FilterControl,
-                    Hint = "拾取 " + mirClass.ToString().ToLower() + " 职业物品",
+                    Hint = "拾取 " + mirClass.GetType().GetMember(mirClass.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description + " 职业物品",
                 };
                 FilterClass[mirClass].Location = new Point(10 + (110 * index), 30 + (18 * row));
 
@@ -976,7 +978,7 @@ namespace Client.Scenes.Views
                     ForeColour = Color.AntiqueWhite,
                     OutlineColour = Color.Black,
                     IsControl = false,
-                    Text = char.ToUpper(mirClass.ToString()[0]) + mirClass.ToString().Substring(1)
+                    Text = mirClass.GetType().GetMember(mirClass.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? mirClass.ToString(),
                 };
                 label.Location = new Point(25 + (110 * index++), 30 + (18 * row));
 
@@ -998,7 +1000,7 @@ namespace Client.Scenes.Views
                 FilterRarity[rarity] = new DXCheckBox
                 {
                     Parent = FilterControl,
-                    Hint = "拾取 " + rarity.ToString().ToLower() + " 稀有度物品",
+                    Hint = "拾取 " + rarity.GetType().GetMember(rarity.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description + " 稀有度物品",
                 };
                 FilterRarity[rarity].Location = new Point(10 + (110 * index), 90 + (18 * row));
 
@@ -1019,7 +1021,7 @@ namespace Client.Scenes.Views
                     ForeColour = rarityLabelColor,
                     OutlineColour = Color.Black,
                     IsControl = false,
-                    Text = char.ToUpper(rarity.ToString()[0]) + rarity.ToString().Substring(1)
+                    Text = rarity.GetType().GetMember(rarity.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? rarity.ToString(),
                 };
                 label.Location = new Point(25 + (110 * index++), 90 + (18 * row));
 

@@ -1,8 +1,9 @@
-﻿using Client.Controls;
+using Client.Controls;
 using Client.Models;
 using Client.UserModels;
 using Library;
 using Library.SystemModels;
+using Client.Envir;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -278,38 +279,38 @@ namespace Client.Scenes.Views
             switch (buff.Type)
             {
                 case BuffType.Server:
-                    text = $"Server Settings\n";
+                    text = CEnvir.Language.BuffServerSettings + "\n";
                     break;
                 case BuffType.HuntGold:
-                    text = $"Hunt Gold\n";
+                    text = CEnvir.Language.BuffHuntGold + "\n";
                     break;
                 case BuffType.Observable:
-                    text = $"Observable\n\n" +
-                           $"You are allowing people to watch you play.\n";
+                    text = CEnvir.Language.BuffObservableTitle + "\n\n" +
+                           CEnvir.Language.BuffObservableDesc + "\n";
                     break;
                 case BuffType.Veteran:
-                    text = $"Veteran\n";
+                    text = CEnvir.Language.BuffVeteran + "\n";
                     break;
                 case BuffType.Brown:
-                    text = $"Brown\n";
+                    text = CEnvir.Language.BuffBrown + "\n";
                     break;
                 case BuffType.PKPoint:
-                    text = $"PK Points\n";
+                    text = CEnvir.Language.BuffPKPoints + "\n";
                     break;
                 case BuffType.Redemption:
-                    text = $"Redemption Key Stone\n";
+                    text = CEnvir.Language.BuffRedemptionKeyStone + "\n";
                     break;
                 case BuffType.Castle:
-                    text = $"Castle Owner\n";
+                    text = CEnvir.Language.BuffCastleOwner + "\n";
                     break;
                 case BuffType.Guild:
-                    text = $"Guild\n";
+                    text = CEnvir.Language.BuffGuild + "\n";
                     break;
                 case BuffType.MapEffect:
-                    text = $"Map Effect\n";
+                    text = CEnvir.Language.BuffMapEffect + "\n";
                     break;
                 case BuffType.InstanceEffect:
-                    text = $"Instance Effect\n";
+                    text = CEnvir.Language.BuffInstanceEffect + "\n";
                     break;
                 case BuffType.ItemBuff:
                     {
@@ -319,10 +320,10 @@ namespace Client.Scenes.Views
                     }
                     break;
                 case BuffType.ItemBuffPermanent:
-                    text = "Permanent Item Buffs\n";
+                    text = CEnvir.Language.BuffPermanentItemBuffs + "\n";
                     break;
                 case BuffType.Companion:
-                    text = $"Companion\n";
+                    text = CEnvir.Language.BuffCompanion + "\n";
                     break;
                 case BuffType.Fame:
                     {
@@ -336,137 +337,137 @@ namespace Client.Scenes.Views
                     }
                     break;
                 case BuffType.RedGem:
-                    text = "Red Gem\n\n" +
-                        "Your weapon gains a red aura.";
+                    text = CEnvir.Language.BuffRedGemTitle + "\n\n" +
+                        CEnvir.Language.BuffRedGemDesc;
                     break;
                 case BuffType.BlueGem:
-                    text = "Blue Gem\n\n" +
-                        "Your armour gains a blue aura.";
+                    text = CEnvir.Language.BuffBlueGemTitle + "\n\n" +
+                        CEnvir.Language.BuffBlueGemDesc;
                     break;
                 case BuffType.CursedGem:
-                    text = "Cursed Gem\n\n" +
-                        "Your equipment gains a cursed aura.";
+                    text = CEnvir.Language.BuffCursedGemTitle + "\n\n" +
+                        CEnvir.Language.BuffCursedGemDesc;
                     break;
 
                 case BuffType.Defiance:
-                    text = $"Defiance\n";
+                    text = CEnvir.Language.BuffDefiance + "\n";
                     break;
                 case BuffType.Might:
-                    text = $"Might\n";
+                    text = CEnvir.Language.BuffMight + "\n";
                     break;
                 case BuffType.Endurance:
-                    text = $"Endurance\n";
+                    text = CEnvir.Language.BuffEndurance + "\n";
                     break;
                 case BuffType.ReflectDamage:
-                    text = $"Reflect Damage\n";
+                    text = CEnvir.Language.BuffReflectDamage + "\n";
                     break;
                 case BuffType.Renounce:
-                    text = $"Renounce\n";
+                    text = CEnvir.Language.BuffRenounce + "\n";
                     break;
                 case BuffType.MagicShield:
-                    text = $"Magic Shield\n";
+                    text = CEnvir.Language.BuffMagicShield + "\n";
                     break;
                 case BuffType.FrostBite:
-                    text = $"Frost Bite\n";
+                    text = CEnvir.Language.BuffFrostBite + "\n";
                     break;
                 case BuffType.JudgementOfHeaven:
-                    text = $"Judgement Of Heaven\n";
+                    text = CEnvir.Language.BuffJudgementOfHeaven + "\n";
                     break;
                 case BuffType.Heal:
-                    text = $"Heal\n";
+                    text = CEnvir.Language.BuffHeal + "\n";
                     break;
                 case BuffType.Invisibility:
-                    text = $"Invisibility\n";
-                    text += $"Hide in plain sight.\n";
+                    text = CEnvir.Language.BuffInvisibilityTitle + "\n" +
+                           CEnvir.Language.BuffInvisibilityDesc + "\n";
                     break;
                 case BuffType.MagicResistance:
-                    text = $"Magic Resistance\n";
+                    text = CEnvir.Language.BuffMagicResistance + "\n";
                     break;
                 case BuffType.Resilience:
-                    text = $"Resilience\n";
+                    text = CEnvir.Language.BuffResilience + "\n";
                     break;
                 case BuffType.ElementalSuperiority:
-                    text = $"Elemental Superiority\n";
+                    text = CEnvir.Language.BuffElementalSuperiority + "\n";
                     break;
                 case BuffType.BloodLust:
-                    text = $"Blood Lust\n";
+                    text = CEnvir.Language.BuffBloodLust + "\n";
                     break;
                 case BuffType.StrengthOfFaith:
-                    text = $"Strength Of Faith\n";
+                    text = CEnvir.Language.BuffStrengthOfFaith + "\n";
                     break;
                 case BuffType.CelestialLight:
-                    text = $"Celestial Light\n";
+                    text = CEnvir.Language.BuffCelestialLight + "\n";
                     break;
                 case BuffType.Transparency:
-                    text = $"Transparency\n";
+                    text = CEnvir.Language.BuffTransparency + "\n";
                     break;
                 case BuffType.LifeSteal:
-                    text = $"Life Steal\n";
+                    text = CEnvir.Language.BuffLifeSteal + "\n";
                     break;
                 case BuffType.Spiritualism:
-                    text = $"Spiritualism\n";
+                    text = CEnvir.Language.BuffSpiritualism + "\n";
                     break;
                 case BuffType.PoisonousCloud:
-                    text = $"Poisonous Cloud\n";
+                    text = CEnvir.Language.BuffPoisonousCloud + "\n";
                     break;
                 case BuffType.FullBloom:
-                    text = $"Full Bloom\n";
+                    text = CEnvir.Language.BuffFullBloom + "\n";
                     break;
                 case BuffType.WhiteLotus:
-                    text = $"White Lotus\n";
+                    text = CEnvir.Language.BuffWhiteLotus + "\n";
                     break;
                 case BuffType.RedLotus:
-                    text = $"Red Lotus\n";
+                    text = CEnvir.Language.BuffRedLotus + "\n";
                     break;
                 case BuffType.Cloak:
-                    text = $"Cloak\n";
+                    text = CEnvir.Language.BuffCloak + "\n";
                     break;
                 case BuffType.GhostWalk:
-                    text = $"Ghost Walk\n\n" +
-                           $"Allows you to move faster whilst cloaked.";
+                    text = CEnvir.Language.BuffGhostWalkTitle + "\n\n" +
+                           CEnvir.Language.BuffGhostWalkDesc;
                     break;
                 case BuffType.TheNewBeginning:
-                    text = $"The New Beginning\n";
+                    text = CEnvir.Language.BuffTheNewBeginning + "\n";
                     break;
                 case BuffType.DarkConversion:
-                    text = $"Dark Conversion\n";
+                    text = CEnvir.Language.BuffDarkConversion + "\n";
                     break;
                 case BuffType.DragonRepulse:
-                    text = $"Dragon Repulse\n";
+                    text = CEnvir.Language.BuffDragonRepulse + "\n";
                     break;
                 case BuffType.Evasion:
-                    text = $"Evasion\n";
+                    text = CEnvir.Language.BuffEvasion + "\n";
                     break;
                 case BuffType.RagingWind:
-                    text = $"Raging Wind\n";
+                    text = CEnvir.Language.BuffRagingWind + "\n";
                     break;
                 case BuffType.Concentration:
-                    text = $"Concentration\n";
+                    text = CEnvir.Language.BuffConcentration + "\n";
                     break;
                 case BuffType.LastStand:
-                    text = $"Last Stand\n";
+                    text = CEnvir.Language.BuffLastStand + "\n";
                     break;
                 case BuffType.Invincibility:
-                    text = $"Invincibility\n";
+                    text = CEnvir.Language.BuffInvincibility + "\n";
                     break;
                 case BuffType.ElementalHurricane:
-                    text = $"Elemental Hurricane\n";
+                    text = CEnvir.Language.BuffElementalHurricane + "\n";
                     break;
                 case BuffType.SuperiorMagicShield:
-                    text = $"Superior Magic Shield\n";
+                    text = CEnvir.Language.BuffSuperiorMagicShield + "\n";
                     break;
                 case BuffType.DefensiveBlow:
-                    text = $"Defensive Blow\n";
+                    text = CEnvir.Language.BuffDefensiveBlow + "\n";
                     break;
                 case BuffType.SoulResonance:
-                    text = $"Soul Resonance\n";
+                    text = CEnvir.Language.BuffSoulResonance + "\n";
                     break;
                 case BuffType.MagicWeakness:
-                    text = $"Magic Weakness\n\n" +
-                           $"Your Magic Resistance has been greatly reduced.\n";
+                    text = CEnvir.Language.BuffMagicWeaknessTitle + "\n\n" +
+                           CEnvir.Language.BuffMagicWeaknessDesc + "\n";
                     break;
                 default:
-                    text = $"{buff.Type}\n";
+                    text = string.Format(CEnvir.Language.BuffUnknownType, buff.Type) + "\n";
                     break;
             }
 
@@ -487,9 +488,9 @@ namespace Client.Scenes.Views
             }
 
             if (buff.RemainingTime != TimeSpan.MaxValue)
-                text += $"\nDuration: {Functions.ToString(buff.RemainingTime, true)}";
+                text += "\n" + string.Format(CEnvir.Language.BuffDuration, Functions.ToString(buff.RemainingTime, true));
 
-            if (buff.Pause) text += "\nPaused (Not in Effect).";
+            if (buff.Pause) text += "\n" + CEnvir.Language.BuffPaused;
 
             return text;
         }
