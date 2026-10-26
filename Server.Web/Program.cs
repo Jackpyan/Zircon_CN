@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime;
 using System.Security.Claims;
@@ -7,6 +8,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.RateLimiting;
@@ -27,6 +29,28 @@ System.Net.IPAddress adminAddress = AdminEndpointValidator.ValidateAndResolve();
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options => options.Listen(adminAddress, Config.AdminWebPort));
+
+// 根据 Server.ini 的 AdminWebHost 自动放行对应的 Host 头，避免以内网 IP 访问时被 Host Filtering 返回 400 Bad Request - Invalid Hostname
+var adminHost = Config.AdminWebHost;
+var allowedHosts = new List<string> { "localhost", "127.0.0.1", "[::1]" };
+
+if (string.Equals(adminHost, "0.0.0.0", StringComparison.OrdinalIgnoreCase))
+{
+    // 监听所有网卡时，放行所有 Host；具体允许哪台机器访问由防火墙/反向代理控制
+    allowedHosts.Clear();
+    allowedHosts.Add("*");
+}
+else if (!string.Equals(adminHost, "localhost", StringComparison.OrdinalIgnoreCase) &&
+         !string.Equals(adminHost, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+{
+    // 绑定到具体内网 IP 时，放行该 IP 作为 Host 头
+    allowedHosts.Add(adminHost);
+}
+
+builder.Services.Configure<HostFilteringOptions>(options =>
+{
+    options.AllowedHosts = allowedHosts.ToArray();
+});
 
 string keyDirectory = Path.Combine(AppContext.BaseDirectory, "DataProtectionKeys");
 Directory.CreateDirectory(keyDirectory);
