@@ -159,6 +159,18 @@ namespace Client.Envir
         public static bool 死亡红屏 { get; set; } = false;
         public static bool 快速自动拾取 { get; set; } = false;
         public static bool Tab捡取 { get; set; } = false;
+
+        // 拾取页：不依赖白名单，按物品品质（非白色）自动拾取
+        public static bool 拾取非白色物品 { get; set; } = false;
+
+        // 聊天页
+        public static bool 自动回复 { get; set; } = false;
+        public static int 自动回复时用第几行句子 { get; set; } = 0;
+        public static bool 自动喊话 { get; set; } = false;
+        public static long 多少秒一次自动喊话 { get; set; } = 10000;
+        public static List<string> 自动喊话内内容 { get; set; } = new List<string>();
+        public static bool 是否关闭NPC话 { get; set; } = false;
+        public static bool 是否关闭怪物话 { get; set; } = false;
         public static bool 自动学习技能书 { get; set; } = false;
         public static bool 启用Ctrl数字控制宠物 { get; set; } = false;
 

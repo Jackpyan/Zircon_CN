@@ -6,8 +6,11 @@ using Library;
 using Library.SystemModels;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Windows.Forms;
 using C = Library.Network.ClientPackets;
 
@@ -29,6 +32,15 @@ namespace Client.Scenes.Views
         public DXCommonlyTab Commonly;
         public DXPlayerHelperTab Helper;
         public DXProtectionTab Protect;
+        public DXAutoPickItemTab AutoPick;
+        public DXAnsweringTab Answering;
+        public DXUserNoteBookTab NoteBook;
+        public DXSystemMsgRecordTab MsgRecord;
+        public DXMagicHelperTab Magic;
+        public DXViewRangeObjectTab ViewRange;
+
+        /// <summary>拾取过滤配置（按角色存盘）。角色数据就绪后才创建，见 EnsureAutoPickInitialized()。</summary>
+        public CItemFilter PickFilter;
 
         public override WindowType Type => WindowType.BigPatchBox;
         public override bool CustomSize => false;
@@ -69,6 +81,48 @@ namespace Client.Scenes.Views
                 Parent = TabControl,
                 Border = true,
                 TabButton = { Label = { Text = "保护", Hint = "自动使用物品，以及遇到特殊情况的自动应对方案" } },
+            };
+
+            Answering = new DXAnsweringTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "聊天", Hint = "自动回复以及自动喊话" } },
+            };
+
+            NoteBook = new DXUserNoteBookTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "便签", Hint = "方便用户记录一些文本" } },
+            };
+
+            MsgRecord = new DXSystemMsgRecordTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "记录", Hint = "查看系统日志文件" } },
+            };
+
+            AutoPick = new DXAutoPickItemTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "拾取", Hint = "设置哪些物品需要自动拾取" } },
+            };
+
+            Magic = new DXMagicHelperTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "魔法", Hint = "自动换符 / 锁定目标设置" } },
+            };
+
+            ViewRange = new DXViewRangeObjectTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "帮助", Hint = "辅助功能使用说明" } },
             };
         }
 
@@ -127,6 +181,100 @@ namespace Client.Scenes.Views
                 Config.开始挂机 = false;
                 Helper?.AndroidPlayer?.SetSilentState(false);
             }
+
+            // 拾取过滤按角色存盘，文件名需要角色名 → 角色数据就绪后再初始化
+            EnsureAutoPickInitialized();
+
+            // 便签同样按角色存盘
+            NoteBook?.BindUser(GameScene.Game?.User?.Name);
+
+            // 魔法页：把已学技能同步到 Config.magics（自动换符的数据源）
+            Magic?.UpdateMagic();
+        }
+
+        #region 拾取过滤
+
+        /// <summary>
+        /// 拾取过滤惰性初始化（文件名带角色名，必须等 User 就绪）。
+        /// 由 UserChanged() 与 NeedPick() 调用。
+        /// </summary>
+        private void EnsureAutoPickInitialized()
+        {
+            if (PickFilter != null || AutoPick == null) return;
+
+            string name = GameScene.Game?.User?.Name;
+            string fileName = string.IsNullOrEmpty(name) ? "./PickupFilter.ini" : $"./{name}-PickupFilter.ini";
+
+            // 旧版单一文件自动迁移到按角色文件
+            try
+            {
+                if (!string.IsNullOrEmpty(name) && File.Exists("./PickupFilter.ini") && !File.Exists(fileName))
+                    File.Move("./PickupFilter.ini", fileName);
+            }
+            catch
+            {
+                // 迁移失败不影响使用，退化为各自独立文件
+            }
+
+            PickFilter = new CItemFilter();
+            PickFilter.Initialize(fileName);
+
+            AutoPick.BindFilter(PickFilter);
+        }
+
+        /// <summary>该物品是否在白名单里（角色拾取或宠物拾取任一勾选）。</summary>
+        public bool NeedPick(ItemInfo item)
+        {
+            if (item == null) return false;
+
+            EnsureAutoPickInitialized();
+
+            if (PickFilter != null && PickFilter.dictItems.TryGetValue(item.Index, out CItemFilterSet set))
+                return set.pick || set.picks;
+
+            return false;
+        }
+
+        /// <summary>
+        /// 物品在地面上是否显示为白色。
+        /// 移植自 A 端 ItemObject.IsWhiteItem：碎片、带附加属性、非普通品质都不算白色。
+        /// ⚠ 用 Values.Count（条目数），不要用 Stats.Count（那是绝对值求和）。
+        /// </summary>
+        public static bool IsWhiteItem(ClientUserItem item)
+        {
+            if (item?.Info == null) return false;
+
+            if (item.Info.ItemEffect == ItemEffect.ItemPart) return false;
+
+            if (item.AddedStats?.Values != null && item.AddedStats.Values.Count > 0) return false;
+
+            return item.Info.Rarity == Rarity.Common;
+        }
+
+        #endregion
+
+        /// <summary>
+        /// 私聊自动回复。由 <see cref="GameScene.ReceiveChat(string, MessageType, List{ClientUserItem})"/>
+        /// 在 <c>Config.自动回复</c> 开启时调用。移植自 A 端 BigPatchDialog.ReceiveChat。
+        /// </summary>
+        public void ReceiveChat(string message, MessageType type)
+        {
+            if (type != MessageType.WhisperIn && type != MessageType.GMWhisperIn) return;
+
+            string reply = Answering?.SelectedReplyText;
+
+            if (string.IsNullOrEmpty(reply) || string.IsNullOrEmpty(message)) return;
+
+            // 私聊消息格式通常是 "名字=>内容"，取发送者名字回过去
+            string[] parts = message.Split(new[] { '=', '>' }, StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length == 0) return;
+
+            string name = parts[0].Trim();
+
+            if (name.Length == 0) return;
+
+            CEnvir.Enqueue(new C.Chat { Text = "/" + name + " " + reply });
         }
 
         /// <summary>
@@ -177,6 +325,11 @@ namespace Client.Scenes.Views
 
         protected override void Dispose(bool disposing)
         {
+            // 必须在 base.Dispose 之前存盘：base 会销毁全部子控件，之后这些页签已不可用
+            PickFilter?.Save();
+            NoteBook?.Save();
+            Answering?.SaveSaywords();
+
             base.Dispose(disposing);
 
             if (disposing)
@@ -184,6 +337,13 @@ namespace Client.Scenes.Views
                 Commonly = null;
                 Helper = null;
                 Protect = null;
+                AutoPick = null;
+                PickFilter = null;
+                NoteBook = null;
+                MsgRecord = null;
+                ViewRange = null;
+                Answering = null;
+                Magic = null;
 
                 if (TabControl != null)
                 {
@@ -2759,6 +2919,1163 @@ namespace Client.Scenes.Views
             }
 
             #endregion
+        }
+
+        #endregion
+
+        #region 拾取页（阶段 5）
+
+        /// <summary>单个物品的拾取配置。移植自 A 端 CItemFilterSet。</summary>
+        public class CItemFilterSet
+        {
+            public int idx { get; set; }
+            public string name { get; set; }
+            public ItemType type { get; set; }
+            public Rarity rarity { get; set; }
+            public bool hasPart { get; set; }
+            public bool canHaveStats { get; set; }
+
+            public bool hint;          // 地面提示
+            public bool pick;          // 角色拾取
+            public bool picks { get; set; }   // 宠物拾取
+            public bool show { get; set; } = true; // 显示
+        }
+
+        /// <summary>
+        /// 拾取白名单。移植自 A 端 CItemFilter。
+        ///
+        /// 与 A 端的差异：
+        /// 1. A 端用 `for (ItemType t = Nothing; t &lt;= Fabao; t++)` 枚举类型，B 端没有 Fabao，
+        ///    改为 `Enum.GetValues(typeof(ItemType))`；
+        /// 2. B 端 `ItemInfo` 没有 `BlockMonsterDrop` 字段，跳过该过滤；
+        /// 3. 不做网络同步（B 端服务端没有对应过滤包，发了会掉线），只落盘本地 ini。
+        /// </summary>
+        public class CItemFilter
+        {
+            public bool Inited;
+            public string FileName;
+
+            public List<CItemFilterSet> Items { get; } = new List<CItemFilterSet>();
+            public Dictionary<int, CItemFilterSet> dictItems { get; } = new Dictionary<int, CItemFilterSet>();
+
+            public CItemFilter()
+            {
+                foreach (ItemInfo itemInfo in Globals.ItemInfoList.Binding)
+                {
+                    if (itemInfo == null || string.IsNullOrEmpty(itemInfo.ItemName)) continue;
+
+                    CItemFilterSet set = new CItemFilterSet
+                    {
+                        name = itemInfo.ItemName,
+                        idx = itemInfo.Index,
+                        type = itemInfo.ItemType,
+                        rarity = itemInfo.Rarity,
+                        hasPart = itemInfo.ItemEffect == ItemEffect.ItemPart,
+                        canHaveStats = itemInfo.ItemType == ItemType.Weapon
+                                    || itemInfo.ItemType == ItemType.Armour
+                                    || itemInfo.ItemType == ItemType.Helmet
+                                    || itemInfo.ItemType == ItemType.Necklace
+                                    || itemInfo.ItemType == ItemType.Bracelet
+                                    || itemInfo.ItemType == ItemType.Ring
+                                    || itemInfo.ItemType == ItemType.Shoes
+                                    || itemInfo.ItemType == ItemType.Shield,
+                    };
+
+                    Items.Add(set);
+
+                    // 索引重复时保留第一个（A 端会写错误日志，这里静默跳过）
+                    if (dictItems.ContainsKey(itemInfo.Index)) continue;
+
+                    dictItems.Add(itemInfo.Index, set);
+                }
+            }
+
+            public void Initialize(string file)
+            {
+                FileName = file;
+
+                try
+                {
+                    if (!File.Exists(FileName))
+                    {
+                        File.Create(FileName)?.Close();
+                        Inited = true;
+                        return;
+                    }
+
+                    foreach (string line in File.ReadAllLines(FileName))
+                    {
+                        if (string.IsNullOrEmpty(line) || line[0] == ';') continue;
+
+                        string[] parts = line.Split(',');
+                        if (parts.Length < 6) continue;
+
+                        if (!int.TryParse(parts[0].Trim(), out int index)) continue;
+                        if (!dictItems.TryGetValue(index, out CItemFilterSet set)) continue;
+
+                        if (bool.TryParse(parts[2].Trim(), out bool value)) set.hint = value;
+                        if (bool.TryParse(parts[3].Trim(), out value)) set.pick = value;
+                        if (bool.TryParse(parts[4].Trim(), out value)) set.picks = value;
+                        if (bool.TryParse(parts[5].Trim(), out value)) set.show = value;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    CEnvir.SaveException(ex);
+                }
+
+                Inited = true;
+            }
+
+            public void Save()
+            {
+                if (string.IsNullOrEmpty(FileName)) return;
+
+                try
+                {
+                    string[] contents = new string[Items.Count];
+
+                    for (int i = 0; i < Items.Count; i++)
+                    {
+                        CItemFilterSet set = Items[i];
+                        contents[i] = $"{set.idx}, {set.name}, {set.hint}, {set.pick}, {set.picks}, {set.show}";
+                    }
+
+                    File.WriteAllLines(FileName, contents);
+                }
+                catch (Exception ex)
+                {
+                    CEnvir.SaveException(ex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 拾取页。移植自 A 端 DXAutoPickItemTab（5 列：名称 / 提示 / 角色拾取 / 宠物拾取 / 显示）。
+        ///
+        /// 与 A 端的差异：
+        /// 1. 去掉 `SycFilters` 网络同步（B 端服务端没有过滤包，发送会断线）；
+        /// 2. 「重置」原为「把全部物品重新加一遍」（会重复累积），改为「取消全部勾选」；
+        /// 3. 列全选不再用 `ItemView.Controls[1]`（依赖控件内部顺序），改用公开的 `ItemView.Items`。
+        /// </summary>
+        public class DXAutoPickItemTab : DXTab
+        {
+            private const int ColumnNameWidth = 158;
+            private const int ColumnCheckWidth = 58;
+
+            public DXButton Search;
+            public DXComboBox CombTypeBox;
+            public DXTextBox sTextBox;
+            public DXButton ResetButton;
+            public DXButton DelButton;
+            public DXListView ItemView;
+            public DXCheckBox ChkNonWhite;
+            public DXButton BtnSelectNonWhite;
+
+            public CItemFilter ItemFilter { get; private set; }
+
+            /// <summary>
+            /// 物品表有上千行，每行 6 个控件；若在登录时（BigPatchDialog 构造期）就全部建好，
+            /// 会拖慢登录。改为「页签首次可见时才构建」。
+            /// </summary>
+            private bool _pendingRefresh;
+
+            public DXAutoPickItemTab()
+            {
+                CombTypeBox = new DXComboBox
+                {
+                    Parent = this,
+                    Size = new Size(100, 18),
+                    Location = new Point(10, 5),
+                    DropDownHeight = 198,
+                };
+
+                CombTypeBox.SelectedItemChanged += (o, e) => RefreshItems(CombTypeBox.SelectedItem as ItemType?);
+
+                DXListBoxItem all = new DXListBoxItem
+                {
+                    Parent = CombTypeBox.ListBox,
+                    Item = null,
+                };
+                all.Label.Text = "全部";
+
+                Type itemTypeEnum = typeof(ItemType);
+
+                foreach (ItemType itemType in Enum.GetValues(typeof(ItemType)))
+                {
+                    DescriptionAttribute attr = itemTypeEnum.GetMember(itemType.ToString())[0].GetCustomAttribute<DescriptionAttribute>();
+
+                    DXListBoxItem row = new DXListBoxItem
+                    {
+                        Parent = CombTypeBox.ListBox,
+                        Item = itemType,
+                    };
+                    row.Label.Text = attr?.Description ?? itemType.ToString();
+                }
+
+                CombTypeBox.ListBox.SelectItem(null);
+
+                sTextBox = new DXTextBox
+                {
+                    Parent = this,
+                    Size = new Size(120, 20),
+                    Location = new Point(CombTypeBox.Location.X + CombTypeBox.Size.Width + 5, CombTypeBox.Location.Y),
+                };
+
+                sTextBox.TextBox.KeyPress += (o, e) =>
+                {
+                    if (e.KeyChar != (char)Keys.Enter) return;
+
+                    SearchItem();
+                    e.Handled = true;
+                };
+
+                Search = new DXButton
+                {
+                    Parent = this,
+                    Size = new Size(64, 18),
+                    Label = { Text = "搜索" },
+                    ButtonType = ButtonType.SmallButton,
+                    Location = new Point(sTextBox.Location.X + sTextBox.Size.Width + 5, sTextBox.Location.Y),
+                };
+                Search.MouseClick += (o, e) => SearchItem();
+
+                ResetButton = new DXButton
+                {
+                    Parent = this,
+                    Size = new Size(64, 18),
+                    Label = { Text = "重置" },
+                    ButtonType = ButtonType.SmallButton,
+                    Location = new Point(Search.Location.X + Search.Size.Width + 5, Search.Location.Y),
+                };
+                ResetButton.MouseClick += (o, e) => ResetAll();
+
+                DelButton = new DXButton
+                {
+                    Parent = this,
+                    Size = new Size(64, 18),
+                    Label = { Text = "清空" },
+                    ButtonType = ButtonType.SmallButton,
+                    Location = new Point(ResetButton.Location.X + ResetButton.Size.Width + 5, ResetButton.Location.Y),
+                };
+                DelButton.MouseClick += (o, e) => ItemView?.RemoveAll();
+
+                ChkNonWhite = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "拾取非白色物品" },
+                    Checked = Config.拾取非白色物品,
+                    Size = new Size(120, 18),
+                    Location = new Point(10, 30),
+                };
+                ChkNonWhite.CheckedChanged += (o, e) => Config.拾取非白色物品 = ChkNonWhite.Checked;
+
+                BtnSelectNonWhite = new DXButton
+                {
+                    Parent = this,
+                    Size = new Size(80, 18),
+                    Label = { Text = "勾选非白" },
+                    ButtonType = ButtonType.SmallButton,
+                    Location = new Point(150, 30),
+                };
+                BtnSelectNonWhite.MouseClick += (o, e) => SelectNonWhite();
+
+                ItemView = new DXListView
+                {
+                    Parent = this,
+                    Location = new Point(5, 55),
+                    Size = new Size(410, 340),
+                    ItemBorder = false,
+                };
+
+                ItemView.InsertColumn(0U, "物品名称", ColumnNameWidth, 24, "  物品的名字");
+                ItemView.InsertColumn(1U, CreateHeaderCheckBox("提示", Color.Green, 1));
+                ItemView.InsertColumn(2U, CreateHeaderCheckBox("角色拾取", Color.Empty, 2));
+                ItemView.InsertColumn(3U, CreateHeaderCheckBox("宠物拾取", Color.Empty, 3));
+                ItemView.InsertColumn(4U, CreateHeaderCheckBox("显示", Color.Empty, 4));
+            }
+
+            /// <summary>绑定过滤数据（由 BigPatchDialog 在角色数据就绪后调用）。</summary>
+            public void BindFilter(CItemFilter filter)
+            {
+                ItemFilter = filter;
+                _pendingRefresh = true;
+
+                if (IsVisible)
+                {
+                    _pendingRefresh = false;
+                    RefreshItems();
+                }
+            }
+
+            public override void OnIsVisibleChanged(bool oValue, bool nValue)
+            {
+                base.OnIsVisibleChanged(oValue, nValue);
+
+                if (!nValue || !_pendingRefresh || ItemFilter == null) return;
+
+                _pendingRefresh = false;
+                RefreshItems();
+            }
+
+            private DXCheckBox CreateHeaderCheckBox(string text, Color backColour, int subItem)
+            {
+                DXCheckBox box = new DXCheckBox
+                {
+                    Size = new Size(ColumnCheckWidth, 24),
+                    Label = { Text = text },
+                    BackColour = backColour,
+                };
+
+                box.CheckedChanged += (o, e) =>
+                {
+                    if (!(o is DXCheckBox source) || ItemView == null) return;
+
+                    // 逐行赋 Checked（会触发各行 CheckedChanged，从而写回 ItemFilter）
+                    foreach (DXControl row in ItemView.Items.Controls)
+                    {
+                        if (subItem >= row.Controls.Count) continue;
+                        if (row.Controls[subItem] is DXCheckBox target)
+                            target.Checked = source.Checked;
+                    }
+                };
+
+                return box;
+            }
+
+            private DXCheckBox CreateRowCheckBox(bool value, int index, int field)
+            {
+                DXCheckBox box = new DXCheckBox
+                {
+                    Size = new Size(ColumnCheckWidth, 20),
+                    Checked = value,
+                    Tag = index,
+                };
+
+                box.CheckedChanged += (o, e) =>
+                {
+                    if (!(o is DXCheckBox source) || ItemFilter == null) return;
+                    if (!(source.Tag is int i)) return;
+                    if (i < 0 || i >= ItemFilter.Items.Count) return;
+
+                    CItemFilterSet set = ItemFilter.Items[i];
+
+                    switch (field)
+                    {
+                        case 0: set.hint = source.Checked; break;
+                        case 1: set.pick = source.Checked; break;
+                        case 2: set.picks = source.Checked; break;
+                        case 3: set.show = source.Checked; break;
+                    }
+                };
+
+                return box;
+            }
+
+            private static Color GetNameColour(CItemFilterSet set)
+            {
+                // 碎片：地面恒为 暗灰 / 灰绿 / 粉紫
+                if (set.hasPart)
+                {
+                    switch (set.rarity)
+                    {
+                        case Rarity.Common: return Color.DarkGray;
+                        case Rarity.Superior: return Color.DarkSeaGreen;
+                        case Rarity.Elite: return Color.MediumOrchid;
+                    }
+                }
+                // 可能带随机属性：取该品质「带属性」时的醒目色
+                else if (set.canHaveStats)
+                {
+                    switch (set.rarity)
+                    {
+                        case Rarity.Common: return Color.LightSkyBlue;
+                        case Rarity.Superior: return Color.Lime;
+                        case Rarity.Elite: return Color.Magenta;
+                    }
+                }
+                // 普通品质 + 无附加属性 + 非碎片 → 地面恒为白
+                else
+                {
+                    switch (set.rarity)
+                    {
+                        case Rarity.Common: return Color.Gainsboro;
+                        case Rarity.Superior: return Color.LightGreen;
+                        case Rarity.Elite: return Color.Violet;
+                    }
+                }
+
+                return Color.Gainsboro;
+            }
+
+            private void SearchItem()
+            {
+                string text = sTextBox.TextBox.Text;
+
+                if (string.IsNullOrEmpty(text)) return;
+
+                ItemView.SortByName(text);
+            }
+
+            private void ResetAll()
+            {
+                if (ItemFilter == null) return;
+
+                foreach (CItemFilterSet set in ItemFilter.Items)
+                {
+                    set.hint = false;
+                    set.pick = false;
+                    set.picks = false;
+                    set.show = true;
+                }
+
+                RefreshItems(CombTypeBox.SelectedItem as ItemType?);
+            }
+
+            private void SelectNonWhite()
+            {
+                if (ItemFilter == null) return;
+
+                foreach (CItemFilterSet set in ItemFilter.Items)
+                {
+                    if (set.rarity == Rarity.Common) continue;
+
+                    set.pick = true;
+                }
+
+                RefreshItems(CombTypeBox.SelectedItem as ItemType?);
+            }
+
+            private void RefreshItems(ItemType? type = null)
+            {
+                if (ItemFilter == null || ItemView == null) return;
+
+                _pendingRefresh = false;
+
+                ItemView.RemoveAll();
+
+                for (int index = 0; index < ItemFilter.Items.Count; index++)
+                {
+                    CItemFilterSet set = ItemFilter.Items[index];
+
+                    if (type != null && set.type != type) continue;
+                    if (string.IsNullOrEmpty(set.name)) continue;
+
+                    uint nItem = ItemView.InsertItem(uint.MaxValue, set.name);
+
+                    if (ItemView.GetItem(nItem, 0U) is DXLabel nameLabel)
+                        nameLabel.ForeColour = GetNameColour(set);
+
+                    ItemView.SetItem(nItem, 1U, CreateRowCheckBox(set.hint, index, 0));
+                    ItemView.SetItem(nItem, 2U, CreateRowCheckBox(set.pick, index, 1));
+                    ItemView.SetItem(nItem, 3U, CreateRowCheckBox(set.picks, index, 2));
+                    ItemView.SetItem(nItem, 4U, CreateRowCheckBox(set.show, index, 3));
+                }
+
+                ItemView.UpdateItems();
+            }
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                if (ItemView == null) return;
+
+                ItemView.Location = new Point(5, 55);
+                ItemView.Size = new Size(Math.Max(Size.Width - 10, 100), Math.Max(Size.Height - 60, 100));
+            }
+        }
+
+        #endregion
+
+        #region 聊天 / 便签 / 记录 / 帮助（阶段 5）
+
+        /// <summary>
+        /// 聊天页：自动回复、自动喊话、屏蔽白字。移植自 A 端 DXAnsweringTab。
+        ///
+        /// 与 A 端的差异：
+        /// 1. A 端用 `System.Timers.Timer` 在**线程池线程**里发包；这里改为每帧由
+        ///    `GameScene.Process` 调 `ProcessAutoShout()`，不跨线程；
+        /// 2. A 端每次把整个输入框文本当一条消息发出去；这里改为随机取一行；
+        /// 3. 自动回复/自动喊话开关都持久化到 ini（A 端喊话开关不存盘）。
+        /// </summary>
+        public class DXAnsweringTab : DXTab
+        {
+            private static readonly string[] PresetReplies =
+            {
+                "您好，我有事不在",
+                "我去吃饭了....",
+                "挂机中.....",
+                "挂机练功 请勿打扰",
+            };
+
+            public DXTextView InputBox;
+            public DXCheckBox ChkMsgNotify;
+            public DXCheckBox ChkAutoReplay;
+            public DXComboBox CombAutoReplayText;
+            public DXCheckBox ChkAutoSayWords;
+            public DXNumberBox AutoSayInterval;
+            public DXLabel IntervalLeft;
+            public DXLabel IntervalRight;
+            public DXCheckBox ChkSaveSayRecord;
+            public DXCheckBox ChkShieldNpcWords;
+            public DXCheckBox ChkShieldMonsterWords;
+
+            private DateTime _nextShoutTime;
+            private bool _sayTextLoaded;
+
+            public DXAnsweringTab()
+            {
+                // ---- 自动回复 ----
+                ChkAutoReplay = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "自动回复" },
+                    Location = new Point(10, 15),
+                    Checked = Config.自动回复,
+                };
+                ChkAutoReplay.CheckedChanged += (o, e) => Config.自动回复 = ChkAutoReplay.Checked;
+
+                CombAutoReplayText = new DXComboBox
+                {
+                    Parent = this,
+                    Size = new Size(220, 18),
+                    Location = new Point(110, 15),
+                };
+
+                CombAutoReplayText.SelectedItemChanged += (o, e) =>
+                {
+                    if (CombAutoReplayText.SelectedItem is int index)
+                        Config.自动回复时用第几行句子 = index;
+                };
+
+                for (int i = 0; i < PresetReplies.Length; i++)
+                {
+                    DXListBoxItem item = new DXListBoxItem
+                    {
+                        Parent = CombAutoReplayText.ListBox,
+                        Item = i,
+                    };
+                    item.Label.Text = PresetReplies[i];
+                }
+
+                int replyIndex = Math.Max(0, Math.Min(Config.自动回复时用第几行句子, PresetReplies.Length - 1));
+                CombAutoReplayText.ListBox.SelectItem(replyIndex);
+
+                // ---- 来消息提示（A 端仅 UI，无实际逻辑）----
+                ChkMsgNotify = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "来消息声音提示" },
+                    Location = new Point(10, 45),
+                };
+
+                // ---- 自动喊话 ----
+                ChkAutoSayWords = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "自动喊话" },
+                    Location = new Point(10, 75),
+                    Checked = Config.自动喊话,
+                };
+                ChkAutoSayWords.CheckedChanged += (o, e) => Config.自动喊话 = ChkAutoSayWords.Checked;
+
+                IntervalLeft = new DXLabel
+                {
+                    Parent = this,
+                    Text = "间隔:",
+                    Outline = true,
+                    Location = new Point(110, 77),
+                };
+
+                AutoSayInterval = new DXNumberBox
+                {
+                    Parent = this,
+                    ValueTextBox = { Size = new Size(70, 18) },
+                    MinValue = 5000,
+                    MaxValue = 600000,
+                    Value = Config.多少秒一次自动喊话,
+                    Location = new Point(150, 75),
+                };
+                AutoSayInterval.ValueTextBox.ValueChanged += (o, e) => Config.多少秒一次自动喊话 = AutoSayInterval.Value;
+
+                IntervalRight = new DXLabel
+                {
+                    Parent = this,
+                    Text = "毫秒",
+                    Outline = true,
+                    Location = new Point(225, 77),
+                };
+
+                ChkSaveSayRecord = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "保存喊话内容" },
+                    Location = new Point(270, 75),
+                };
+                ChkSaveSayRecord.CheckedChanged += (o, e) =>
+                {
+                    if (ChkSaveSayRecord.Checked) SaveSaywords();
+                };
+
+                // ---- 屏蔽白字（A 端只存配置，未接显示过滤）----
+                ChkShieldNpcWords = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "屏蔽NPC白字" },
+                    Location = new Point(10, 105),
+                    Checked = Config.是否关闭NPC话,
+                };
+                ChkShieldNpcWords.CheckedChanged += (o, e) => Config.是否关闭NPC话 = ChkShieldNpcWords.Checked;
+
+                ChkShieldMonsterWords = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "屏蔽怪物白字" },
+                    Location = new Point(150, 105),
+                    Checked = Config.是否关闭怪物话,
+                };
+                ChkShieldMonsterWords.CheckedChanged += (o, e) => Config.是否关闭怪物话 = ChkShieldMonsterWords.Checked;
+
+                // ---- 喊话内容（每行一条）----
+                InputBox = new DXTextView
+                {
+                    Parent = this,
+                    ReadOnly = false,
+                    Visible = false,
+                    Location = new Point(10, 135),
+                    Size = new Size(510, 250),
+                };
+
+                InputBox.TextBox.ScrollBars = ScrollBars.Vertical;
+                InputBox.TextBox.MaxLength = 2000;
+
+                LoadSaywords();
+            }
+
+            private void LoadSaywords()
+            {
+                if (_sayTextLoaded) return;
+
+                _sayTextLoaded = true;
+
+                if (Config.自动喊话内内容 == null)
+                    Config.自动喊话内内容 = new List<string>();
+
+                InputBox.TextBox.Text = string.Join("\r\n", Config.自动喊话内内容);
+            }
+
+            /// <summary>把输入框内容按行写回 Config。</summary>
+            public void SaveSaywords()
+            {
+                if (InputBox?.TextBox == null) return;
+
+                if (Config.自动喊话内内容 == null)
+                    Config.自动喊话内内容 = new List<string>();
+
+                Config.自动喊话内内容.Clear();
+
+                foreach (string line in InputBox.TextBox.Text.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string trimmed = line.Trim();
+
+                    if (trimmed.Length == 0) continue;
+
+                    Config.自动喊话内内容.Add(trimmed);
+                }
+            }
+
+            /// <summary>自动回复使用的句子。</summary>
+            public string SelectedReplyText
+            {
+                get
+                {
+                    int index = Math.Max(0, Math.Min(Config.自动回复时用第几行句子, PresetReplies.Length - 1));
+                    return PresetReplies[index];
+                }
+            }
+
+            /// <summary>
+            /// 自动喊话。每帧由 GameScene.Process 调用（避免 Timer 跨线程发包）。
+            /// 每次随机取一行，间隔取配置值（下限 5 秒）。
+            /// </summary>
+            public void ProcessAutoShout()
+            {
+                if (!Config.自动喊话) return;
+                if (Config.自动喊话内内容 == null || Config.自动喊话内内容.Count == 0) return;
+                if (CEnvir.Now < _nextShoutTime) return;
+
+                _nextShoutTime = CEnvir.Now.AddMilliseconds(Math.Max(Config.多少秒一次自动喊话, 5000));
+
+                string text = Config.自动喊话内内容[CEnvir.Random.Next(Config.自动喊话内内容.Count)];
+
+                if (string.IsNullOrEmpty(text)) return;
+
+                CEnvir.Enqueue(new C.Chat { Text = text });
+            }
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                if (InputBox == null) return;
+
+                InputBox.Location = new Point(10, 135);
+                InputBox.Size = new Size(Math.Max(Size.Width - 20, 100), Math.Max(Size.Height - 145, 80));
+                InputBox.Visible = true;
+            }
+        }
+
+        /// <summary>
+        /// 多行只读/可编辑文本视图。移植自 A 端 DXTextView。
+        ///
+        /// 原理：B 端 DXTextBox 的 CreateTexture 用 `TextBox.DrawToBitmap` **离屏渲染**，
+        /// 即使原生 TextBox 不可见也能把文字画进纹理，所以这里隐藏原生控件即可获得纯展示效果。
+        /// </summary>
+        public class DXTextView : DXTextBox
+        {
+            public DXTextView()
+            {
+                TextBox.Visible = false;
+                Border = true;
+                Editable = true;
+                TextBox.AcceptsReturn = true;
+                TextBox.Multiline = true;
+                TextBox.WordWrap = false;
+                TextBox.ForeColor = Color.DarkOrange;
+                TextBox.ScrollBars = ScrollBars.Vertical;
+            }
+        }
+
+        /// <summary>
+        /// 便签页。
+        /// ⚠ A 端这个页签**没有任何存盘逻辑**（关窗口内容就丢），这里补上按角色存盘：
+        /// `{角色名}-Note.txt`，切换角色时先存旧的再载入新的。
+        /// </summary>
+        public class DXUserNoteBookTab : DXTab
+        {
+            private const int MaxNoteLength = 4096;
+
+            public DXTextView NoteView;
+
+            private string _fileName;
+            private bool _loaded;
+
+            public DXUserNoteBookTab()
+            {
+                NoteView = new DXTextView
+                {
+                    Parent = this,
+                    ReadOnly = false,
+                    Visible = false,
+                };
+
+                NoteView.TextBox.ScrollBars = ScrollBars.None;
+                NoteView.TextBox.MaxLength = MaxNoteLength;
+            }
+
+            /// <summary>角色数据就绪后绑定便签文件并载入内容。</summary>
+            public void BindUser(string charName)
+            {
+                string file = string.IsNullOrEmpty(charName) ? "./Note.txt" : $"./{charName}-Note.txt";
+
+                if (_fileName == file) return;
+
+                if (_fileName != null) Save();
+
+                _fileName = file;
+                _loaded = true;
+
+                try
+                {
+                    NoteView.TextBox.Text = File.Exists(file) ? File.ReadAllText(file) : string.Empty;
+                }
+                catch (Exception ex)
+                {
+                    CEnvir.SaveException(ex);
+                }
+            }
+
+            public void Save()
+            {
+                if (!_loaded || string.IsNullOrEmpty(_fileName) || NoteView?.TextBox == null) return;
+
+                try
+                {
+                    File.WriteAllText(_fileName, NoteView.TextBox.Text ?? string.Empty);
+                }
+                catch (Exception ex)
+                {
+                    CEnvir.SaveException(ex);
+                }
+            }
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                if (NoteView == null) return;
+
+                NoteView.Location = new Point(10, 10);
+                NoteView.Size = new Size(Math.Max(Size.Width - 20, 100), Math.Max(Size.Height - 20, 100));
+                NoteView.Visible = true;
+            }
+        }
+
+        /// <summary>
+        /// 记录页：列出 `.\SysLogs\` 下的日志文件，双击用记事本打开。
+        /// 移植自 A 端 DXSystemMsgRecordTab，`WinExec` 改为 `Process.Start`（免 P/Invoke）。
+        /// </summary>
+        public class DXSystemMsgRecordTab : DXTab
+        {
+            private const string LogFolder = "./SysLogs";
+
+            public DXListBox LogList;
+
+            public DXSystemMsgRecordTab()
+            {
+                LogList = new DXListBox
+                {
+                    Parent = this,
+                    Size = new Size(120, DXControl.DefaultHeight),
+                    Location = new Point(5, 5),
+                };
+
+                RefreshLogs();
+            }
+
+            /// <summary>重新扫描日志目录（页签显示时调用，避免只在构造时扫一次）。</summary>
+            public void RefreshLogs()
+            {
+                if (LogList == null) return;
+
+                // 清空旧项：只销毁 DXListBoxItem，绝不动 DXListBox 自带的滚动条
+                List<DXControl> olds = new List<DXControl>();
+
+                foreach (DXControl control in LogList.Controls)
+                    if (control is DXListBoxItem) olds.Add(control);
+
+                foreach (DXControl control in olds)
+                    control.Dispose();
+
+                DirectoryInfo dir = new DirectoryInfo(LogFolder);
+
+                if (!dir.Exists) return;
+
+                foreach (FileInfo file in dir.GetFiles())
+                {
+                    DXListBoxItem item = new DXListBoxItem
+                    {
+                        Parent = LogList,
+                        Hint = "双击 打开记录文件",
+                        Tag = file.FullName,
+                    };
+
+                    item.Label.Text = file.Name;
+
+                    item.MouseDoubleClick += (o, e) =>
+                    {
+                        if (!(o is DXListBoxItem source)) return;
+                        if (!(source.Tag is string path)) return;
+
+                        try
+                        {
+                            System.Diagnostics.Process.Start("notepad.exe", path);
+                        }
+                        catch (Exception ex)
+                        {
+                            CEnvir.SaveException(ex);
+                        }
+                    };
+                }
+            }
+
+            public override void OnIsVisibleChanged(bool oValue, bool nValue)
+            {
+                base.OnIsVisibleChanged(oValue, nValue);
+
+                if (nValue) RefreshLogs();
+            }
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                if (LogList == null) return;
+
+                LogList.Location = new Point(5, 5);
+                LogList.Size = new Size(Math.Max(Size.Width - 10, 100), Math.Max(Size.Height - 10, 100));
+            }
+        }
+
+        /// <summary>
+        /// 魔法页：列出已学技能，可设置「锁人 / 锁怪」与「毒符设定」，写回 `Config.magics`，
+        /// 供阶段 4b 已移植的 `GetMagicHelpper` / `TakeAmulet` 自动换符使用。
+        /// 移植自 A 端 DXMagicHelperTab。
+        ///
+        /// 与 A 端的差异：
+        /// 1. 去掉「扩展」空列（A 端该列内容恒为空）；
+        /// 2. 快捷键列改为**只读显示**（A 端支持在列上按 F1-F12 重新绑定并发 `MagicKey` 包，
+        ///    涉及 B 端按键表差异，暂不移植，快捷键仍可在游戏内魔法面板设置）；
+        /// 3. `CEnvir.NeedAmulet` → `GameScene.NeedAmulet`；`Functions.GetEnumDesc` 本地实现。
+        /// </summary>
+        public class DXMagicHelperTab : DXTab
+        {
+            private static List<ItemInfo> Amulets;
+            private static List<ItemInfo> Poisons;
+
+            public DXListView MagicView;
+
+            private bool _pendingRefresh;
+
+            public DXMagicHelperTab()
+            {
+                MagicView = new DXListView
+                {
+                    Parent = this,
+                    Location = new Point(10, 10),
+                    Size = new Size(510, 380),
+                    ItemBorder = false,
+                };
+
+                MagicView.InsertColumn(0U, "魔法名称", 120, 24, "只显示已学过的技能");
+                MagicView.InsertColumn(1U, "等级", 40, 24, "技能等级");
+                MagicView.InsertColumn(2U, "快捷键", 90, 24, "在游戏内魔法面板设置");
+                MagicView.InsertColumn(3U, "锁人", 45, 24, "设置自动锁定人");
+                MagicView.InsertColumn(4U, "锁怪", 45, 24, "设置自动锁定怪");
+                MagicView.InsertColumn(5U, "毒符设定", 150, 24, "道士的自动换符设置");
+            }
+
+            private static void FillItemLists()
+            {
+                if (Amulets == null)
+                {
+                    Amulets = new List<ItemInfo>();
+
+                    foreach (ItemInfo item in Globals.ItemInfoList.Binding)
+                        if (item.ItemType == ItemType.Amulet) Amulets.Add(item);
+                }
+
+                if (Poisons == null)
+                {
+                    Poisons = new List<ItemInfo>();
+
+                    foreach (ItemInfo item in Globals.ItemInfoList.Binding)
+                        if (item.ItemType == ItemType.Poison) Poisons.Add(item);
+                }
+            }
+
+            private static string GetSpellKeyText(SpellKey key)
+            {
+                if (key == SpellKey.None) return string.Empty;
+
+                DescriptionAttribute attr = typeof(SpellKey).GetMember(key.ToString())[0].GetCustomAttribute<DescriptionAttribute>();
+
+                return (attr?.Description ?? key.ToString()).Replace('\n', ' ');
+            }
+
+            /// <summary>重建技能列表。角色数据就绪或页签显示时调用。</summary>
+            public void UpdateMagic()
+            {
+                if (GameScene.Game?.User == null || MagicView == null) return;
+
+                // 页签不可见时先不建（技能行数不多，但下拉框较多，避免登录期开销）
+                if (!IsVisible)
+                {
+                    _pendingRefresh = true;
+                    return;
+                }
+
+                _pendingRefresh = false;
+
+                FillItemLists();
+
+                if (Config.magics == null) Config.magics = new List<MagicHelper>();
+
+                MagicView.RemoveAll();
+
+                foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in GameScene.Game.User.Magics)
+                {
+                    ClientUserMagic magic = pair.Value;
+
+                    if (magic?.Info == null) continue;
+                    if (magic.Info.School == MagicSchool.Passive || magic.Info.School == MagicSchool.None) continue;
+                    if (magic.Info.Magic == MagicType.None) continue;
+
+                    MagicHelper helper = Config.magics.FirstOrDefault(x => x != null && x.TypeID == magic.Info.Magic);
+
+                    if (helper == null)
+                    {
+                        helper = new MagicHelper
+                        {
+                            TypeID = magic.Info.Magic,
+                            Name = magic.Info.Name,
+                            Key = magic.Set1Key,
+                            LockPlayer = false,
+                            LockMonster = false,
+                            Amulet = -1,
+                        };
+
+                        Config.magics.Add(helper);
+                    }
+
+                    helper.obj = magic;
+                    helper.Name = magic.Info.Name;
+
+                    uint nItem = MagicView.InsertItem(uint.MaxValue, magic.Info.Name);
+
+                    DXControl row = MagicView.Items.Controls[(int)nItem];
+                    row.Tag = helper;
+
+                    MagicView.SetItem(nItem, 1U, magic.Level.ToString());
+                    MagicView.SetItem(nItem, 2U, GetSpellKeyText(magic.Set1Key));
+                    MagicView.SetItem(nItem, 3U, CreateLockCheckBox(helper, true, helper.LockPlayer));
+                    MagicView.SetItem(nItem, 4U, CreateLockCheckBox(helper, false, helper.LockMonster));
+                    MagicView.SetItem(nItem, 5U, CreateAmuletCombo(magic, helper));
+                }
+
+                MagicView.UpdateItems();
+            }
+
+            public override void OnIsVisibleChanged(bool oValue, bool nValue)
+            {
+                base.OnIsVisibleChanged(oValue, nValue);
+
+                if (nValue && _pendingRefresh) UpdateMagic();
+            }
+
+            private static DXCheckBox CreateLockCheckBox(MagicHelper helper, bool lockPlayer, bool value)
+            {
+                DXCheckBox box = new DXCheckBox
+                {
+                    Size = new Size(20, 20),
+                    Checked = value,
+                };
+
+                box.CheckedChanged += (o, e) =>
+                {
+                    if (!(o is DXCheckBox source)) return;
+
+                    if (lockPlayer) helper.LockPlayer = source.Checked;
+                    else helper.LockMonster = source.Checked;
+                };
+
+                return box;
+            }
+
+            private static DXComboBox CreateAmuletCombo(ClientUserMagic magic, MagicHelper helper)
+            {
+                DXComboBox combo = new DXComboBox
+                {
+                    Size = new Size(140, 18),
+                };
+
+                DXListBoxItem none = new DXListBoxItem
+                {
+                    Parent = combo.ListBox,
+                    Item = -1,
+                };
+                none.Label.Text = "未选择";
+
+                if (magic.Info.Magic == MagicType.PoisonDust)
+                {
+                    DXListBoxItem alternate = new DXListBoxItem
+                    {
+                        Parent = combo.ListBox,
+                        Item = 0,
+                    };
+                    alternate.Label.Text = "红绿毒交替";
+
+                    foreach (ItemInfo item in Poisons)
+                    {
+                        DXListBoxItem li = new DXListBoxItem
+                        {
+                            Parent = combo.ListBox,
+                            Item = item.Index,
+                        };
+                        li.Label.Text = item.ItemName;
+                    }
+                }
+                else if (GameScene.NeedAmulet(magic.Info))
+                {
+                    foreach (ItemInfo item in Amulets)
+                    {
+                        DXListBoxItem li = new DXListBoxItem
+                        {
+                            Parent = combo.ListBox,
+                            Item = item.Index,
+                        };
+                        li.Label.Text = item.ItemName;
+                    }
+                }
+                else
+                {
+                    // 该技能不需要符/毒
+                    none.Label.Text = string.Empty;
+                    none.Enabled = false;
+                    combo.Enabled = false;
+                }
+
+                combo.SelectedItemChanged += (o, e) =>
+                {
+                    if (combo.SelectedItem is int index)
+                        helper.Amulet = index;
+                };
+
+                combo.ListBox.SelectItem(helper.Amulet);
+
+                return combo;
+            }
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                if (MagicView == null) return;
+
+                MagicView.Location = new Point(10, 10);
+                MagicView.Size = new Size(Math.Max(Size.Width - 20, 100), Math.Max(Size.Height - 20, 100));
+            }
+        }
+
+        /// <summary>
+        /// 帮助页。A 端这个页签是空壳（只有一句 `Objects = new List&lt;MapObject&gt;()`），
+        /// 这里补一段使用说明，至少不是一片空白。
+        /// </summary>
+        public class DXViewRangeObjectTab : DXTab
+        {
+            private static readonly string[] Lines =
+            {
+                "辅助功能使用说明",
+                "",
+                "常用：免蜡烛、免助跑、免SHIFT、数字显血、自动学习技能书等。",
+                "辅助：按职业分组的自动施法，以及挂机设置。",
+                "保护：自动喝药、随机/回城保护等。",
+                "拾取：设置哪些物品需要自动拾取（过滤配置按角色保存在 -PickupFilter.ini）。",
+                "便签：随手记录，按角色保存到 -Note.txt。",
+                "记录：查看 ./SysLogs 目录下的日志文件，双击打开。",
+                "",
+                "提示：挂机只能在「允许随机传送」的地图使用；",
+                "      换到不允许挂机的地图会自动关闭并提示。",
+            };
+
+            public DXViewRangeObjectTab()
+            {
+                int y = 12;
+
+                foreach (string line in Lines)
+                {
+                    DXLabel label = new DXLabel
+                    {
+                        Parent = this,
+                        Text = line,
+                        Outline = true,
+                        Location = new Point(15, y),
+                    };
+
+                    y += label.Size.Height + 4;
+                }
+            }
         }
 
         #endregion

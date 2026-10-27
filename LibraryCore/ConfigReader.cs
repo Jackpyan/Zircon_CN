@@ -770,6 +770,87 @@ namespace Library
 
             ConfigContents[type][section][key] = FormatMagicHelpers(value);
         }
+
+        /// <summary>
+        /// 字符串列表（如「自动喊话内容」）。多元素以 `|` 分隔，元素内的
+        /// `\` `|` 换行 会被转义，避免破坏格式。
+        /// 同样必须有精确类型的重载，否则 ConfigReader 反射取不到方法 → 启动 NRE。
+        /// </summary>
+        public static List<string> Read(Type type, string section, string key, List<string> value)
+        {
+            string entry;
+
+            if (!TryGetEntry(type, section, key, out entry))
+            {
+                ConfigContents[type][section][key] = FormatStringList(value);
+                return value ?? new List<string>();
+            }
+
+            List<string> list = new List<string>();
+
+            if (string.IsNullOrEmpty(entry)) return list;
+
+            foreach (string item in entry.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+                list.Add(UnescapeStringListEntry(item));
+
+            return list;
+        }
+
+        public static void Write(Type type, string section, string key, List<string> value)
+        {
+            if (!ConfigContents[type].ContainsKey(section)) ConfigContents[type][section] = new Dictionary<string, string>();
+
+            ConfigContents[type][section][key] = FormatStringList(value);
+        }
+
+        private static string FormatStringList(List<string> value)
+        {
+            if (value == null || value.Count == 0) return string.Empty;
+
+            StringBuilder builder = new StringBuilder();
+
+            foreach (string item in value)
+            {
+                if (item == null) continue;
+
+                if (builder.Length > 0) builder.Append('|');
+
+                builder.Append(item.Replace("\\", "\\\\").Replace("|", "\\p").Replace("\r", string.Empty).Replace("\n", "\\n"));
+            }
+
+            return builder.ToString();
+        }
+
+        private static string UnescapeStringListEntry(string entry)
+        {
+            StringBuilder builder = new StringBuilder(entry.Length);
+
+            for (int i = 0; i < entry.Length; i++)
+            {
+                char c = entry[i];
+
+                if (c != '\\' || i + 1 >= entry.Length)
+                {
+                    builder.Append(c);
+                    continue;
+                }
+
+                char next = entry[++i];
+
+                switch (next)
+                {
+                    case 'p': builder.Append('|'); break;
+                    case 'n': builder.Append('\n'); break;
+                    case '\\': builder.Append('\\'); break;
+                    default:
+                        builder.Append(c);
+                        builder.Append(next);
+                        break;
+                }
+            }
+
+            return builder.ToString();
+        }
         #endregion
     }
 

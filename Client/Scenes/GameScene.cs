@@ -1147,7 +1147,10 @@ namespace Client.Scenes
 
             // 辅助页每帧驱动：自动施法、随机/回城保护、自动学习技能书等
             if (!Observer)
+            {
                 BigPatchBox?.Helper?.UpdateAutoAssist();
+                BigPatchBox?.Answering?.ProcessAutoShout();
+            }
 
             if (AutoPathRoute == null)
                 MapControl.ProcessInput();
@@ -4310,6 +4313,10 @@ namespace Client.Scenes
 
             foreach (ChatTab tab in ChatTab.Tabs)
                 tab.ReceiveChat(message, type, linkedItems);
+
+            // 辅助功能：私聊自动回复
+            if (Config.自动回复)
+                BigPatchBox?.ReceiveChat(message, type);
         }
         public void ReceiveChat(MessageAction action, params object[] args)
         {
