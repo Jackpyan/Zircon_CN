@@ -25,6 +25,7 @@ namespace Client.Scenes.Views
         public DXTabControl TabControl;
 
         public DXCommonlyTab Commonly;
+        public DXPlayerHelperTab Helper;
         public DXProtectionTab Protect;
 
         public override WindowType Type => WindowType.BigPatchBox;
@@ -54,6 +55,13 @@ namespace Client.Scenes.Views
                 TabButton = { Label = { Text = "常用", Hint = "一些常用的功能设置" } },
             };
 
+            Helper = new DXPlayerHelperTab
+            {
+                Parent = TabControl,
+                Border = true,
+                TabButton = { Label = { Text = "辅助", Hint = "游戏相关的一些自定义调整" } },
+            };
+
             Protect = new DXProtectionTab
             {
                 Parent = TabControl,
@@ -61,6 +69,52 @@ namespace Client.Scenes.Views
                 TabButton = { Label = { Text = "保护", Hint = "自动使用物品，以及遇到特殊情况的自动应对方案" } },
             };
         }
+
+        #region 外部同步入口
+
+        /// <summary>
+        /// 角色登录信息到达时调用：按职业显示对应的自动施法分组框。
+        /// 移植自 A端 BigPatchDialog.cs:159-187。
+        /// 注意：喝药链的同步已由 <see cref="DXProtectionTab.UpdateLinks"/> 单独负责。
+        /// </summary>
+        public void UpdateLinks(StartInformation info)
+        {
+            if (info == null) return;
+
+            if (Helper != null)
+            {
+                Helper.Warrior.Visible = info.Class == MirClass.Warrior;
+                Helper.Wizard.Visible = info.Class == MirClass.Wizard;
+                Helper.Taoist.Visible = info.Class == MirClass.Taoist;
+                Helper.Assassin.Visible = info.Class == MirClass.Assassin;
+            }
+
+            Helper?.UpdateMagic();
+        }
+
+        /// <summary>
+        /// 角色数据变化（学新技能、升级等）时刷新依赖用户数据的控件。
+        /// 移植自 A端 BigPatchDialog.cs:881-885。由 GameScene.UserChanged() 调用。
+        /// </summary>
+        public void UserChanged()
+        {
+            Helper?.UpdateMagic();
+        }
+
+        /// <summary>
+        /// 挂机剩余时间更新。移植自 A端 BigPatchDialog.cs:189-217。
+        /// ⚠️ B端没有 S.AutoTimeChanged 包，本方法暂无人调用，
+        /// 剩余时间标签会一直显示「0 小时 0 分钟 0 秒」，等阶段 6 补包后接入。
+        /// </summary>
+        public void OnTimerChanged(long autoTime)
+        {
+            if (Helper?.TimeLable == null) return;
+
+            TimeSpan timeSpan = new TimeSpan(0, 0, (int)autoTime);
+            Helper.TimeLable.Text = $"{timeSpan.Hours + timeSpan.Days * 24} 小时 {timeSpan.Minutes} 分钟 {timeSpan.Seconds} 秒";
+        }
+
+        #endregion
 
         #region 控件工厂
 
@@ -100,6 +154,7 @@ namespace Client.Scenes.Views
             if (disposing)
             {
                 Commonly = null;
+                Helper = null;
                 Protect = null;
 
                 if (TabControl != null)
@@ -1124,6 +1179,912 @@ namespace Client.Scenes.Views
                 catch
                 {
                     // 读失败按无本地配置处理
+                }
+            }
+
+            #endregion
+        }
+
+        #endregion
+
+        #region 辅助标签页
+
+        /// <summary>
+        /// 辅助标签页：按职业分组的自动施法开关 + 自动技能 1/2 + 挂机设置。
+        /// 移植自 A端 BigPatchDialog.cs:2106-3022。
+        ///
+        /// ⚠️ 阶段 4 只做「配置界面」，不含运行逻辑：
+        ///   - A端每个开关还会发 C.AutoFightConfChanged 给服务端，本阶段**全部不发送**。
+        ///     原因：B端服务端没有 Process(C.AutoFightConfChanged) 重载，收到未处理的包会
+        ///     抛 NotImplementedException → BaseConnection 直接 Disconnecting=true 踢下线。
+        ///     必须等阶段 6 服务端处理实现后，才能在同一版本里一起开启发送。
+        ///   - A端的 AutoSkills()/AutoHealing()/PerformHardPause() 等 14 个运行方法、
+        ///     以及 MapControl 里的挂机打怪 AI（约 300 行）属阶段 4b，本阶段不移植。
+        ///     因此：勾选这些开关**不会真正自动施法或挂机**，只写 Config 并持久化。
+        /// </summary>
+        public class DXPlayerHelperTab : DXTab
+        {
+            #region Properties
+
+            // 职业分组框：同一位置重叠，靠 Visible 只显示当前职业那个
+            public DXGroupBox Warrior;
+            public DXGroupBox Wizard;
+            public DXGroupBox Taoist;
+            public DXGroupBox Assassin;
+
+            public DXGroupBox AutoSkill;
+            public DXGroupBox Android;
+
+            // 战士
+            public DXCheckBox AutoFlamingSword;
+            public DXCheckBox AutoDragobRise;
+            public DXCheckBox AutoBladeStorm;
+            public DXCheckBox AutoSwiftBlade;
+            public DXCheckBox AutoThunderStrike;
+            public DXCheckBox AutoDefiance;
+            public DXCheckBox AutoMight;
+            public DXCheckBox AutoReflectDamage;
+            public DXCheckBox AutoEndurance;
+            public DXCheckBox AutoHalfMoon;
+            public DXCheckBox AutoDestructiveSurge;
+
+            // 法师
+            public DXCheckBox AutoMagicShield;
+            public DXCheckBox AutoRenounce;
+            public DXCheckBox AutoThunder;
+            public DXCheckBox AutoWizardSkill;
+
+            // 道士
+            public DXCheckBox AutoPoisonDust;
+            public DXCheckBox AutoAmulet;
+            public DXCheckBox AutoCelestial;
+            public DXCheckBox AutoTaoistSkill;
+            public DXCheckBox AutoStrengthOfFaith;
+            public DXCheckBox AutoLifeSteal;
+            public DXCheckBox AutoMagicResistance;
+            public DXCheckBox AutoResilience;
+            public DXCheckBox AutoElementalSuperiority;
+            public DXCheckBox AutoBloodLust;
+            public DXCheckBox AutoKeepLife;
+
+            // 刺客
+            public DXCheckBox AutoFourFlowers;
+            public DXCheckBox AutoEvasion;
+            public DXCheckBox AutoRagingWind;
+
+            // 自动技能 1 / 2
+            public DXComboBox CombSkill1;
+            public DXNumberBox NumbSkill1;
+            public DXCheckBox AutoSkill_1;
+            public DXComboBox CombSkill2;
+            public DXNumberBox NumbSkill2;
+            public DXCheckBox AutoSkill_2;
+
+            public DXCheckBox ChkPauseAutoSkills;
+
+            // 挂机
+            public DXLabel TimeLable;
+            public DXCheckBox AndroidPlayer;
+            public DXCheckBox AndroidPoisonDust;
+            public DXCheckBox AndroidEluded;
+            public DXCheckBox AndroidBackCastle;
+            public DXComboBox AndroidSkills;
+            public DXCheckBox AndroidLongRange;
+            public DXNumberBox AndroidCoordX;
+            public DXNumberBox AndroidCoordY;
+            public DXNumberBox AndroidCoordRange;
+            public DXCheckBox AndroidLockRange;
+            public DXNumberBox AndroidBackCastleMinPHValue;
+            public DXCheckBox AndroidMinPHBackCastle;
+            public DXNumberBox AndroidRandomMinPHValue;
+            public DXCheckBox AndroidMinPHRandom;
+            public DXNumberBox TimeBoxRandom;
+            public DXCheckBox ChkAutoRandom;
+            public DXNumberBox ExpTimeBoxRandom;
+            public DXCheckBox ExpAutoRandom;
+
+            // 挂机统计
+            public DXLabel SummerLabelEx, SummerLabelKill, SummerLabelGold, SummerLabelHuntGold;
+            public DXLabel SummerLabelExfen, SummerLabelKillfen, SummerLabelGoldfen, SummerLabelHuntGoldfen;
+            public DXLabel Guajishijian;
+
+            public int skilledCount;
+            public decimal totalExperience, totalGold, totalHuntGold;
+            private static DateTime LastTimes = DateTime.Now;
+
+            #endregion
+
+            private const int ColX = 15;       // 复选框左边距
+            private const int Col2 = ColX + 120; // 第二列
+
+            public DXPlayerHelperTab()
+            {
+                BuildClassGroups();
+                BuildAutoSkillGroup();
+                BuildAndroidGroup();
+
+                // 职业分组框默认全部隐藏，由 BigPatchDialog.UpdateLinks 按职业打开其中一个
+                Warrior.Visible = false;
+                Wizard.Visible = false;
+                Taoist.Visible = false;
+                Assassin.Visible = false;
+
+                ChkPauseAutoSkills = CreateCheckBox(this, "暂停以上全部辅助、定时施法", 15, 30,
+                    (o, e) => Config.暂停辅助功能 = ChkPauseAutoSkills.Checked,
+                    Config.暂停辅助功能);
+                ChkPauseAutoSkills.Hint = "勾选后将暂停所有职业技能辅助功能和自动施法，但保留设置";
+            }
+
+            #region 分组框创建
+
+            private DXGroupBox CreateGroup(string title)
+            {
+                DXGroupBox group = new DXGroupBox
+                {
+                    Parent = this,
+                    Size = new Size(120, 32),
+                    Location = new Point(10, 0),
+                };
+
+                group.Name.Text = title;
+                return group;
+            }
+
+            #endregion
+
+            #region 职业自动施法
+
+            private void BuildClassGroups()
+            {
+                Warrior = CreateGroup("战士");
+                Wizard = CreateGroup("法师");
+                Taoist = CreateGroup("道士");
+                Assassin = CreateGroup("刺客");
+
+                int y = 30;
+
+                // ---- 战士 ----
+                AutoFlamingSword = CreateCheckBox(Warrior, "自动烈火", ColX, y,
+                    (o, e) => Config.自动烈火 = AutoFlamingSword.Checked, Config.自动烈火);
+                AutoDragobRise = CreateCheckBox(Warrior, "自动翔空", Col2, y,
+                    (o, e) => Config.自动翔空 = AutoDragobRise.Checked, Config.自动翔空);
+
+                y += 25;
+                AutoBladeStorm = CreateCheckBox(Warrior, "自动莲月", ColX, y,
+                    (o, e) => Config.自动莲月 = AutoBladeStorm.Checked, Config.自动莲月);
+
+                y += 35;
+                AutoMight = CreateCheckBox(Warrior, "自动破血", ColX, y,
+                    (o, e) => Config.自动破血 = AutoMight.Checked, Config.自动破血);
+                AutoDefiance = CreateCheckBox(Warrior, "自动铁布衫", Col2, y,
+                    (o, e) => Config.自动铁布衫 = AutoDefiance.Checked, Config.自动铁布衫);
+
+                y += 25;
+                AutoEndurance = CreateCheckBox(Warrior, "自动金刚之躯", ColX, y,
+                    (o, e) => Config.自动金刚之躯 = AutoEndurance.Checked, Config.自动金刚之躯);
+                AutoReflectDamage = CreateCheckBox(Warrior, "自动移花接木", Col2, y,
+                    (o, e) => Config.自动移花接木 = AutoReflectDamage.Checked, Config.自动移花接木);
+
+                y += 35;
+                AutoDestructiveSurge = CreateCheckBox(Warrior, "智能十方斩", ColX, y,
+                    (o, e) => Config.自动十方斩 = AutoDestructiveSurge.Checked, Config.自动十方斩);
+                AutoHalfMoon = CreateCheckBox(Warrior, "智能半月弯刀", Col2, y,
+                    (o, e) => Config.自动半月弯刀 = AutoHalfMoon.Checked, Config.自动半月弯刀);
+
+                y += 25;
+                AutoSwiftBlade = CreateCheckBox(Warrior, "自动快刀斩马", ColX, y,
+                    (o, e) => Config.自动快刀斩马 = AutoSwiftBlade.Checked, Config.自动快刀斩马);
+                AutoThunderStrike = CreateCheckBox(Warrior, "自动天雷锤", Col2, y,
+                    (o, e) => Config.自动天雷锤 = AutoThunderStrike.Checked, Config.自动天雷锤);
+
+                // ---- 法师 ----
+                y = 30;
+                AutoMagicShield = CreateCheckBox(Wizard, "自动魔法盾", ColX, y,
+                    (o, e) => Config.自动魔法盾 = AutoMagicShield.Checked, Config.自动魔法盾);
+
+                y += 25;
+                AutoRenounce = CreateCheckBox(Wizard, "自动凝血", ColX, y,
+                    (o, e) => Config.自动凝血 = AutoRenounce.Checked, Config.自动凝血);
+
+                y += 25;
+                AutoThunder = CreateCheckBox(Wizard, "自动天打雷劈", ColX, y,
+                    (o, e) => Config.自动天打雷劈 = AutoThunder.Checked, Config.自动天打雷劈);
+
+                y += 25;
+                AutoWizardSkill = CreateCheckBox(Wizard, "自动连续技能", ColX, y,
+                    (o, e) => Config.自动法师连续技能 = AutoWizardSkill.Checked, Config.自动法师连续技能);
+
+                // ---- 道士 ----
+                y = 30;
+                AutoPoisonDust = CreateCheckBox(Taoist, "自动换毒", ColX, y,
+                    (o, e) => Config.自动换毒 = AutoPoisonDust.Checked, Config.自动换毒);
+                AutoAmulet = CreateCheckBox(Taoist, "自动换符", Col2, y,
+                    (o, e) => Config.自动换符 = AutoAmulet.Checked, Config.自动换符);
+
+                y += 25;
+                AutoCelestial = CreateCheckBox(Taoist, "自动阴阳盾", ColX, y,
+                    (o, e) => Config.自动阴阳盾 = AutoCelestial.Checked, Config.自动阴阳盾);
+                AutoTaoistSkill = CreateCheckBox(Taoist, "自动连续技能", Col2, y,
+                    (o, e) => Config.自动道士连续技能 = AutoTaoistSkill.Checked, Config.自动道士连续技能);
+
+                y += 25;
+                AutoLifeSteal = CreateCheckBox(Taoist, "自动吸星大法", ColX, y,
+                    (o, e) => Config.自动吸星大法 = AutoLifeSteal.Checked, Config.自动吸星大法);
+                AutoMagicResistance = CreateCheckBox(Taoist, "自动施放幽灵盾", Col2, y,
+                    (o, e) => Config.自动施放幽灵盾 = AutoMagicResistance.Checked, Config.自动施放幽灵盾);
+
+                y += 25;
+                AutoStrengthOfFaith = CreateCheckBox(Taoist, "有宠物时自动移花接玉", ColX, y,
+                    (o, e) => Config.有宠物时自动移花接玉 = AutoStrengthOfFaith.Checked, Config.有宠物时自动移花接玉);
+
+                y += 25;
+                AutoResilience = CreateCheckBox(Taoist, "自动施放神圣战甲", ColX, y,
+                    (o, e) => Config.自动施放神圣战甲术 = AutoResilience.Checked, Config.自动施放神圣战甲术);
+
+                y += 25;
+                AutoBloodLust = CreateCheckBox(Taoist, "自动给宠物施放猛虎强势", ColX, y,
+                    (o, e) => Config.自动给宠物施放猛虎强势 = AutoBloodLust.Checked, Config.自动给宠物施放猛虎强势);
+
+                y += 25;
+                AutoElementalSuperiority = CreateCheckBox(Taoist, "自动施放强魔震法", ColX, y,
+                    (o, e) => Config.自动强魔震法 = AutoElementalSuperiority.Checked, Config.自动强魔震法);
+
+                y += 25;
+                AutoKeepLife = CreateCheckBox(Taoist, "生命低于一半时自动施展秒影并恢复血量", ColX, y,
+                    (o, e) => Config.自动施展秒影恢复血量 = AutoKeepLife.Checked, Config.自动施展秒影恢复血量);
+
+                // ---- 刺客 ----
+                y = 30;
+                AutoFourFlowers = CreateCheckBox(Assassin, "自动四花", ColX, y,
+                    (o, e) => Config.自动四花 = AutoFourFlowers.Checked, Config.自动四花);
+
+                y += 25;
+                AutoEvasion = CreateCheckBox(Assassin, "自动风之闪避", ColX, y,
+                    (o, e) => Config.自动风之闪避 = AutoEvasion.Checked, Config.自动风之闪避);
+
+                y += 25;
+                AutoRagingWind = CreateCheckBox(Assassin, "自动风之守护", ColX, y,
+                    (o, e) => Config.自动风之守护 = AutoRagingWind.Checked, Config.自动风之守护);
+            }
+
+            #endregion
+
+            #region 自动技能 1 / 2
+
+            private void BuildAutoSkillGroup()
+            {
+                AutoSkill = CreateGroup("自动技能");
+
+                int y = 35;
+
+                DXLabel label1 = new DXLabel
+                {
+                    Parent = AutoSkill,
+                    Text = "技能Ⅰ",
+                    Hint = "根据定义的时间间隔(秒单位)自动释放技能",
+                };
+                label1.Location = new Point(ColX, y);
+
+                CombSkill1 = new DXComboBox
+                {
+                    Parent = AutoSkill,
+                    Size = new Size(90, 18),
+                    Location = new Point(label1.Location.X + label1.Size.Width + 5, y),
+                };
+                CombSkill1.SelectedItemChanged += (o, e) => OnAutoSkillSelected(1);
+
+                NumbSkill1 = new DXNumberBox
+                {
+                    Parent = AutoSkill,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 50000,
+                    MinValue = 0,
+                    Value = Config.自动技能1多长时间使用一次,
+                    UpButton = { Location = new Point(63, 1) },
+                };
+                NumbSkill1.ValueTextBox.ValueChanged += (o, e) => Config.自动技能1多长时间使用一次 = NumbSkill1.Value;
+                NumbSkill1.Location = new Point(CombSkill1.Location.X + CombSkill1.Size.Width + 5, y);
+
+                // A端此复选框手工创建：无文本、只有 Hint（B端 DXCheckBox 需用 Label.Text 设文字，
+                // 但这里 A端本来就没有可见文字，故只设 Hint）
+                AutoSkill_1 = new DXCheckBox
+                {
+                    Parent = AutoSkill,
+                    Hint = "自动技能①",
+                };
+                AutoSkill_1.SetSilentState(Config.是否开启自动技能1);
+                AutoSkill_1.Location = new Point(NumbSkill1.Location.X + NumbSkill1.Size.Width + 5, y + 2);
+                AutoSkill_1.CheckedChanged += (o, e) => Config.是否开启自动技能1 = AutoSkill_1.Checked;
+
+                int y2 = y + 25;
+
+                DXLabel label2 = new DXLabel
+                {
+                    Parent = AutoSkill,
+                    Text = "技能Ⅱ",
+                    Hint = "根据定义的时间间隔(秒单位)自动释放技能",
+                };
+                label2.Location = new Point(ColX, y2);
+
+                CombSkill2 = new DXComboBox
+                {
+                    Parent = AutoSkill,
+                    Size = new Size(90, 18),
+                    Location = new Point(label2.Location.X + label2.Size.Width + 5, y2),
+                };
+                CombSkill2.SelectedItemChanged += (o, e) => OnAutoSkillSelected(2);
+
+                NumbSkill2 = new DXNumberBox
+                {
+                    Parent = AutoSkill,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 50000,
+                    MinValue = 0,
+                    Value = Config.自动技能2多长时间使用一次,
+                    UpButton = { Location = new Point(63, 1) },
+                };
+                NumbSkill2.ValueTextBox.ValueChanged += (o, e) => Config.自动技能2多长时间使用一次 = NumbSkill2.Value;
+                NumbSkill2.Location = new Point(CombSkill2.Location.X + CombSkill2.Size.Width + 5, y2);
+
+                AutoSkill_2 = new DXCheckBox
+                {
+                    Parent = AutoSkill,
+                    Hint = "自动技能②",
+                };
+                AutoSkill_2.SetSilentState(Config.是否开启自动技能2);
+                AutoSkill_2.Location = new Point(NumbSkill2.Location.X + NumbSkill2.Size.Width + 5, y2 + 2);
+                AutoSkill_2.CheckedChanged += (o, e) => Config.是否开启自动技能2 = AutoSkill_2.Checked;
+
+                AutoSkill.Size = new Size(125, y2 + 25 + 5);
+            }
+
+            /// <summary>
+            /// 选中技能后写入 Config，并把间隔抬到该技能的冷却时间（秒）。
+            /// A端逻辑：仅当当前间隔小于技能 CD 时才抬高，不覆盖用户设的更大值。
+            /// </summary>
+            private void OnAutoSkillSelected(int index)
+            {
+                DXComboBox combo = index == 1 ? CombSkill1 : CombSkill2;
+                DXNumberBox numb = index == 1 ? NumbSkill1 : NumbSkill2;
+
+                if (!(combo.SelectedItem is MagicType magic) || magic == MagicType.None) return;
+
+                foreach (MagicInfo info in Globals.MagicInfoList.Binding)
+                {
+                    if (info.Magic != magic) continue;
+
+                    if (index == 1)
+                        Config.自动技能1 = magic;
+                    else
+                        Config.自动技能2 = magic;
+
+                    long seconds = info.Delay / 1000;
+                    if (numb.Value < seconds)
+                        numb.Value = seconds;
+
+                    break;
+                }
+            }
+
+            #endregion
+
+            #region 挂机
+
+            private void BuildAndroidGroup()
+            {
+                Android = CreateGroup("挂机");
+
+                int x = ColX;
+                int y = 30;
+
+                // 剩余挂机时间
+                DXLabel timeTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "剩时间:",
+                    Outline = true,
+                    Location = new Point(x, y),
+                };
+
+                TimeLable = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "0 小时 0 分钟 0 秒",
+                    Outline = true,
+                    Border = false,
+                    ForeColour = Color.Cyan,
+                    Location = new Point(timeTitle.Location.X + timeTitle.Size.Width - 8, y),
+                };
+
+                AndroidPlayer = CreateCheckBox(Android, "开始挂机", x + 170, y, OnHangupToggled, Config.开始挂机);
+
+                // 注：A端此处会检查 User.AutoTime 与地图 AllowRT 后发包启动挂机 AI。
+                // B端没有 User.AutoTime 字段，也没有挂机 AI（阶段 4b），故仅保留地图检查。
+
+                y += 25;
+                AndroidPoisonDust = CreateCheckBox(Android, "自动上毒", x, y,
+                    (o, e) => Config.自动上毒 = AndroidPoisonDust.Checked, Config.自动上毒);
+                AndroidEluded = CreateCheckBox(Android, "自动躲避", x + 85, y,
+                    (o, e) => Config.自动躲避 = AndroidEluded.Checked, Config.自动躲避);
+                AndroidBackCastle = CreateCheckBox(Android, "死亡回城", x + 170, y,
+                    (o, e) => Config.死亡回城 = AndroidBackCastle.Checked, Config.死亡回城);
+
+                y += 25;
+                AndroidLongRange = CreateCheckBox(Android, "法系挂机", x, y,
+                    (o, e) => Config.是否远战挂机 = AndroidLongRange.Checked, Config.是否远战挂机);
+
+                DXLabel skillTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "技能",
+                    Outline = true,
+                    Location = new Point(x + 70, y),
+                };
+
+                AndroidSkills = new DXComboBox
+                {
+                    Parent = Android,
+                    Size = new Size(120, 18),
+                    Location = new Point(x + 70 + skillTitle.Size.Width + 5, y),
+                };
+                AndroidSkills.SelectedItemChanged += (o, e) =>
+                {
+                    DXListBoxItem selected = AndroidSkills.ListBox.SelectedItem;
+
+                    if (selected?.Item == null)
+                    {
+                        // 选择了「不使用技能」
+                        Config.远战挂机是否使用技能 = false;
+                        Config.挂机自动技能 = MagicType.None;
+                    }
+                    else
+                    {
+                        Config.远战挂机是否使用技能 = true;
+                        Config.挂机自动技能 = (MagicType)selected.Item;
+                    }
+                };
+
+                y += 40;
+                DXLabel xTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "X坐标:",
+                    Outline = true,
+                    Location = new Point(x, y),
+                };
+                AndroidCoordX = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 1024,
+                    MinValue = 1,
+                    Value = Config.范围挂机坐标.X,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + xTitle.Size.Width, y),
+                };
+                AndroidCoordX.ValueTextBox.ValueChanged += (o, e) =>
+                    Config.范围挂机坐标 = new Point((int)AndroidCoordX.Value, Config.范围挂机坐标.Y);
+
+                DXLabel yTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "Y坐标:",
+                    Outline = true,
+                    Location = new Point(x + 120, y),
+                };
+                AndroidCoordY = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 1024,
+                    MinValue = 1,
+                    Value = Config.范围挂机坐标.Y,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + 120 + yTitle.Size.Width, y),
+                };
+                AndroidCoordY.ValueTextBox.ValueChanged += (o, e) =>
+                    Config.范围挂机坐标 = new Point(Config.范围挂机坐标.X, (int)AndroidCoordY.Value);
+
+                y += 25;
+                DXLabel rangeTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "范围 :",
+                    Outline = true,
+                    Location = new Point(x, y),
+                };
+                AndroidCoordRange = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 1024,
+                    MinValue = 1,
+                    Value = Config.范围距离,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + rangeTitle.Size.Width + 5, y),
+                };
+                AndroidCoordRange.ValueTextBox.ValueChanged += (o, e) => Config.范围距离 = AndroidCoordRange.Value;
+
+                AndroidLockRange = CreateCheckBox(Android, "范围挂机", x + 170, y,
+                    (o, e) => Config.范围挂机 = AndroidLockRange.Checked, Config.范围挂机);
+
+                // 回城保护
+                y += 50;
+                DXLabel hpTitle1 = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "血量低于 % :",
+                    Outline = true,
+                    Hint = "　　百分比值",
+                    Location = new Point(x, y),
+                };
+                AndroidBackCastleMinPHValue = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 100,
+                    MinValue = 1,
+                    Value = Config.血量剩下百分之多少时自动回城,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + hpTitle1.Size.Width, y),
+                };
+                AndroidBackCastleMinPHValue.ValueTextBox.ValueChanged += (o, e) =>
+                    Config.血量剩下百分之多少时自动回城 = AndroidBackCastleMinPHValue.Value;
+
+                AndroidMinPHBackCastle = CreateCheckBox(Android, "回城保护", x + 170, y,
+                    (o, e) => Config.是否开启回城保护 = AndroidMinPHBackCastle.Checked, Config.是否开启回城保护);
+
+                // 随机保护
+                y += 20;
+                DXLabel hpTitle2 = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "血量低于 % :",
+                    Outline = true,
+                    Hint = "　　百分比值",
+                    Location = new Point(x, y),
+                };
+                AndroidRandomMinPHValue = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 100,
+                    MinValue = 1,
+                    Value = Config.血量剩下百分之多少时自动随机,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + hpTitle2.Size.Width, y),
+                };
+                AndroidRandomMinPHValue.ValueTextBox.ValueChanged += (o, e) =>
+                    Config.血量剩下百分之多少时自动随机 = AndroidRandomMinPHValue.Value;
+
+                AndroidMinPHRandom = CreateCheckBox(Android, "随机保护", x + 170, y,
+                    (o, e) => Config.是否开启随机保护 = AndroidMinPHRandom.Checked, Config.是否开启随机保护);
+
+                // 定时随机
+                y += 20;
+                DXLabel intervalTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "每间隔(秒) :",
+                    Outline = true,
+                    Location = new Point(x, y),
+                };
+                TimeBoxRandom = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 10000,
+                    MinValue = 5,
+                    Value = Config.隔多少秒自动随机一次,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + intervalTitle.Size.Width, y),
+                };
+                TimeBoxRandom.ValueTextBox.ValueChanged += (o, e) => Config.隔多少秒自动随机一次 = TimeBoxRandom.Value;
+
+                ChkAutoRandom = CreateCheckBox(Android, "自动随机", x + 170, y,
+                    (o, e) => Config.是否开启每间隔自动随机 = ChkAutoRandom.Checked, Config.是否开启每间隔自动随机);
+                ChkAutoRandom.CheckedChanged += (o, e) =>
+                {
+                    if (ChkAutoRandom.Checked)
+                        ExpAutoRandom.Checked = false;
+                };
+
+                // 无经验随机
+                y += 20;
+                DXLabel expTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "无经验(秒) :",
+                    Outline = true,
+                    Location = new Point(x, y),
+                };
+                ExpTimeBoxRandom = new DXNumberBox
+                {
+                    Parent = Android,
+                    Size = new Size(80, 20),
+                    ValueTextBox = { Size = new Size(40, 18) },
+                    MaxValue = 10000,
+                    MinValue = 5,
+                    Value = Config.多少秒无经验或者未杀死目标自动随机,
+                    UpButton = { Location = new Point(63, 1) },
+                    Location = new Point(x + expTitle.Size.Width, y),
+                };
+                ExpTimeBoxRandom.ValueTextBox.ValueChanged += (o, e) =>
+                    Config.多少秒无经验或者未杀死目标自动随机 = ExpTimeBoxRandom.Value;
+
+                ExpAutoRandom = CreateCheckBox(Android, "自动随机", x + 170, y,
+                    (o, e) => Config.是否开启指定时间无经验或者未杀死目标自动随机 = ExpAutoRandom.Checked,
+                    Config.是否开启指定时间无经验或者未杀死目标自动随机);
+                ExpAutoRandom.CheckedChanged += (o, e) =>
+                {
+                    if (ExpAutoRandom.Checked)
+                        ChkAutoRandom.Checked = false;
+                };
+
+                BuildStatistics();
+            }
+
+            /// <summary>
+            /// 「开始挂机」开关。
+            /// 阶段 4：只写 Config + 保留地图限制检查，不启动挂机 AI、不发包。
+            /// 阶段 4b 需在此处接入 MapControl 的挂机逻辑。
+            /// </summary>
+            private void OnHangupToggled(object sender, EventArgs e)
+            {
+                Config.开始挂机 = AndroidPlayer.Checked;
+
+                if (!AndroidPlayer.Checked) return;
+
+                MapInfo mapInfo = GameScene.Game?.MapControl?.MapInfo;
+                if (mapInfo != null && !mapInfo.AllowRT)
+                {
+                    // 不允许挂机的地图，直接撤销勾选（用 SetSilentState 避免重入触发一次多余的「结束挂机」）
+                    AndroidPlayer.SetSilentState(false);
+                    Config.开始挂机 = false;
+                    GameScene.Game.ReceiveChat("目前您在不允许使用自动打怪功能的地图，因此不能挂机", MessageType.System);
+                }
+            }
+
+            #endregion
+
+            #region 挂机统计
+
+            private void BuildStatistics()
+            {
+                int x = ColX;
+
+                SummerLabelKill = new DXLabel { Parent = Android, Location = new Point(x, 285), Text = "杀怪数量:0" };
+                SummerLabelEx = new DXLabel { Parent = Android, Location = new Point(110, 285), Text = "获得经验:0" };
+                SummerLabelHuntGold = new DXLabel { Parent = Android, Location = new Point(x, 305), Text = "获得赏金:0" };
+                SummerLabelGold = new DXLabel { Parent = Android, Location = new Point(110, 305), Text = "获得金币:0" };
+                SummerLabelKillfen = new DXLabel { Parent = Android, Location = new Point(x, 325), Text = "分钟杀怪:0" };
+                SummerLabelExfen = new DXLabel { Parent = Android, Location = new Point(110, 325), Text = "分钟经验:0" };
+                SummerLabelHuntGoldfen = new DXLabel { Parent = Android, Location = new Point(x, 345), Text = "分钟赏金:0" };
+                SummerLabelGoldfen = new DXLabel { Parent = Android, Location = new Point(110, 345), Text = "分钟金币:0" };
+                Guajishijian = new DXLabel { Parent = Android, Location = new Point(x, 365), Text = "统计时间:0 小时 0 分钟 0 秒" };
+
+                DXButton resetButton = new DXButton
+                {
+                    Parent = Android,
+                    Size = new Size(40, 18),
+                    Location = new Point(210, 365),
+                    ButtonType = ButtonType.SmallButton,
+                    Label = { Text = "重置" },
+                };
+                resetButton.MouseClick += (o, e) => ResetStatistics();
+            }
+
+            private void ResetStatistics()
+            {
+                skilledCount = 0;
+                totalExperience = 0;
+                totalGold = 0;
+                totalHuntGold = 0;
+
+                SummerLabelKill.Text = "杀怪数量:0";
+                SummerLabelEx.Text = "获得经验:0";
+                SummerLabelHuntGold.Text = "获得赏金:0";
+                SummerLabelGold.Text = "获得金币:0";
+                SummerLabelKillfen.Text = "分钟杀怪:0";
+                SummerLabelExfen.Text = "分钟经验:0";
+                SummerLabelHuntGoldfen.Text = "分钟赏金:0";
+                SummerLabelGoldfen.Text = "分钟金币:0";
+                Guajishijian.Text = "统计时间:0 小时 0 分钟 0 秒";
+
+                LastTimes = DateTime.Now;
+            }
+
+            /// <summary>
+            /// 由 GameScene 在获得经验时调用。
+            /// ⚠️ 阶段 4 尚未接入调用点，统计面板会一直显示 0，等阶段 4b 一起接。
+            /// </summary>
+            public void GainedExperience(decimal amount)
+            {
+                TimeSpan elapsed = DateTime.Now - LastTimes;
+                int minutes = elapsed.Minutes + elapsed.Hours * 60 + 1;
+
+                Guajishijian.Text = $"统计时间:{elapsed.Hours + elapsed.Days * 24} 小时 {elapsed.Minutes} 分钟 {elapsed.Seconds} 秒";
+
+                totalExperience += amount;
+                if (amount <= 0) return;
+
+                skilledCount++;
+                SummerLabelKill.Text = $"杀怪数量:{skilledCount:#,##0}";
+                SummerLabelKillfen.Text = $"分钟杀怪:{skilledCount / minutes:#,##0}";
+                SummerLabelEx.Text = $"获得经验:{totalExperience:#,##0}";
+                SummerLabelExfen.Text = $"分钟经验:{totalExperience / minutes:#,##0}";
+            }
+
+            /// <summary>由 GameScene 在获得金币时调用（阶段 4b 接入）。</summary>
+            public void GainedGold(decimal amount)
+            {
+                TimeSpan elapsed = DateTime.Now - LastTimes;
+                int minutes = elapsed.Minutes + elapsed.Hours * 60 + 1;
+
+                totalGold += amount;
+                SummerLabelGold.Text = $"获得金币:{totalGold:#,##0}";
+                SummerLabelGoldfen.Text = $"分钟金币:{totalGold / minutes:#,##0}";
+            }
+
+            /// <summary>由 GameScene 在获得赏金时调用（阶段 4b 接入）。</summary>
+            public void GainedHuntGold(decimal amount)
+            {
+                TimeSpan elapsed = DateTime.Now - LastTimes;
+                int minutes = elapsed.Minutes + elapsed.Hours * 60 + 1;
+
+                totalHuntGold += amount;
+                SummerLabelHuntGold.Text = $"获得赏金:{totalHuntGold:#,##0}";
+                SummerLabelHuntGoldfen.Text = $"分钟赏金:{totalHuntGold / minutes:#,##0}";
+            }
+
+            #endregion
+
+            #region 技能下拉框填充
+
+            /// <summary>
+            /// 用当前角色已学技能填充三个下拉框（自动技能1、自动技能2、挂机技能）。
+            /// 必须由外部在登录完成 / 技能变化时调用，否则下拉框为空。
+            /// 移植自 A端 BigPatchDialog.cs:2938-2991。
+            /// </summary>
+            public void UpdateMagic()
+            {
+                if (GameScene.Game?.User == null) return;
+
+                // 先清空，避免重复调用导致选项累积（A端原版没清，会重复追加）
+                ClearListBoxItems(CombSkill1);
+                ClearListBoxItems(CombSkill2);
+                ClearListBoxItems(AndroidSkills);
+
+                new DXListBoxItem
+                {
+                    Parent = AndroidSkills.ListBox,
+                    Label = { Text = "不使用技能" },
+                    Item = null,
+                };
+
+                foreach (ClientUserMagic magic in GameScene.Game.User.Magics.Values)
+                {
+                    MagicInfo info = magic.Info;
+                    if (info == null) continue;
+                    if (info.School == MagicSchool.Passive || info.School == MagicSchool.None) continue;
+
+                    new DXListBoxItem
+                    {
+                        Parent = CombSkill1.ListBox,
+                        Label = { Text = info.Name },
+                        Item = info.Magic,
+                    };
+
+                    new DXListBoxItem
+                    {
+                        Parent = CombSkill2.ListBox,
+                        Label = { Text = info.Name },
+                        Item = info.Magic,
+                    };
+
+                    // 开关型/被动型技能不能作为挂机技能（只会切换状态不产生攻击）
+                    // 注意：不影响自动技能 1/2 下拉框，定时开关型技能是有意义的
+                    if (MapControl.NonAutoSkillMagics.Contains(info.Magic)) continue;
+
+                    new DXListBoxItem
+                    {
+                        Parent = AndroidSkills.ListBox,
+                        Label = { Text = info.Name },
+                        Item = info.Magic,
+                    };
+                }
+
+                CombSkill1.ListBox.SelectItem(Config.自动技能1);
+                CombSkill2.ListBox.SelectItem(Config.自动技能2);
+
+                // 旧配置里存的开关型技能无法作为挂机技能，加载时重置为「不使用技能」
+                if (Config.挂机自动技能 != MagicType.None && MapControl.NonAutoSkillMagics.Contains(Config.挂机自动技能))
+                {
+                    Config.远战挂机是否使用技能 = false;
+                    Config.挂机自动技能 = MagicType.None;
+                }
+
+                if (!Config.远战挂机是否使用技能 || Config.挂机自动技能 == MagicType.None)
+                    AndroidSkills.ListBox.SelectItem(null);
+                else
+                    AndroidSkills.ListBox.SelectItem(Config.挂机自动技能);
+            }
+
+            /// <summary>
+            /// 清空下拉框的列表项（只销毁 DXListBoxItem，保留 DXListBox 自带的滚动条）。
+            ///
+            /// ⚠ 绝对不能用 ListBox.Controls.Clear()：
+            /// DXListBox 构造时把 ScrollBar 以 Parent = this 挂进了 Controls，
+            /// Clear() 会把滚动条一起摘掉，滚动条变成「_Parent 仍指向 ListBox、但不在 Controls 里」的孤儿。
+            /// 之后退出游戏销毁控件树时，DXListBox.Dispose 看到 ScrollBar 还没 IsDisposed，
+            /// 又去调 ScrollBar.Dispose()，而此刻 parent.Controls 已被置 null，
+            /// DXControl.Dispose 里的 parent?.Controls.Remove(this) 就会抛 NullReferenceException，
+            /// 被 BaseConnection.Process 重抛后直接崩掉客户端。
+            /// </summary>
+            private static void ClearListBoxItems(DXComboBox combo)
+            {
+                if (combo == null) return;
+
+                // 先断开选中引用，避免指向即将被销毁的项（此时项还活着，安全）
+                combo.SelectedItem = null;
+
+                DXListBox listBox = combo.ListBox;
+                if (listBox == null) return;
+
+                listBox.SelectedItem = null;
+
+                // 快照后再销毁：item.Dispose() 会把自己从 Controls 里移除，不能直接遍历原集合
+                foreach (DXControl control in listBox.Controls.ToArray())
+                {
+                    if (control is DXListBoxItem item && !item.IsDisposed)
+                        item.Dispose();
+                }
+
+                listBox.UpdateScrollBar();
+            }
+
+            #endregion
+
+            #region 布局
+
+            public override void OnSizeChanged(Size oValue, Size nValue)
+            {
+                base.OnSizeChanged(oValue, nValue);
+
+                int x = 5;
+                int y = 5;
+                int width = (Size.Width - 15) / 2;
+
+                // 左列：职业分组框（四者重叠，靠 Visible 切换）在上，自动技能在下
+                int classHeight = Size.Height - 50 - AutoSkill.Size.Height - 15;
+
+                foreach (DXGroupBox group in new[] { Warrior, Wizard, Taoist, Assassin })
+                {
+                    if (group == null) continue;
+
+                    group.Size = new Size(width, classHeight);
+                    group.Location = new Point(x, y);
+                }
+
+                AutoSkill.Size = new Size(width, AutoSkill.Size.Height);
+                AutoSkill.Location = new Point(x, y + classHeight);
+
+                if (ChkPauseAutoSkills != null)
+                    ChkPauseAutoSkills.Location = new Point(AutoSkill.Location.X + 5, AutoSkill.Location.Y + AutoSkill.Size.Height + 5);
+
+                // 右列：挂机
+                if (Android != null)
+                {
+                    Android.Size = new Size(width, Size.Height - 10);
+                    Android.Location = new Point(x + width + 5, y);
                 }
             }
 

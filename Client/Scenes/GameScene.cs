@@ -3955,6 +3955,9 @@ namespace Client.Scenes
             PetModeChanged();
             MagicBarBox.UpdateIcons();
 
+            // 辅助功能窗口里依赖角色数据的控件（技能下拉框）需要刷新
+            BigPatchBox?.UserChanged();
+
             TradeBox.CloseButton.Enabled = !Observer;
             TradeBox.ConfirmButton.Visible = !Observer;
 

@@ -3472,4 +3472,51 @@ namespace Library
 
     #endregion
 
+    /// <summary>
+    /// 辅助功能「自动施法 / 挂机」配置槽位。
+    /// 移植自 A端 zircon-legend-library\Library\Enum.cs:2279-2320。
+    /// 用于 C.AutoFightConfChanged 的 Slot 字段，服务端 AutoFightConfig 表按此值存配置。
+    /// 注意：A端此处缺少 26，保留空缺以维持数值一致。
+    /// </summary>
+    public enum AutoSetConf
+    {
+        None = 0,
+        SuijisBox = 1,
+        SetShiftBox = 2,
+        SetDisplayBox = 3,
+        SetBrightBox = 4,
+        SetCorpseBox = 5,
+        SetFlamingSwordBox = 6,
+        SetDragobRiseBox = 7,
+        SetBladeStormBox = 8,
+        SetMagicShieldBox = 9,
+        SetRenounceBox = 10,
+        SetPoisonDustBox = 11,
+        SetCelestialBox = 12,
+        SetFourFlowersBox = 13,
+        SetMagicskillsBox = 14,
+        SetMagicskills1Box = 15,
+        SetAutoOnHookBox = 16,
+        SuijiBox = 17,
+        SetAutoPoisonBox = 18,
+        SetAutoAvoidBox = 19,
+        SetDeathResurrectionBox = 20,
+        SetSingleHookSkillsBox = 21,
+        SetGroupHookSkillsBox = 22,
+        SetSummoningSkillsBox = 23,
+        SetRandomItemBox = 24,
+        SetHomeItemBox = 25,
+        SetDefianceBox = 27,
+        SetMightBox = 28,
+        SetShowHealth = 29,
+        SetEvasionBox = 30,
+        SerRagingWindBox = 31,
+        SetJsPickUpBox = 32,
+        Kuaisuxiaotui = 33,
+        SetAutojinpiaoBox = 34,
+        SetMaxConf = 35,
+        SetSwiftBladeBox = 36,
+        SetThunderStrikeBox = 37,
+    }
+
 }

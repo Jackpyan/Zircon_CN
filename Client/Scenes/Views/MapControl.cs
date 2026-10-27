@@ -21,6 +21,21 @@ namespace Client.Scenes.Views
 
         public static UserObject User => GameScene.Game.User;
 
+        /// <summary>
+        /// 不能作为「挂机自动技能」使用的技能：开关型 / 被动型。
+        /// 这些技能释放后只切换状态、不产生攻击，误选会让挂机角色站桩不攻击。
+        /// 移植自 A端 MapControl.cs:93-100。
+        /// 注意：不影响「自动技能 1/2」下拉框（定时开关型技能是有意义的）。
+        /// </summary>
+        public static readonly HashSet<MagicType> NonAutoSkillMagics = new HashSet<MagicType>
+        {
+            MagicType.Swordsmanship, MagicType.SpiritSword, MagicType.WillowDance, MagicType.VineTreeDance,
+            MagicType.Thrusting, MagicType.HalfMoon, MagicType.FlamingSword, MagicType.DragonRise,
+            MagicType.BladeStorm, MagicType.DemonicRecovery, MagicType.DestructiveSurge, MagicType.Endurance,
+            MagicType.FlameSplash,
+            MagicType.FullBloom, MagicType.WhiteLotus, MagicType.RedLotus, MagicType.SweetBrier, MagicType.Karma
+        };
+
         #region MapInformation
 
         public MapInfo MapInfo

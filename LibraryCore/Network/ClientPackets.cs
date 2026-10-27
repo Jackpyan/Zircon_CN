@@ -232,6 +232,23 @@ namespace Library.Network.ClientPackets
         public bool Enabled { get; set; }
     }
 
+    /// <summary>
+    /// 辅助功能「自动施法 / 挂机」配置变更。
+    /// 移植自 A端 zircon-legend-library\Library\Network\ClientPackets.cs:794（A端 PacketMark 1113）。
+    ///
+    /// 注意：B端没有 PacketMark 机制，包 ID = 类型在 LibraryCore 中按「命名空间→类型名」排序后的索引。
+    /// 新增本包会让排序在其后的所有包 ID 整体偏移，因此客户端与服务端必须同步重新编译发布。
+    ///
+    /// 阶段 4 仅定义本包，暂不发送；服务端处理（AutoFightConfig 表 + SConnection + PlayerObject）在阶段 6 实现。
+    /// </summary>
+    public sealed class AutoFightConfChanged : Packet
+    {
+        public AutoSetConf Slot { get; set; }
+        public MagicType MagicIndex { get; set; }
+        public int TimeCount { get; set; }
+        public bool Enabled { get; set; }
+    }
+
     public sealed class PickUp : Packet { }
 
     public sealed class Chat : Packet

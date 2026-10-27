@@ -383,6 +383,9 @@ namespace Client.Models
             }
             GameScene.Game.BigPatchBox.Protect.UpdateLinks();
 
+            // 按职业显示「辅助」页对应的自动施法分组框
+            GameScene.Game.BigPatchBox.UpdateLinks(info);
+
             GameScene.Game.CommunicationBox.OnlineState = info.OnlineState;
             GameScene.Game.CommunicationBox.FriendList = info.Friends;
             GameScene.Game.CommunicationBox.RefreshFriendList();
