@@ -1208,17 +1208,25 @@ namespace Client.Scenes.Views
         private const int AndroidDetectRange = 9;    // 视为「已进入战斗」的距离（对应 A 端 SHORT_DISTANCE_DETECTION_RANGE）
         private const int AndroidAttackRange = 1;    // 近战攻击距离
         private const int AndroidWanderRadius = 12;  // 非「范围挂机」时的游走半径
+        private const int AndroidAdjacentRange = 2;  // 这个距离内有怪就先打，不去捡东西
+        private const int AndroidPickupRange = 10;   // 挂机时能「发现」战利品的半径
 
         private bool _lastAutoAndroidState;
         private DateTime _androidRepathTime;
         private DateTime _androidWanderTime;
         private DateTime _nextAutoSkillTime;
         private List<Node> _androidPath;
+        private ItemObject _androidLootTarget;
+        private DateTime _androidLootStartTime;
+        private DateTime _androidLootCooldown;
 
         /// <summary>挂机关闭时清理本地寻路状态。</summary>
         private void ResetAndroidState()
         {
             _androidPath = null;
+            _androidLootTarget = null;
+            _androidLootStartTime = default;
+            _androidLootCooldown = default;
             _androidRepathTime = default;
             _androidWanderTime = default;
         }
@@ -1242,6 +1250,13 @@ namespace Client.Scenes.Views
                 GameScene.Game.ReceiveChat("当前地图不允许挂机，已自动关闭", MessageType.System);
                 return;
             }
+
+            // 有怪贴身时不去捡东西（否则会站着挨打）
+            bool combatNearby = FindNearestMonster(AndroidAdjacentRange) != null;
+
+            // 地上有该捡的战利品、且没有怪贴身 → 先捡完再打下一只
+            if (!combatNearby && Config.快速自动拾取 && TryAndroidLoot())
+                return;
 
             MapObject target = MapObject.TargetObject;
 
@@ -1310,6 +1325,112 @@ namespace Client.Scenes.Views
             }
 
             StepToward(target.CurrentLocation);
+        }
+
+        /// <summary>朝指定坐标移动（拾取用；物品格不阻挡，可直接作为寻路终点）。</summary>
+        private void MoveTowardPoint(Point destination)
+        {
+            if (!GameScene.Game.MoveFrame || (User.Poison & PoisonType.WraithGrip) == PoisonType.WraithGrip) return;
+
+            int distance = Functions.Distance(User.CurrentLocation, destination);
+
+            if (distance > 3)
+            {
+                if (PathFinder != null && CEnvir.Now >= _androidRepathTime)
+                {
+                    _androidPath = PathFinder.FindPath(User.CurrentLocation, destination);
+                    _androidRepathTime = CEnvir.Now.AddMilliseconds(600);
+                }
+
+                if (FollowAndroidPath())
+                    return;
+            }
+
+            StepToward(destination);
+        }
+
+        /// <summary>返回范围内最近的、可攻击的怪物（用于判断是否该放弃拾取先打）。</summary>
+        private MapObject FindNearestMonster(int range)
+        {
+            if (Objects == null) return null;
+
+            MapObject best = null;
+            int bestDistance = range + 1;
+
+            foreach (MapObject ob in Objects)
+            {
+                if (ob == null || ob.Dead || ob == User) continue;
+                if (ob.Race != ObjectType.Monster) continue;
+                if (!string.IsNullOrEmpty(ob.PetOwner)) continue;
+                if (!GameScene.Game.CanAttackTarget(ob)) continue;
+
+                int distance = Functions.Distance(User.CurrentLocation, ob.CurrentLocation);
+
+                if (distance <= 0 || distance >= bestDistance) continue;
+
+                bestDistance = distance;
+                best = ob;
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// 挂机时的「战利品优先」：
+        /// 找到范围内该捡的物品就清掉当前目标、走过去（或原地等 PickupItems 发拾取包）。
+        /// 返回 true 表示本帧已被拾取流程占用。
+        ///
+        /// 之所以需要它：挂机选怪半径是 25 格，杀完一只后若附近还有怪，
+        /// AI 会立刻扑向下一只，地上的战利品就永远捡不到了。
+        /// </summary>
+        private bool TryAndroidLoot()
+        {
+            BigPatchDialog box = GameScene.Game?.BigPatchBox;
+
+            if (box == null) return false;
+
+            // 刚放弃过一轮拾取（捡不起来），冷却期内正常打怪
+            if (CEnvir.Now < _androidLootCooldown) return false;
+
+            ItemObject loot = box.FindPickableItem(User.CurrentLocation, AndroidPickupRange);
+
+            if (loot == null || !InAndroidRange(loot.CurrentLocation))
+            {
+                _androidLootTarget = null;
+                return false;
+            }
+
+            // 换了拾取目标 → 作废旧路径，避免朝上一只怪/上一个物品走
+            if (!ReferenceEquals(loot, _androidLootTarget))
+            {
+                _androidLootTarget = loot;
+                _androidLootStartTime = CEnvir.Now;
+                _androidPath = null;
+                _androidRepathTime = default;
+            }
+            else if (CEnvir.Now > _androidLootStartTime.AddSeconds(6))
+            {
+                // 同一件东西 6 秒都没捡起来（背包满 / 服务端拒绝）→ 放弃它，
+                // 冷却 10 秒继续打怪，避免角色永久站桩。
+                _androidLootTarget = null;
+                _androidLootCooldown = CEnvir.Now.AddSeconds(10);
+                return false;
+            }
+
+            MapObject.TargetObject = null;
+
+            int pickupRadius = User.Stats[Stat.PickUpRadius];
+
+            if (Functions.Distance(User.CurrentLocation, loot.CurrentLocation) <= pickupRadius)
+            {
+                // 已在拾取范围内：站住等 PickupItems() 把包发出去
+                _androidPath = null;
+                return true;
+            }
+
+            MoveTowardPoint(loot.CurrentLocation);
+
+            return true;
         }
 
         /// <summary>沿 _androidPath 走一步。返回 true 表示本帧已被移动占用。</summary>

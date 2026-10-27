@@ -286,6 +286,42 @@ namespace Client.Scenes.Views
         }
 
         /// <summary>
+        /// 找到距离 <paramref name="center"/> 最近的可拾取地面物品。
+        /// 供挂机 AI 判断「是否应该先去捡东西，而不是马上去打下一只怪」。
+        /// </summary>
+        public ItemObject FindPickableItem(Point center, int range)
+        {
+            GameScene scene = GameScene.Game;
+
+            if (scene?.MapControl?.Objects == null) return null;
+
+            EnsureAutoPickInitialized();
+
+            if (PickFilter == null) return null;
+
+            ItemObject best = null;
+            int bestDistance = range + 1;
+
+            foreach (MapObject ob in scene.MapControl.Objects)
+            {
+                if (ob == null || ob.Race != ObjectType.Item) continue;
+
+                ItemObject itemObject = (ItemObject)ob;
+
+                if (!ShouldPick(itemObject)) continue;
+
+                int distance = Functions.Distance(center, itemObject.CurrentLocation);
+
+                if (distance > range || distance >= bestDistance) continue;
+
+                bestDistance = distance;
+                best = itemObject;
+            }
+
+            return best;
+        }
+
+        /// <summary>
         /// 快速自动拾取：按拾取页的白名单 / 品质规则，**逐个指定格子**发送拾取包。
         ///
         /// 为什么需要服务端配合：B 端原本的 `C.PickUp` 无参，服务端会扫描半径内
