@@ -1,9 +1,11 @@
 using Client.Controls;
 using Client.Envir;
+using Client.Models;
 using Client.UserModels;
 using Library;
 using Library.SystemModels;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
@@ -89,6 +91,9 @@ namespace Client.Scenes.Views
                 Helper.Assassin.Visible = info.Class == MirClass.Assassin;
             }
 
+            // 登录后重建技能缓存（战士高频技能 + 三个下拉框）
+            Helper?.ResetSkillCache();
+            Helper?.ReadySkillInfo();
             Helper?.UpdateMagic();
         }
 
@@ -98,7 +103,30 @@ namespace Client.Scenes.Views
         /// </summary>
         public void UserChanged()
         {
+            // 角色数据就绪后再处理喝药配置。
+            // UserObject 构造期间 GameScene.Game.User 仍是 null，那时调用的 Protect.UpdateLinks()
+            // 里 LoadLocalSettings() 取不到角色名会直接返回，导致：
+            //   1) 按角色区分的 xxx-AutoPotion.ini 永远读不到；
+            //   2) 换角色后也不会生成新角色的配置文件。
+            // 这里在 User 赋值完成后再跑一次，并落盘一份，保证每个角色都有自己的文件。
+            if (Protect != null)
+            {
+                Protect.UpdateLinks();
+                Protect.SaveLocalSettings();
+            }
+
+            Helper?.ResetSkillCache();
+            Helper?.ReadySkillInfo();
             Helper?.UpdateMagic();
+
+            // 登录 / 换角色时强制关闭挂机。
+            // Config.开始挂机 会随 Zircon.ini 持久化，若上次退出时仍在挂机，
+            // 重新登录会立刻自动开打（A 端进入游戏时同样强制置 false）。
+            if (Config.开始挂机)
+            {
+                Config.开始挂机 = false;
+                Helper?.AndroidPlayer?.SetSilentState(false);
+            }
         }
 
         /// <summary>
@@ -1061,17 +1089,20 @@ namespace Client.Scenes.Views
 
                     if (row.HealthTargetBox.Value == 0 && row.ManaTargetBox.Value == 0)
                     {
-                        int maxHP = GameScene.Game?.User?.Stats[Stat.Health] ?? 1;
-                        int maxMP = GameScene.Game?.User?.Stats[Stat.Mana] ?? 1;
+                        int maxHP = GameScene.Game?.User?.Stats[Stat.Health] ?? 0;
+                        int maxMP = GameScene.Game?.User?.Stats[Stat.Mana] ?? 0;
 
-                        if (maxHP <= 0) maxHP = 1;
-                        if (maxMP <= 0) maxMP = 1;
+                        // 角色数据还没就绪时（UserObject 构造期间 GameScene.Game.User 仍为 null）
+                        // 不能反算百分比：除数会退化成 1，算出 100% 并污染本地配置与服务端阈值。
+                        // 等 GameScene.UserChanged() 里再调一次本方法，那时才有真实的 MaxHP/MaxMP。
+                        if (maxHP > 0 && maxMP > 0)
+                        {
+                            long healthPercent = (long)(link.Health * 100f / maxHP);
+                            long manaPercent = (long)(link.Mana * 100f / maxMP);
 
-                        long healthPercent = (long)(link.Health * 100f / maxHP);
-                        long manaPercent = (long)(link.Mana * 100f / maxMP);
-
-                        row.HealthTargetBox.Value = Math.Max(0, Math.Min(100, healthPercent));
-                        row.ManaTargetBox.Value = Math.Max(0, Math.Min(100, manaPercent));
+                            row.HealthTargetBox.Value = Math.Max(0, Math.Min(100, healthPercent));
+                            row.ManaTargetBox.Value = Math.Max(0, Math.Min(100, manaPercent));
+                        }
                     }
 
                     row.EnabledCheckBox.Checked = link.Enabled;
@@ -1843,6 +1874,10 @@ namespace Client.Scenes.Views
 
                 if (!AndroidPlayer.Checked) return;
 
+                // 挂机 AI 接管移动。B 端 ProcessInput 只在 AutoPathRoute == null 时才被调用，
+                // 若此时存在服务端下发的自动寻路，必须先取消，否则挂机不会生效。
+                GameScene.Game?.CancelAutoPath();
+
                 MapInfo mapInfo = GameScene.Game?.MapControl?.MapInfo;
                 if (mapInfo != null && !mapInfo.AllowRT)
                 {
@@ -2049,6 +2084,641 @@ namespace Client.Scenes.Views
                 }
 
                 listBox.UpdateScrollBar();
+            }
+
+            #endregion
+
+            #region 自动施法运行逻辑（阶段 4b）
+
+            // 战士高频技能缓存，避免每帧遍历 User.Magics
+            private ClientUserMagic FlamingSword;
+            private ClientUserMagic DragonRise;
+            private ClientUserMagic BladeStorm;
+            private ClientUserMagic SwiftBlade;
+            private ClientUserMagic SeismicSlam;
+
+            private DateTime AutoSkillsTime;
+            private DateTime _ProtectTime;
+            private DateTime _lastTownReviveTime;
+            private bool _pausedAutoHangupForHeal;
+
+            /// <summary>缓存战士几个高频技能。移植自 A 端 BigPatchDialog.cs:237-299。</summary>
+            public void ReadySkillInfo()
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return;
+
+                if (FlamingSword == null) FlamingSword = scene.GetMagic(MagicType.FlamingSword);
+                if (DragonRise == null) DragonRise = scene.GetMagic(MagicType.DragonRise);
+                if (BladeStorm == null) BladeStorm = scene.GetMagic(MagicType.BladeStorm);
+                if (SwiftBlade == null) SwiftBlade = scene.GetMagic(MagicType.SwiftBlade);
+                if (SeismicSlam == null) SeismicSlam = scene.GetMagic(MagicType.SeismicSlam);
+            }
+
+            /// <summary>切角色 / 学新技能后清空缓存。</summary>
+            public void ResetSkillCache()
+            {
+                FlamingSword = null;
+                DragonRise = null;
+                BladeStorm = null;
+                SwiftBlade = null;
+                SeismicSlam = null;
+            }
+
+            /// <summary>
+            /// 刺客「四花」连锁：开花 → 白莲 → 红莲 → 暗灭茶花。
+            /// 移植自 A 端 BigPatchDialog.cs:219-233。
+            /// </summary>
+            public void CastFourFlowers()
+            {
+                GameScene scene = GameScene.Game;
+                if (!Config.自动四花 || scene?.User == null || scene.User.Class != MirClass.Assassin) return;
+
+                if (!scene.User.Buffs.Any(x =>
+                    x.Type == BuffType.FullBloom || x.Type == BuffType.WhiteLotus || x.Type == BuffType.RedLotus))
+                    scene.UseMagic(MagicType.FullBloom);
+
+                if (scene.User.Buffs.Any(x => x.Type == BuffType.FullBloom))
+                    scene.UseMagic(MagicType.WhiteLotus);
+
+                if (scene.User.Buffs.Any(x => x.Type == BuffType.WhiteLotus))
+                    scene.UseMagic(MagicType.RedLotus);
+
+                if (scene.User.Buffs.Any(x => x.Type == BuffType.RedLotus))
+                    scene.UseMagic(MagicType.SweetBrier);
+            }
+
+            /// <summary>
+            /// 只有角色确实学会了该技能才施放，并返回是否放出去了。
+            ///
+            /// ⚠ 不能直接 `scene.UseMagic(...); return;`：
+            /// 未学会时 UseMagic 是空操作，但 return 依然执行，
+            /// 会让 AutoSkills 每次都在这里提前返回，把后面的技能全部饿死。
+            /// 典型现象：战士勾了「自动铁布衫」但没学该技能时，「自动烈火」永远不生效。
+            /// </summary>
+            private static bool TryCast(GameScene scene, MagicType type, MapObject target = null)
+            {
+                if (scene?.User == null) return false;
+                if (scene.GetMagic(type) == null) return false;
+
+                scene.UseMagic(type, target);
+                return true;
+            }
+
+            /// <summary>
+            /// 自动施法主逻辑，按职业分发。移植自 A 端 BigPatchDialog.cs:300-630。
+            /// </summary>
+            public void AutoSkills()
+            {
+                if (Config.暂停辅助功能) return;
+
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return;
+
+                if (CEnvir.Now < AutoSkillsTime || CEnvir.Now < scene.User.NextMagicTime) return;
+                if (scene.User.Horse != HorseType.None) return;
+
+                AutoSkillsTime = CEnvir.Now.AddMilliseconds(300);
+
+                switch (scene.User.Class)
+                {
+                    case MirClass.Warrior:
+                        {
+                            if (Config.自动铁布衫 && scene.User.Buffs.All(x => x.Type != BuffType.Defiance)
+                                && TryCast(scene, MagicType.Defiance))
+                                return;
+
+                            if (Config.自动金刚之躯 && scene.User.Buffs.All(x => x.Type != BuffType.Endurance))
+                            {
+                                ClientUserMagic m = scene.GetMagic(MagicType.Endurance);
+                                if (m != null && m.NextCast < CEnvir.Now)
+                                {
+                                    scene.UseMagic(m);
+                                    return;
+                                }
+                            }
+
+                            // 破血只在血量高于 80% 时用
+                            if (Config.自动破血 && scene.User.Buffs.All(x => x.Type != BuffType.Might)
+                                && scene.User.CurrentHP > scene.User.Stats[Stat.Health] * 0.8
+                                && TryCast(scene, MagicType.Might))
+                                return;
+
+                            if (Config.自动移花接木 && scene.User.Buffs.All(x => x.Type != BuffType.ReflectDamage))
+                            {
+                                ClientUserMagic m = scene.GetMagic(MagicType.ReflectDamage);
+                                if (m != null && m.NextCast < CEnvir.Now)
+                                {
+                                    scene.UseMagic(m);
+                                    return;
+                                }
+                            }
+
+                            // 莲月/烈火/翔空/快刀斩马/天雷锤只在战斗状态下执行
+                            //
+                            // ⚠ 三个蓄力型技能必须判断「是否已蓄力」：
+                            // 服务端 FlamingSword/BladeStorm/DragonRise 的 Toggle() 在已蓄力时会回一条
+                            // ChargeFail（「无法积蓄 XX 的能量」）。客户端若每 0.5 秒无脑重发，
+                            // 聊天栏就会被这条提示刷屏。
+                            if (IsInCombat())
+                            {
+                                if (Config.自动莲月 && BladeStorm != null && !scene.User.CanBladeStorm && CEnvir.Now > BladeStorm.NextCast)
+                                    scene.UseMagic(MagicType.BladeStorm);
+                                else if (Config.自动烈火 && FlamingSword != null && !scene.User.CanFlamingSword && CEnvir.Now > FlamingSword.NextCast)
+                                    scene.UseMagic(MagicType.FlamingSword);
+                                else if (Config.自动翔空 && DragonRise != null && !scene.User.CanDragonRise && CEnvir.Now > DragonRise.NextCast)
+                                    scene.UseMagic(MagicType.DragonRise);
+                                else if (Config.自动快刀斩马 && SwiftBlade != null && CEnvir.Now > SwiftBlade.NextCast)
+                                {
+                                    if (HasCurrentTarget() != null)
+                                        scene.UseMagic(MagicType.SwiftBlade);
+                                }
+                                else if (Config.自动天雷锤 && SeismicSlam != null && CEnvir.Now > SeismicSlam.NextCast)
+                                {
+                                    int? distance = HasCurrentTarget();
+                                    if (distance != null && distance < 4)
+                                    {
+                                        MapObject target = MapObject.TargetObject != null && scene.CanAttackTarget(MapObject.TargetObject)
+                                            ? MapObject.TargetObject
+                                            : scene.MouseObject;
+                                        scene.UseMagic(MagicType.SeismicSlam, target);
+                                    }
+                                }
+                            }
+
+                            // 半月弯刀 / 十方斩：看周围可攻击目标数量
+                            if ((Config.自动半月弯刀 || Config.自动十方斩) && IsInCombat(4))
+                            {
+                                int halfCount = 0;
+                                int surgeCount = 0;
+                                Point loc = scene.User.CurrentLocation;
+                                MirDirection dir = scene.User.Direction;
+
+                                if (CanAttack(Functions.Move(loc, dir))) halfCount++;
+                                if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, -1)))) halfCount++;
+                                if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 1)))) halfCount++;
+                                if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 2)))) halfCount++;
+
+                                if (Config.自动十方斩)
+                                {
+                                    if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 3)))) surgeCount++;
+                                    if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 4)))) surgeCount++;
+                                    if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 5)))) surgeCount++;
+                                    if (CanAttack(Functions.Move(loc, Functions.ShiftDirection(dir, 6)))) surgeCount++;
+                                }
+
+                                // B 端把 CanDestructiveBlow 改名为 CanDestructiveSurge
+                                if (Config.自动十方斩 && surgeCount >= 3)
+                                {
+                                    if (!scene.User.CanDestructiveSurge)
+                                        scene.UseMagic(MagicType.DestructiveSurge);
+                                    else if (scene.User.CanThrusting)
+                                        scene.UseMagic(MagicType.Thrusting);
+                                }
+                                else
+                                {
+                                    if (scene.User.CanDestructiveSurge)
+                                        scene.UseMagic(MagicType.DestructiveSurge);
+                                    else if (Config.自动半月弯刀 && halfCount >= 3)
+                                    {
+                                        if (!scene.User.CanHalfMoon)
+                                            scene.UseMagic(MagicType.HalfMoon);
+                                        else if (scene.User.CanThrusting)
+                                            scene.UseMagic(MagicType.Thrusting);
+                                    }
+                                    else
+                                    {
+                                        if (scene.User.CanHalfMoon)
+                                            scene.UseMagic(MagicType.HalfMoon);
+                                        else if (!scene.User.CanThrusting)
+                                            scene.UseMagic(MagicType.Thrusting);
+                                    }
+                                }
+                            }
+
+                            break;
+                        }
+
+                    case MirClass.Wizard:
+                        {
+                            if (Config.自动魔法盾 && scene.User.Buffs.All(x => x.Type != BuffType.MagicShield)
+                                && TryCast(scene, MagicType.MagicShield))
+                                return;
+
+                            if (Config.自动凝血 && scene.User.Buffs.All(x => x.Type != BuffType.Renounce)
+                                && TryCast(scene, MagicType.Renounce))
+                                return;
+
+                            if (Config.自动天打雷劈 && scene.User.Buffs.All(x => x.Type != BuffType.JudgementOfHeaven)
+                                && TryCast(scene, MagicType.JudgementOfHeaven))
+                                return;
+
+                            // 自动法师连续技能：重复上一次成功施放的攻击法术
+                            if (Config.自动法师连续技能
+                                && scene.LastMagic != null
+                                && (scene.CanAttackTarget(scene.LastTarget) || scene.CanAttackTarget(scene.MouseObject)))
+                            {
+                                MapObject target = scene.CanAttackTarget(scene.LastTarget) ? scene.LastTarget : scene.MouseObject;
+                                if (!Functions.InRange(scene.User.CurrentLocation, target.CurrentLocation, Globals.MagicRange)) break;
+
+                                MagicHelper helper = scene.GetMagicHelpper(scene.LastMagic.Info.Magic);
+                                if (helper == null) break;
+                                if (!helper.LockMonster && target.Race == ObjectType.Monster) break;
+                                if (!helper.LockPlayer && target.Race == ObjectType.Player) break;
+
+                                switch (scene.LastMagic.Info.Magic)
+                                {
+                                    case MagicType.FireBall:
+                                    case MagicType.LightningBall:
+                                    case MagicType.IceBolt:
+                                    case MagicType.GustBlast:
+                                    case MagicType.ElectricShock:
+                                    case MagicType.AdamantineFireBall:
+                                    case MagicType.ThunderBolt:
+                                    case MagicType.IceBlades:
+                                    case MagicType.Cyclone:
+                                    case MagicType.ScortchedEarth:
+                                    case MagicType.LightningBeam:
+                                    case MagicType.FrozenEarth:
+                                    case MagicType.BlowEarth:
+                                    case MagicType.ExpelUndead:
+                                    case MagicType.FireStorm:
+                                    case MagicType.LightningWave:
+                                    case MagicType.IceStorm:
+                                    case MagicType.DragonTornado:
+                                    case MagicType.GreaterFrozenEarth:
+                                    case MagicType.ChainLightning:
+                                    case MagicType.MeteorShower:
+                                    case MagicType.Asteroid:
+                                        scene.UseMagic(scene.LastMagic.Info.Magic, target);
+                                        break;
+                                }
+                            }
+
+                            break;
+                        }
+
+                    case MirClass.Taoist:
+                        {
+                            AutoHealing();
+
+                            if (Config.自动阴阳盾 && scene.User.Buffs.All(x => x.Type != BuffType.CelestialLight)
+                                && TryCast(scene, MagicType.CelestialLight))
+                                return;
+
+                            if (Config.自动强魔震法 && scene.User.Buffs.All(x => x.Type != BuffType.ElementalSuperiority)
+                                && TryCast(scene, MagicType.ElementalSuperiority, scene.User))
+                                return;
+
+                            if (Config.有宠物时自动移花接玉 && scene.User.Buffs.All(x => x.Type != BuffType.StrengthOfFaith)
+                                && scene.GetMagic(MagicType.StrengthOfFaith) != null)
+                            {
+                                foreach (MapObject ob in scene.MapControl.Objects)
+                                {
+                                    if (!(ob is MonsterObject mon) || mon.Dead || mon.PetOwner != scene.User.Name) continue;
+                                    if (mon.CompanionObject != null) continue;
+
+                                    scene.UseMagic(MagicType.StrengthOfFaith);
+                                    return;
+                                }
+                            }
+
+                            if (Config.自动吸星大法 && scene.User.Buffs.All(x => x.Type != BuffType.LifeSteal)
+                                && TryCast(scene, MagicType.LifeSteal))
+                                return;
+
+                            if (Config.自动施放幽灵盾 && scene.User.Buffs.All(x => x.Type != BuffType.MagicResistance)
+                                && TryCast(scene, MagicType.MagicResistance, scene.User))
+                                return;
+
+                            if (Config.自动施放神圣战甲术 && scene.User.Buffs.All(x => x.Type != BuffType.Resilience)
+                                && TryCast(scene, MagicType.Resilience, scene.User))
+                                return;
+
+                            // 注：A 端此处还有「开始挂机时调 GameScene.AutoPoison()」，
+                            // B 端没有 AutoPoison（挂机 AI 属后续阶段），暂不移植。
+
+                            if (Config.自动施放幽灵盾 || Config.自动给宠物施放猛虎强势 || Config.自动施放神圣战甲术)
+                            {
+                                foreach (MapObject ob in scene.MapControl.Objects)
+                                {
+                                    if (!(ob is MonsterObject mon) || mon.Dead || mon.PetOwner != scene.User.Name) continue;
+                                    if (mon.CompanionObject != null) continue;
+                                    if (!Functions.InRange(scene.User.CurrentLocation, mon.CurrentLocation, Globals.MagicRange)) continue;
+
+                                    // 注：A 端这里还有 SummonedTime + 4 秒稳定期检查，B 端无该字段，已省略。
+
+                                    if (Config.自动施放幽灵盾 && !mon.VisibleBuffs.ContainsKey(BuffType.MagicResistance)
+                                        && TryCast(scene, MagicType.MagicResistance, ob))
+                                        return;
+
+                                    if (Config.自动施放神圣战甲术 && !mon.VisibleBuffs.ContainsKey(BuffType.Resilience)
+                                        && TryCast(scene, MagicType.Resilience, ob))
+                                        return;
+
+                                    if (Config.自动给宠物施放猛虎强势 && !mon.VisibleBuffs.ContainsKey(BuffType.BloodLust)
+                                        && TryCast(scene, MagicType.BloodLust, ob))
+                                        return;
+                                }
+                            }
+
+                            if (scene.User.Buffs.Any(x => x.Type == BuffType.Transparency || x.Type == BuffType.Invisibility))
+                                return;
+
+                            // 自动道士连续技能
+                            if (Config.自动道士连续技能
+                                && scene.LastMagic != null
+                                && (scene.CanAttackTarget(scene.LastTarget) || scene.CanAttackTarget(scene.MouseObject)))
+                            {
+                                MapObject target = scene.CanAttackTarget(scene.LastTarget) ? scene.LastTarget : scene.MouseObject;
+                                if (!Functions.InRange(scene.User.CurrentLocation, target.CurrentLocation, Globals.MagicRange)) break;
+
+                                MagicHelper helper = scene.GetMagicHelpper(scene.LastMagic.Info.Magic);
+                                if (helper == null) break;
+                                if (!helper.LockMonster && target.Race == ObjectType.Monster) break;
+                                if (!helper.LockPlayer && target.Race == ObjectType.Player) break;
+
+                                switch (scene.LastMagic.Info.Magic)
+                                {
+                                    case MagicType.Heal:
+                                    case MagicType.ExplosiveTalisman:
+                                    case MagicType.EvilSlayer:
+                                    case MagicType.GreaterEvilSlayer:
+                                    case MagicType.ImprovedExplosiveTalisman:
+                                        scene.UseMagic(scene.LastMagic.Info.Magic, target);
+                                        break;
+                                }
+                            }
+
+                            break;
+                        }
+
+                    case MirClass.Assassin:
+                        {
+                            if (Config.自动风之闪避 && scene.User.Buffs.All(x => x.Type != BuffType.Evasion))
+                                scene.UseMagic(MagicType.Evasion);
+
+                            if (!Config.自动风之守护 || scene.User.Buffs.All(x => x.Type != BuffType.RagingWind))
+                                return;
+
+                            scene.UseMagic(MagicType.RagingWind);
+                            break;
+                        }
+                }
+            }
+
+            /// <summary>
+            /// 道士自动治疗：血量低于一半时隐身 + 群疗/治愈，并临时暂停挂机。
+            /// 移植自 A 端 BigPatchDialog.cs:632-717。
+            /// </summary>
+            private void AutoHealing()
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return;
+
+                // 血量恢复过半后自动解除临时暂停
+                if (_pausedAutoHangupForHeal)
+                {
+                    if (scene.User.CurrentHP > scene.User.Stats[Stat.Health] * 0.5)
+                    {
+                        Config.开始挂机 = true;
+                        AndroidPlayer?.SetSilentState(true);
+                        _pausedAutoHangupForHeal = false;
+                    }
+                }
+
+                if (!Config.自动施展秒影恢复血量) return;
+
+                MapObject target = null;
+
+                if (scene.User.CurrentHP < scene.User.Stats[Stat.Health] / 2)
+                {
+                    target = scene.User;
+                }
+                else
+                {
+                    foreach (MapObject ob in scene.MapControl.Objects)
+                    {
+                        if (!(ob is MonsterObject mon) || mon.Dead) continue;
+                        if (mon.PetOwner != scene.User.Name || mon.CompanionObject != null) continue;
+
+                        if (!scene.DataDictionary.TryGetValue(mon.ObjectID, out var monData)) continue;
+                        if (monData.Health > 0 && monData.Health < monData.MaxHealth / 2)
+                        {
+                            target = mon;
+                            break;
+                        }
+                    }
+                }
+
+                if (target == null) return;
+
+                // 自己血量低于 50% 时临时暂停挂机
+                if (target == scene.User)
+                {
+                    double hpRatio = (double)scene.User.CurrentHP / scene.User.Stats[Stat.Health];
+                    if (hpRatio < 0.5 && !_pausedAutoHangupForHeal && Config.开始挂机)
+                    {
+                        scene.ReceiveChat("血量低于50，隐身治疗，并暂停挂机（强制停止行为）", MessageType.Hint);
+                        Config.开始挂机 = false;
+                        AndroidPlayer?.SetSilentState(false);
+                        _pausedAutoHangupForHeal = true;
+                        PerformHardPause();
+                    }
+                }
+
+                if (scene.User.Buffs.All(x => x.Type != BuffType.Transparency))
+                {
+                    if (scene.GetMagic(MagicType.Transparency) != null)
+                    {
+                        scene.UseMagic(MagicType.Transparency, null);
+                        return;
+                    }
+                }
+                else if ((target == scene.User && scene.User.Buffs.All(x => x.Type != BuffType.Heal)) || target != scene.User)
+                {
+                    if (scene.GetMagic(MagicType.MassHeal) != null)
+                    {
+                        scene.UseMagic(MagicType.MassHeal, target);
+                        return;
+                    }
+
+                    if (scene.GetMagic(MagicType.Heal) != null)
+                        scene.UseMagic(MagicType.Heal, target);
+                }
+            }
+
+            /// <summary>
+            /// 强制停止玩家所有自动行为：清目标、取消寻路、清动作队列并站立。
+            /// 移植自 A 端 BigPatchDialog.cs:719-751。
+            /// B 端没有 MapControl.CurrentPath，改用 GameScene.CancelAutoPath()。
+            /// </summary>
+            private void PerformHardPause()
+            {
+                try
+                {
+                    MapObject.TargetObject = null;
+                    MapObject.MouseObject = null;
+                    MapObject.MagicObject = null;
+
+                    GameScene scene = GameScene.Game;
+                    scene?.CancelAutoPath();
+
+                    if (MapObject.User != null)
+                    {
+                        MapObject.User.ActionQueue.Clear();
+                        MapObject.User.NextActionTime = CEnvir.Now;
+                        MapObject.User.SetAction(new ObjectAction(MirAction.Standing, MapObject.User.Direction, MapObject.User.CurrentLocation));
+                    }
+
+                    scene?.ReceiveChat("已强制停止挂机行为：目标/路径/动作队列已清除。", MessageType.Hint);
+                }
+                catch (Exception ex)
+                {
+                    CEnvir.SaveError(ex.ToString());
+                }
+            }
+
+            /// <summary>指定格子附近是否有可攻击目标。移植自 A 端 BigPatchDialog.cs:752-765。</summary>
+            public bool CanAttack(Point pi)
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.MapControl == null) return false;
+
+                if (pi.X < 0 || pi.X >= scene.MapControl.Width || pi.Y < 0 || pi.Y >= scene.MapControl.Height)
+                    return false;
+
+                List<MapObject> objects = scene.MapControl.Cells[pi.X, pi.Y].Objects;
+                if (objects == null) return false;
+
+                foreach (MapObject ob in objects)
+                    if (scene.CanAttackTarget(ob))
+                        return true;
+
+                return false;
+            }
+
+            /// <summary>是否处于战斗状态。移植自 A 端 BigPatchDialog.cs:771-774。</summary>
+            public bool IsInCombat(int seconds = 2)
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return false;
+
+                return CEnvir.Now < scene.User.CombatTime.AddSeconds(seconds);
+            }
+
+            /// <summary>
+            /// 是否有可攻击的当前目标，返回距离。移植自 A 端 BigPatchDialog.cs:780-799。
+            /// </summary>
+            public int? HasCurrentTarget()
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return null;
+
+                MapObject target = null;
+
+                if (MapObject.TargetObject != null && scene.CanAttackTarget(MapObject.TargetObject))
+                    target = MapObject.TargetObject;
+                else if (scene.MouseObject != null && scene.CanAttackTarget(scene.MouseObject))
+                    target = scene.MouseObject;
+
+                if (target == null) return null;
+
+                return Functions.Distance(scene.User.CurrentLocation, target.CurrentLocation);
+            }
+
+            /// <summary>
+            /// 每帧驱动的辅助总入口。移植自 A 端 BigPatchDialog.cs:801-877。
+            /// 注：A 端此处还有 PickupItems（依赖拾取页 AutoPick，属阶段 5）与
+            /// ExpAutoRandoms（逻辑可疑，见文档 5.9），本阶段均未移植。
+            /// </summary>
+            public void UpdateAutoAssist()
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return;
+
+                CastFourFlowers();
+
+                if (Config.在安全处有效)
+                    AutoSkills();
+                else if (!scene.User.InSafeZone)
+                    AutoSkills();
+
+                if (Config.自动关组)
+                {
+                    if (scene.GroupBox.AllowGroup)
+                        CEnvir.Enqueue(new C.GroupSwitch { Allow = !scene.GroupBox.AllowGroup });
+                }
+
+                // 随机保护
+                if (Config.是否开启随机保护)
+                {
+                    float ratio = Config.血量剩下百分之多少时自动随机 / 100f;
+                    if (scene.User.CurrentHP < scene.User.Stats[Stat.Health] * ratio && CEnvir.Now > _ProtectTime)
+                    {
+                        DXItemCell cell = scene.InventoryBox.Grid.Grid.FirstOrDefault(x => x?.Item?.Info.ItemName == "随机传送卷");
+                        if (cell != null && cell.UseItem())
+                            _ProtectTime = CEnvir.Now.AddSeconds(5.0);
+                    }
+                }
+
+                // 回城保护
+                if (Config.是否开启回城保护)
+                {
+                    float ratio = Config.血量剩下百分之多少时自动回城 / 100f;
+                    if (scene.User.CurrentHP < scene.User.Stats[Stat.Health] * ratio)
+                    {
+                        DXItemCell cell = scene.InventoryBox.Grid.Grid.FirstOrDefault(x => x?.Item?.Info.ItemName == "回城卷");
+                        if (cell != null && cell.UseItem())
+                            Config.是否开启回城保护 = false;
+                    }
+                }
+
+                // 自动学习技能书（常用页开关，B 端此前只有配置没有运行逻辑）
+                if (Config.自动学习技能书 && CEnvir.Now > scene.UseItemTime && scene.User.Horse == HorseType.None)
+                {
+                    if (!AutoUseBook(scene.InventoryBox.Grid.Grid))
+                        AutoUseBook(scene.CompanionBox.InventoryGrid.Grid);
+                }
+
+                if (!Config.开始挂机) return;
+
+                // 死亡回城（3 秒节流，避免每帧发包）
+                if (scene.User.Dead && Config.死亡回城 && CEnvir.Now > _lastTownReviveTime)
+                {
+                    CEnvir.Enqueue(new C.TownRevive());
+                    _lastTownReviveTime = CEnvir.Now.AddSeconds(3.0);
+                }
+
+                // 定时自动随机
+                if (Config.是否开启每间隔自动随机 && CEnvir.Now > _ProtectTime)
+                {
+                    DXItemCell cell = scene.InventoryBox.Grid.Grid.FirstOrDefault(x => x?.Item?.Info.ItemName == "随机传送卷");
+                    if (cell != null && cell.UseItem())
+                        _ProtectTime = CEnvir.Now.AddSeconds(Config.隔多少秒自动随机一次);
+                }
+            }
+
+            /// <summary>背包里找一本能学的技能书并使用。移植自 A 端 BigPatchDialog.cs:879-893。</summary>
+            private bool AutoUseBook(DXItemCell[] grid)
+            {
+                if (grid == null) return false;
+
+                GameScene scene = GameScene.Game;
+
+                foreach (DXItemCell cell in grid)
+                {
+                    if (cell?.Item?.Info == null || cell.Locked) continue;
+                    if (cell.Item.Info.ItemType != ItemType.Book) continue;
+                    if (!scene.CanUseItem(cell.Item)) continue;
+
+                    scene.UseItemTime = CEnvir.Now.AddMilliseconds(500);
+                    cell.Locked = true;
+                    CEnvir.Enqueue(new C.ItemUse { Link = new CellLinkInfo { GridType = cell.GridType, Slot = cell.Slot, Count = 1 } });
+                    return true;
+                }
+
+                return false;
             }
 
             #endregion

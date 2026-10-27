@@ -86,6 +86,12 @@ namespace Client.Scenes
         public ClientUserCurrency CurrencyPickedUp = null;
 
         public MapObject MagicObject, MouseObject, TargetObject, FocusObject;
+
+        /// <summary>最近一次成功施放的技能（「自动连续技能」判断用）。</summary>
+        public ClientUserMagic LastMagic;
+
+        /// <summary>最近一次成功施放的目标。</summary>
+        public MapObject LastTarget;
         public DXControl ItemLabel, MagicLabel, FameLabel;
         private bool _showItemSetDetails;
 
@@ -1138,6 +1144,10 @@ namespace Client.Scenes
             }
 
             ProcessAutoPathMove();
+
+            // 辅助页每帧驱动：自动施法、随机/回城保护、自动学习技能书等
+            if (!Observer)
+                BigPatchBox?.Helper?.UpdateAutoAssist();
 
             if (AutoPathRoute == null)
                 MapControl.ProcessInput();
@@ -3008,6 +3018,129 @@ namespace Client.Scenes
             }
         }
 
+        /// <summary>
+        /// 按技能类型取已学的技能记录，未学返回 null。
+        /// </summary>
+        public ClientUserMagic GetMagic(MagicType type)
+        {
+            if (User?.Magics == null) return null;
+
+            foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in User.Magics)
+            {
+                if (pair.Value?.Info != null && pair.Value.Info.Magic == type)
+                    return pair.Value;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 取某技能的辅助配置（自动换符/换毒、目标限制）。未配置返回 null。
+        /// 移植自 A 端 GameScene.cs:3141-3151。
+        /// </summary>
+        public MagicHelper GetMagicHelpper(MagicType magic)
+        {
+            if (Config.magics == null) return null;
+
+            for (int i = 0; i < Config.magics.Count; i++)
+            {
+                if (Config.magics[i] != null && Config.magics[i].TypeID == magic)
+                    return Config.magics[i];
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 判断该技能是否需要消耗护身符。移植自 A 端 CEnvir.cs:1037。
+        /// </summary>
+        public static bool NeedAmulet(MagicInfo info)
+        {
+            if (info == null) return false;
+
+            switch (info.Magic)
+            {
+                case MagicType.ExplosiveTalisman:
+                case MagicType.EvilSlayer:
+                case MagicType.Invisibility:
+                case MagicType.MagicResistance:
+                case MagicType.MassInvisibility:
+                case MagicType.Resilience:
+                case MagicType.GreaterEvilSlayer:
+                case MagicType.TrapOctagon:
+                case MagicType.ElementalSuperiority:
+                case MagicType.BloodLust:
+                case MagicType.Resurrection:
+                case MagicType.Purification:
+                case MagicType.Transparency:
+                case MagicType.CelestialLight:
+                case MagicType.ImprovedExplosiveTalisman:
+                case MagicType.SummonSkeleton:
+                case MagicType.SummonShinsu:
+                case MagicType.SummonJinSkeleton:
+                case MagicType.StrengthOfFaith:
+                case MagicType.SummonDemonicCreature:
+                case MagicType.DemonExplosion:
+                case MagicType.SummonPuppet:
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 自动换符：护身符位上的符不对时，从背包里挑数量最多的一种换上。
+        /// 移植自 A 端 GameScene.cs:3152-3195。
+        /// </summary>
+        public MagicHelper TakeAmulet(ClientUserMagic magic)
+        {
+            if (magic?.Info == null) return null;
+            if (!NeedAmulet(magic.Info)) return null;
+
+            MagicHelper helper = GetMagicHelpper(magic.Info.Magic);
+
+            // 没开自动换符、或没配置该技能的辅助项，直接返回（不阻止施放）
+            if (!Config.自动换符) return helper;
+            if (helper == null) return helper;
+            if (helper.Amulet == -1) return helper;
+
+            DXItemCell amuletCell = CharacterBox?.Grid[(int)EquipmentSlot.Amulet];
+            if ((amuletCell?.Item?.Info?.Index ?? -1) == helper.Amulet) return helper;
+
+            long bestCount = 0;
+            int bestIndex = -1;
+
+            for (int i = 0; i < Inventory.Length; i++)
+            {
+                ClientUserItem item = Inventory[i];
+                if ((item?.Info?.Index ?? -1) != helper.Amulet) continue;
+                if (item.Count <= 0 || item.Count <= bestCount) continue;
+
+                bestCount = item.Count;
+                bestIndex = i;
+            }
+
+            if (bestIndex < 0)
+            {
+                ReceiveChat("你的符用完了，释放失败", MessageType.Hint);
+                return helper;
+            }
+
+            amuletCell?.ToEquipment(InventoryBox.Grid.Grid[bestIndex]);
+
+            return helper;
+        }
+
+        /// <summary>
+        /// 按技能类型施放（自动施法用）。map_ob 为空时沿用鼠标悬停目标。
+        /// </summary>
+        public void UseMagic(MagicType type, MapObject map_ob = null)
+        {
+            if (Game.Observer || User == null || MagicBarBox == null) return;
+
+            UseMagic(GetMagic(type), map_ob);
+        }
+
         public void UseMagic(SpellKey key)
         {
             if (Game.Observer || User == null || MagicBarBox == null) return;
@@ -3039,7 +3172,18 @@ namespace Client.Scenes
                 if (magic != null) break;
             }
 
-            if (magic == null) return;
+            UseMagic(magic, null);
+        }
+
+        /// <summary>
+        /// 施法主体。map_ob 非空时优先作为目标，否则沿用鼠标悬停目标。
+        /// </summary>
+        public void UseMagic(ClientUserMagic magic, MapObject map_ob = null)
+        {
+            if (magic == null || Game.Observer || User == null || MagicBarBox == null) return;
+
+            // 自动施法可以显式指定目标；未指定时与原来行为完全一致
+            MapObject mouseTarget = map_ob ?? MouseObject;
 
             bool horseMagic = magic.Info.School == MagicSchool.Horse;
 
@@ -3241,8 +3385,8 @@ namespace Client.Scenes
 
                 case MagicType.DanceOfSwallow:
                     if (CEnvir.Now < User.ServerTime) return;
-                    if (CanAttackTarget(MouseObject))
-                        target = MouseObject;
+                    if (CanAttackTarget(mouseTarget))
+                        target = mouseTarget;
 
                     if (target == null) return;
 
@@ -3296,11 +3440,11 @@ namespace Client.Scenes
                     if (CanAttackTarget(MagicObject))
                         target = MagicObject;
 
-                    if (CanAttackTarget(MouseObject))
+                    if (CanAttackTarget(mouseTarget))
                     {
-                        target = MouseObject;
+                        target = mouseTarget;
 
-                        if (MouseObject.Race == ObjectType.Monster && ((MonsterObject)MouseObject).MonsterInfo.AI >= 0)
+                        if (mouseTarget.Race == ObjectType.Monster && ((MonsterObject)mouseTarget).MonsterInfo.AI >= 0)
                             MapObject.MagicObject = target;
                         else
                             MapObject.MagicObject = null;
@@ -3309,11 +3453,11 @@ namespace Client.Scenes
                 case MagicType.HundredFist:
                     if (CanAttackTarget(MagicObject))
                         target = MagicObject;
-                    if (CanAttackTarget(MouseObject))
+                    if (CanAttackTarget(mouseTarget))
                     {
-                        target = MouseObject;
+                        target = mouseTarget;
 
-                        if (MouseObject.Race == ObjectType.Monster && ((MonsterObject)MouseObject).MonsterInfo.AI >= 0)
+                        if (mouseTarget.Race == ObjectType.Monster && ((MonsterObject)mouseTarget).MonsterInfo.AI >= 0)
                             MapObject.MagicObject = target;
                         else
                             MapObject.MagicObject = null;
@@ -3326,46 +3470,46 @@ namespace Client.Scenes
                 case MagicType.WraithGrip:
                 case MagicType.HellFire:
                 case MagicType.Abyss:
-                    if (CanAttackTarget(MouseObject))
-                        target = MouseObject;
+                    if (CanAttackTarget(mouseTarget))
+                        target = mouseTarget;
                     break;
                 case MagicType.Interchange:
                 case MagicType.Beckon:
-                    if (CanAttackTarget(MouseObject))
-                        target = MouseObject;
+                    if (CanAttackTarget(mouseTarget))
+                        target = mouseTarget;
                     break;
                 case MagicType.MagicCombustion:
-                    if (!CanAttackTarget(MouseObject) || MouseObject.Race != ObjectType.Player) return;
+                    if (!CanAttackTarget(mouseTarget) || mouseTarget.Race != ObjectType.Player) return;
 
-                    target = MouseObject;
+                    target = mouseTarget;
                     break;
 
                 case MagicType.Heal:
                 case MagicType.Purification:
-                    target = MouseObject ?? User;
+                    target = mouseTarget ?? User;
                     break;
                 case MagicType.CelestialLight:
                     if (User.Buffs.All(x => x.Type == BuffType.CelestialLight)) return;
                     break;
 
                 case MagicType.Resurrection:
-                    if (MouseObject == null || !MouseObject.Dead || MouseObject.Race != ObjectType.Player) return;
+                    if (mouseTarget == null || !mouseTarget.Dead || mouseTarget.Race != ObjectType.Player) return;
 
-                    target = MouseObject;
+                    target = mouseTarget;
                     break;
                 case MagicType.SoulResonance:
-                    if (MouseObject == null || MouseObject.Dead || MouseObject.Race != ObjectType.Player || !IsAlly(MouseObject.ObjectID)) return;
+                    if (mouseTarget == null || mouseTarget.Dead || mouseTarget.Race != ObjectType.Player || !IsAlly(mouseTarget.ObjectID)) return;
 
-                    target = MouseObject;
+                    target = mouseTarget;
                     break;
                 case MagicType.CursedDoll:
-                    if (CanAttackTarget(MouseObject))
-                        target = MouseObject;
+                    if (CanAttackTarget(mouseTarget))
+                        target = mouseTarget;
                     break;
                 case MagicType.CorpseExploder:
                 case MagicType.SummonDead:
-                    if (MouseObject != null && MouseObject.Dead && (MouseObject.Race == ObjectType.Player || MouseObject.Race == ObjectType.Monster))
-                        target = MouseObject;
+                    if (mouseTarget != null && mouseTarget.Dead && (mouseTarget.Race == ObjectType.Player || mouseTarget.Race == ObjectType.Monster))
+                        target = mouseTarget;
                     break;
 
                 case MagicType.Spiritualism:
@@ -3379,8 +3523,8 @@ namespace Client.Scenes
                     break;
 
                 case MagicType.Chain:
-                    if (CanAttackTarget(MouseObject) && MouseObject.Race == ObjectType.Monster)
-                        target = MouseObject;
+                    if (CanAttackTarget(mouseTarget) && mouseTarget.Race == ObjectType.Monster)
+                        target = mouseTarget;
                     break;
 
                 case MagicType.Defiance:
@@ -3539,13 +3683,17 @@ namespace Client.Scenes
 
             //switch spell type.
 
-            if (MouseObject != null && MouseObject.Race == ObjectType.Monster)
-                FocusObject = (MonsterObject)MouseObject;
+            if (mouseTarget != null && mouseTarget.Race == ObjectType.Monster)
+                FocusObject = (MonsterObject)mouseTarget;
+
+            // 记录最近一次成功施放的技能与目标，供「自动连续技能」判断
+            LastMagic = magic;
+            LastTarget = target;
 
             User.MagicAction = new ObjectAction(MirAction.Spell, direction, MapObject.User.CurrentLocation, magic.Info.Magic, new List<uint> { targetID }, new List<Point> { targetLocation }, false, Element.None);
         }
 
-        private bool CanAttackTarget(MapObject ob)
+        public bool CanAttackTarget(MapObject ob)
         {
             if (ob == null || ob.Dead || !ob.Visible) return false;
 

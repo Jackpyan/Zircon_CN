@@ -15,6 +15,11 @@ namespace Library
         private static readonly Regex EntryRegex = new Regex(@"^(?<Key>.*?)=(?<Value>.*)$", RegexOptions.Compiled);
         private static readonly Regex ColorRegex = new Regex(@"\[A:\s?(?<A>[0-9]{1,3}),\s?R:\s?(?<R>[0-9]{1,3}),\s?G:\s?(?<G>[0-9]{1,3}),\s?B:\s?(?<B>[0-9]{1,3})\]", RegexOptions.Compiled);
 
+        /// <summary>
+        /// MagicHelper 列表的单元素格式：`[N:名字,T:技能,K:按键,P:锁玩家,M:锁怪,A:符]`，与 A 端一致。
+        /// </summary>
+        private static readonly Regex MagicRegex = new Regex(@"\[N:\s?(?<N>[A-Za-z0-9\u4e00-\u9fa5]{0,16}),\s?T:\s?(?<T>[0-9]{1,3}),\s?K:\s?(?<K>[0-9]{1,3}),\s?P:\s?(?<P>[0-9]{1,3}),\s?M:\s?(?<M>[0-9]{1,3}),\s?A:\s?(?<A>[0-9-]{1,3})\]", RegexOptions.Compiled);
+
         public static readonly Dictionary<Type, object> ConfigObjects = new Dictionary<Type, object>();
 
         private static readonly Dictionary<Type, Dictionary<string, Dictionary<string, string>>> ConfigContents = new Dictionary<Type, Dictionary<string, Dictionary<string, string>>>();
@@ -550,6 +555,82 @@ namespace Library
 
             return value;
         }
+
+        /// <summary>
+        /// 枚举配置项（如 MagicType）。以数值持久化，与 A 端格式一致。
+        /// 注意：ConfigReader 按「属性类型」精确匹配 Read 重载，缺这个重载会在
+        /// ReadConfig 里 method 为 null 抛 NullReferenceException，导致客户端启动即崩。
+        /// </summary>
+        public static MagicType Read(Type type, string section, string key, MagicType value)
+        {
+            string entry;
+
+            if (TryGetEntry(type, section, key, out entry) && ushort.TryParse(entry, out ushort result))
+                return (MagicType)result;
+
+            ConfigContents[type][section][key] = ((ushort)value).ToString();
+
+            return value;
+        }
+
+        /// <summary>
+        /// 技能辅助配置列表（自动换符/换毒）。多元素以 `|` 分隔。
+        /// 同样必须有精确类型的重载，否则启动即 NRE。
+        /// </summary>
+        public static List<MagicHelper> Read(Type type, string section, string key, List<MagicHelper> value)
+        {
+            string entry;
+
+            if (!TryGetEntry(type, section, key, out entry))
+            {
+                ConfigContents[type][section][key] = FormatMagicHelpers(value);
+                return value;
+            }
+
+            List<MagicHelper> list = new List<MagicHelper>();
+
+            foreach (string item in entry.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                Match match = MagicRegex.Match(item);
+
+                if (!match.Success) continue;
+
+                list.Add(new MagicHelper
+                {
+                    Name = match.Groups["N"].Value,
+                    TypeID = (MagicType)int.Parse(match.Groups["T"].Value),
+                    Key = (SpellKey)int.Parse(match.Groups["K"].Value),
+                    LockPlayer = int.Parse(match.Groups["P"].Value) > 0,
+                    LockMonster = int.Parse(match.Groups["M"].Value) > 0,
+                    Amulet = int.Parse(match.Groups["A"].Value),
+                });
+            }
+
+            return list;
+        }
+
+        private static string FormatMagicHelpers(List<MagicHelper> value)
+        {
+            if (value == null || value.Count == 0) return string.Empty;
+
+            StringBuilder builder = new StringBuilder();
+
+            for (int i = 0; i < value.Count; i++)
+            {
+                MagicHelper helper = value[i];
+
+                if (helper == null) continue;
+
+                if (builder.Length > 0) builder.Append('|');
+
+                builder.AppendFormat("[N:{0},T:{1},K:{2},P:{3},M:{4},A:{5}]",
+                    helper.Name, (int)helper.TypeID, (int)helper.Key,
+                    helper.LockPlayer ? 1 : 0, helper.LockMonster ? 1 : 0, helper.Amulet);
+            }
+
+            return builder.ToString();
+        }
+
         #endregion
 
         #region Writes
@@ -672,6 +753,22 @@ namespace Library
             if (!ConfigContents[type].ContainsKey(section)) ConfigContents[type][section] = new Dictionary<string, string>();
 
             ConfigContents[type][section][key] = $"[A:{value.A}, R:{value.R}, G:{value.G}, B:{value.B}]";
+        }
+
+        /// <summary>枚举配置项，以数值持久化。</summary>
+        public static void Write(Type type, string section, string key, MagicType value)
+        {
+            if (!ConfigContents[type].ContainsKey(section)) ConfigContents[type][section] = new Dictionary<string, string>();
+
+            ConfigContents[type][section][key] = ((ushort)value).ToString();
+        }
+
+        /// <summary>技能辅助配置列表，多元素以 `|` 分隔。</summary>
+        public static void Write(Type type, string section, string key, List<MagicHelper> value)
+        {
+            if (!ConfigContents[type].ContainsKey(section)) ConfigContents[type][section] = new Dictionary<string, string>();
+
+            ConfigContents[type][section][key] = FormatMagicHelpers(value);
         }
         #endregion
     }

@@ -821,6 +821,28 @@ namespace Library
         public bool Enabled { get; set; }
     }
 
+    /// <summary>
+    /// 技能辅助配置项（自动换符/换毒、施法目标限制）。
+    /// 移植自 A 端 zircon-legend-library\Library\Globals.cs:1186-1201。
+    /// 由 Config.magics 持有，GameScene.GetMagicHelpper 按 TypeID 查找。
+    /// </summary>
+    public class MagicHelper
+    {
+        public MagicType TypeID { get; set; }
+
+        public string Name { get; set; }
+
+        public SpellKey Key { get; set; }
+
+        public bool LockPlayer { get; set; }
+
+        public bool LockMonster { get; set; }
+
+        public int Amulet { get; set; }
+
+        public object obj { get; set; }
+    }
+
     public class ClientUserMagic
     {
         public int Index { get; set; }

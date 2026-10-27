@@ -187,6 +187,12 @@ namespace Client.Scenes.Views
         public Cell[,] Cells;
         public int Width, Height;
 
+        /// <summary>
+        /// 本地 A* 寻路器，供挂机 AI 使用。随地图切换（LoadMap）重建。
+        /// B 端原生自动寻路是服务端驱动的（AutoPathRoute），没有「给定目标点算路」的能力。
+        /// </summary>
+        public PathFinder PathFinder { get; private set; }
+
         public List<DXControl> MapInfoObjects = new List<DXControl>();
         public List<MapObject> Objects = new List<MapObject>();
         public List<MirEffect> Effects = new List<MirEffect>();
@@ -527,6 +533,9 @@ namespace Client.Scenes.Views
 
         private void LoadMap()
         {
+            PathFinder = null;      // 地图切换时旧寻路器立即失效
+            ResetAndroidState();    // 旧地图的挂机路径同样作废
+
             try
             {
                 var path = Path.Combine(Config.MapPath, MapInfo.FileName + ".map");
@@ -578,6 +587,10 @@ namespace Client.Scenes.Views
 
                             Cells[x, y].Flag = ((flag & 0x01) != 1) || ((flag & 0x02) != 2);
                         }
+
+                    // 地图数据就绪后才创建寻路器
+                    if (Width > 0 && Height > 0)
+                        PathFinder = new PathFinder(this);
                 }
             }
             catch (Exception ex)
@@ -933,6 +946,22 @@ namespace Client.Scenes.Views
                 }
             }
 
+            // 挂机 AI：开启后本帧完全由 AI 接管，跳过后续鼠标输入处理
+            // （否则鼠标位置会参与方向计算，导致角色乱走）。
+            if (Config.开始挂机)
+            {
+                _lastAutoAndroidState = true;
+                ProcessAndroid();
+                return;
+            }
+
+            if (_lastAutoAndroidState)
+            {
+                // 挂机 开→关：清掉本地寻路残留，避免角色继续自己走
+                _lastAutoAndroidState = false;
+                ResetAndroidState();
+            }
+
             //If  auto run
 
             MirDirection direction = MouseDirection(), best;
@@ -1172,6 +1201,323 @@ namespace Client.Scenes.Views
                 MapObject.User.AttemptAction(new ObjectAction(MirAction.Moving, direction, Functions.Move(MapObject.User.CurrentLocation, direction), 1, MagicType.None));
         }
 
+        #region 挂机 AI（阶段 4b）
+
+        // ---- 参数 ----
+        private const int AndroidSearchRange = 25;   // 选怪 / 追击的最大距离
+        private const int AndroidDetectRange = 9;    // 视为「已进入战斗」的距离（对应 A 端 SHORT_DISTANCE_DETECTION_RANGE）
+        private const int AndroidAttackRange = 1;    // 近战攻击距离
+        private const int AndroidWanderRadius = 12;  // 非「范围挂机」时的游走半径
+
+        private bool _lastAutoAndroidState;
+        private DateTime _androidRepathTime;
+        private DateTime _androidWanderTime;
+        private DateTime _nextAutoSkillTime;
+        private List<Node> _androidPath;
+
+        /// <summary>挂机关闭时清理本地寻路状态。</summary>
+        private void ResetAndroidState()
+        {
+            _androidPath = null;
+            _androidRepathTime = default;
+            _androidWanderTime = default;
+        }
+
+        /// <summary>
+        /// 挂机 AI 主入口（每帧一次）。调用方保证 User 存活且未麻痹 / 冰冻。
+        ///
+        /// 流程：选怪 → 贴身则交由上方的攻击分支处理 → 远程则放技能 → 否则追击。
+        /// 与 A 端的差异：A 端把挂机逻辑散落在 ProcessInput 多个分支里，
+        /// 这里收敛成单一入口，便于维护。
+        /// </summary>
+        private void ProcessAndroid()
+        {
+            if (User == null || MapInfo == null || Width <= 0 || Height <= 0) return;
+
+            // 换到不允许挂机的地图时自动关闭（开关时已检查过一次，但地图会在挂机中途变化）
+            if (!MapInfo.AllowRT)
+            {
+                Config.开始挂机 = false;
+                GameScene.Game.BigPatchBox?.Helper?.AndroidPlayer?.SetSilentState(false);
+                GameScene.Game.ReceiveChat("当前地图不允许挂机，已自动关闭", MessageType.System);
+                return;
+            }
+
+            MapObject target = MapObject.TargetObject;
+
+            // 目标失效（死亡 / 不可攻击 / 跑太远 / 出了范围挂机区域）→ 丢弃重选
+            if (target != null && (target.Dead
+                || target.Race != ObjectType.Monster      // 挂机只打怪，不追玩家
+                || !GameScene.Game.CanAttackTarget(target)
+                || Functions.Distance(User.CurrentLocation, target.CurrentLocation) > AndroidSearchRange
+                || !InAndroidRange(target.CurrentLocation)))
+                target = null;
+
+            if (target == null)
+                target = SelectMonster();
+
+            // 换了目标（或从游走切到战斗）→ 作废旧路径，避免继续朝上一个点走
+            if (target != MapObject.TargetObject)
+            {
+                _androidPath = null;
+                _androidRepathTime = default;
+            }
+
+            MapObject.TargetObject = target;
+
+            if (target == null)
+            {
+                // 没怪 → 在挂机范围内游走
+                _androidPath = null;
+                WanderAndroid();
+                return;
+            }
+
+            int distance = Functions.Distance(User.CurrentLocation, target.CurrentLocation);
+
+            // 已经贴身：ProcessInput 上方的攻击分支会处理，这里保持静止等待攻击冷却
+            if (distance <= AndroidAttackRange) return;
+
+            // 远程挂机：进入射程后优先放技能（技能不可用则继续追击）
+            if (Config.是否远战挂机 && Functions.InRange(target.CurrentLocation, User.CurrentLocation, AndroidDetectRange))
+            {
+                if (TryAutoSkill())
+                    return;
+            }
+
+            MoveTowardTarget(target);
+        }
+
+        /// <summary>朝目标移动：优先用 A* 路径，路径不可用时退化为「朝目标走一步」。</summary>
+        private void MoveTowardTarget(MapObject target)
+        {
+            if (!GameScene.Game.MoveFrame || (User.Poison & PoisonType.WraithGrip) == PoisonType.WraithGrip) return;
+
+            int distance = Functions.Distance(User.CurrentLocation, target.CurrentLocation);
+
+            // 近距离直接走一步，避免每 600ms 做一次 A*（近战追击时绝大多数帧都走这条）
+            if (distance > 3)
+            {
+                if (PathFinder != null && CEnvir.Now >= _androidRepathTime)
+                {
+                    Point approach = AndroidApproachPoint(target.CurrentLocation);
+                    _androidPath = PathFinder.FindPath(User.CurrentLocation, approach);
+                    _androidRepathTime = CEnvir.Now.AddMilliseconds(600);
+                }
+
+                if (FollowAndroidPath())
+                    return;
+            }
+
+            StepToward(target.CurrentLocation);
+        }
+
+        /// <summary>沿 _androidPath 走一步。返回 true 表示本帧已被移动占用。</summary>
+        private bool FollowAndroidPath()
+        {
+            if (_androidPath == null || _androidPath.Count == 0) return false;
+
+            // 丢弃已经到达的节点（含起点）
+            while (_androidPath.Count > 0 && User.CurrentLocation == _androidPath[0].Location)
+                _androidPath.RemoveAt(0);
+
+            if (_androidPath.Count == 0)
+            {
+                _androidPath = null;
+                return false;
+            }
+
+            MirDirection dir = Functions.DirectionFromPoint(User.CurrentLocation, _androidPath[0].Location);
+
+            if (!CanMove(dir, 1))
+            {
+                // 路径被新出现的阻挡打断 → 丢弃，下一帧重算
+                _androidPath = null;
+                _androidRepathTime = default;
+                return false;
+            }
+
+            if (!GameScene.Game.MoveFrame || (User.Poison & PoisonType.WraithGrip) == PoisonType.WraithGrip)
+                return true;
+
+            MapObject.User.AttemptAction(new ObjectAction(
+                MirAction.Moving, dir, Functions.Move(User.CurrentLocation, dir, 1), 1, MagicType.None));
+
+            return true;
+        }
+
+        /// <summary>朝指定坐标走一步，被挡时尝试相邻方向。</summary>
+        private void StepToward(Point location)
+        {
+            if (!GameScene.Game.MoveFrame || (User.Poison & PoisonType.WraithGrip) == PoisonType.WraithGrip) return;
+
+            MirDirection dir = Functions.DirectionFromPoint(User.CurrentLocation, location);
+
+            if (!CanMove(dir, 1))
+            {
+                MirDirection best = DirectionBest(dir, 1, location);
+
+                if (best == dir)
+                {
+                    if (dir != User.Direction)
+                        MapObject.User.AttemptAction(new ObjectAction(MirAction.Standing, dir, User.CurrentLocation));
+                    return;
+                }
+
+                dir = best;
+            }
+
+            MapObject.User.AttemptAction(new ObjectAction(
+                MirAction.Moving, dir, Functions.Move(User.CurrentLocation, dir, 1), 1, MagicType.None));
+        }
+
+        /// <summary>无怪时在挂机范围内随机游走（范围挂机以设定坐标为中心，否则以当前位置为中心）。</summary>
+        private void WanderAndroid()
+        {
+            if (CEnvir.Now < _androidWanderTime) return;
+            _androidWanderTime = CEnvir.Now.AddSeconds(1.0);
+
+            Point center;
+            int radius;
+
+            if (Config.范围挂机)
+            {
+                center = Config.范围挂机坐标;
+                radius = (int)Config.范围距离;
+            }
+            else
+            {
+                center = User.CurrentLocation;
+                radius = AndroidWanderRadius;
+            }
+
+            if (radius < 1) radius = 1;
+
+            int cx = Math.Min(Math.Max(center.X, 0), Width - 1);
+            int cy = Math.Min(Math.Max(center.Y, 0), Height - 1);
+
+            int minX = Math.Max(cx - radius, 0);
+            int maxX = Math.Min(cx + radius + 1, Width);
+            int minY = Math.Max(cy - radius, 0);
+            int maxY = Math.Min(cy + radius + 1, Height);
+
+            if (maxX <= minX || maxY <= minY) return;
+
+            Point destination = new Point(CEnvir.Random.Next(minX, maxX), CEnvir.Random.Next(minY, maxY));
+
+            if (PathFinder != null)
+            {
+                _androidPath = PathFinder.FindPath(User.CurrentLocation, destination);
+                _androidRepathTime = CEnvir.Now.AddSeconds(2.0);
+
+                if (FollowAndroidPath())
+                    return;
+            }
+
+            // 寻路不可用（地图未加载 / 目标不可达）→ 直接朝目标方向走一步
+            StepToward(destination);
+        }
+
+        /// <summary>选择最近的、可攻击的、位于挂机范围内的怪物。</summary>
+        private MapObject SelectMonster()
+        {
+            if (Objects == null) return null;
+
+            MapObject best = null;
+            int bestDistance = int.MaxValue;
+
+            foreach (MapObject ob in Objects)
+            {
+                if (ob == null || ob.Dead || ob == User) continue;
+                if (ob.Race != ObjectType.Monster) continue;            // 只选怪（CanAttackTarget 对玩家也返回 true）
+                if (!GameScene.Game.CanAttackTarget(ob)) continue;      // 已含 AI<0 / 不可见判断
+                if (!string.IsNullOrEmpty(ob.PetOwner)) continue;
+                if (!InAndroidRange(ob.CurrentLocation)) continue;
+
+                int distance = Functions.Distance(User.CurrentLocation, ob.CurrentLocation);
+
+                if (distance <= 0) continue;   // 与自己重叠的怪打不到
+                if (distance >= bestDistance) continue;
+
+                bestDistance = distance;
+                best = ob;
+            }
+
+            return bestDistance <= AndroidSearchRange ? best : null;
+        }
+
+        /// <summary>坐标是否在「范围挂机」的矩形范围内（未开启范围挂机时恒为 true）。</summary>
+        private bool InAndroidRange(Point location)
+        {
+            if (!Config.范围挂机) return true;
+
+            int range = (int)Config.范围距离;
+
+            return Math.Abs(location.X - Config.范围挂机坐标.X) <= range
+                && Math.Abs(location.Y - Config.范围挂机坐标.Y) <= range;
+        }
+
+        /// <summary>
+        /// 求目标的「可站立邻格」。
+        /// 怪物自身占据的格子 Cell.Blocking() 为 true，A* 无法以它为终点，
+        /// 因此退而求其次：取目标周围离自己最近的一个空格作为寻路终点。
+        /// </summary>
+        private Point AndroidApproachPoint(Point target)
+        {
+            if (EmptyCell(target)) return target;
+
+            MirDirection dir = Functions.DirectionFromPoint(target, User.CurrentLocation);
+            Point candidate = Functions.Move(target, dir, 1);
+
+            if (EmptyCell(candidate)) return candidate;
+
+            for (int i = 1; i < 8; i++)
+            {
+                candidate = Functions.Move(target, Functions.ShiftDirection(dir, i), 1);
+
+                if (EmptyCell(candidate)) return candidate;
+            }
+
+            return target;
+        }
+
+        /// <summary>
+        /// 尝试释放「挂机自动技能」。
+        /// true  = 本帧行动已被技能流程占用（调用方不要再追击 / 平砍）；
+        /// false = 技能不可用（未配置 / 未学会 / 是开关型技能），调用方应回退到普通攻击。
+        /// </summary>
+        private bool TryAutoSkill()
+        {
+            MagicType type = Config.挂机自动技能;
+
+            if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
+
+            if (CEnvir.Now < _nextAutoSkillTime) return true;
+
+            if (MapObject.User.ActionQueue != null && MapObject.User.ActionQueue.Count > 0) return true;
+            if (MapObject.User.MagicAction != null) return true;
+
+            ClientUserMagic magic = GameScene.Game.GetMagic(type);
+
+            if (magic == null) return false;                // 未学会
+            if (CEnvir.Now < magic.NextCast) return true;   // 冷却中：等待，不刷屏
+            if (magic.Cost > User.CurrentMP) return true;   // 蓝不够：等待，不刷屏
+
+            MapObject target = MapObject.TargetObject;
+
+            if (target == null || target.Dead) return false;
+
+            // 显式传入目标：挂机时鼠标多半不在目标身上，
+            // UseMagic(type) 默认会打 MouseObject，导致技能打空/打错。
+            MapObject.MagicObject = target;
+            GameScene.Game.UseMagic(type, target);
+
+            _nextAutoSkillTime = CEnvir.Now.AddMilliseconds(600);
+            return true;
+        }
+
+        #endregion
+
         public void Run(MirDirection direction)
         {
             int steps = 1;
@@ -1300,6 +1646,15 @@ namespace Client.Scenes.Views
                     return false;
             }
             return true;
+        }
+
+        /// <summary>坐标是否在地图内且该格可站立（无地形阻挡、无阻挡对象）。</summary>
+        public bool EmptyCell(Point loc)
+        {
+            if (Cells == null) return false;
+            if (loc.X < 0 || loc.Y < 0 || loc.X >= Width || loc.Y >= Height) return false;
+
+            return !Cells[loc.X, loc.Y].Blocking();
         }
 
         public MirDirection MouseDirection() //22.5 = 16
@@ -1466,6 +1821,7 @@ namespace Client.Scenes.Views
                 }
 
                 Cells = null;
+                PathFinder = null;
 
                 Width = 0;
                 Height = 0;
