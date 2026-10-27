@@ -796,8 +796,8 @@ namespace Client.Controls
                 foreach (DXItemCell cell in GameScene.Game.BeltBox.Grid.Grid)
                     cell.RefreshItem();
 
-            if ((GridType == GridType.Inventory || GridType == GridType.CompanionInventory) && GameScene.Game.AutoPotionBox?.Rows != null)
-                foreach (AutoPotionRow row in GameScene.Game.AutoPotionBox.Rows)
+            if ((GridType == GridType.Inventory || GridType == GridType.CompanionInventory) && GameScene.Game.BigPatchBox?.Protect?.Rows != null)
+                foreach (BigPatchDialog.AutoPotionRow row in GameScene.Game.BigPatchBox.Protect.Rows)
                     row.ItemCell.RefreshItem();
 
             if ((GridType == GridType.Belt || GridType == GridType.AutoPotion) && QuickInfo != null)
@@ -1019,7 +1019,7 @@ namespace Client.Controls
 
                 toCell.QuickInfo = Item.Info;
 
-                GameScene.Game.AutoPotionBox.Rows[toCell.Slot].SendUpdate();
+                GameScene.Game.BigPatchBox?.Protect?.Rows[toCell.Slot]?.SendUpdate();
                 return;
             }
 
@@ -1041,7 +1041,7 @@ namespace Client.Controls
             {
                 QuickInfo = null;
 
-                GameScene.Game.AutoPotionBox.Rows[toCell.Slot].SendUpdate();
+                GameScene.Game.BigPatchBox?.Protect?.Rows[toCell.Slot]?.SendUpdate();
                 if (Selected) SelectedCell = null;
                 return;
             }

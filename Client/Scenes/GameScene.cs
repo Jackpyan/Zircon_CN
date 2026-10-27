@@ -211,6 +211,13 @@ namespace Client.Scenes
         public StorageDialog StorageBox;
         public AutoPotionDialog AutoPotionBox;
         public BigPatchDialog BigPatchBox;
+
+        /// <summary>
+        /// 上次的最大 HP/MP，用于判断是否需要把喝药阈值按新上限重发。
+        /// 移植自 A端 GameScene.cs:296-297。
+        /// </summary>
+        private int _LastMaxHP;
+        private int _LastMaxMP;
         public CharacterDialog InspectBox;
         public RankingDialog RankingBox;
         public GameStoreDialog GameStoreBox;
@@ -4026,6 +4033,19 @@ namespace Client.Scenes
             CharacterBox.UpdateStats();
 
             FilterDropBox.UpdateDropFilters();
+
+            // 仅在最大 HP/MP 真正变化时重发喝药阈值，避免刷包。
+            // 保护页 UI 存的是百分比，服务端存绝对值，换装备后必须按新上限重算。
+            // 移植自 A端 GameScene.cs:4884-4894。
+            int currentMaxHP = User.Stats[Stat.Health];
+            int currentMaxMP = User.Stats[Stat.Mana];
+
+            if (currentMaxHP != _LastMaxHP || currentMaxMP != _LastMaxMP)
+            {
+                _LastMaxHP = currentMaxHP;
+                _LastMaxMP = currentMaxMP;
+                BigPatchBox?.Protect?.ResendAllAutoPotionLinks();
+            }
         }
         public void ExperienceChanged()
         {

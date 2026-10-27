@@ -656,7 +656,7 @@ namespace Client.Scenes.Views
                     cell.QuickItem = null;
                     DXItemCell.SelectedCell = null;
 
-                    GameScene.Game.AutoPotionBox.Rows[cell.Slot].SendUpdate();
+                    GameScene.Game.BigPatchBox?.Protect?.Rows[cell.Slot]?.SendUpdate();
                     return;
                 }
 

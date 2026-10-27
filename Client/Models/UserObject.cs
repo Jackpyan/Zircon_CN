@@ -1,5 +1,6 @@
 ﻿using Client.Envir;
 using Client.Scenes;
+using Client.Scenes.Views;
 using Library;
 using Library.SystemModels;
 using System;
@@ -376,11 +377,11 @@ namespace Client.Models
 
             foreach (ClientAutoPotionLink link in info.AutoPotionLinks)
             {
-                if (link.Slot < 0 || link.Slot >= GameScene.Game.AutoPotionBox.Links.Length) continue;
+                if (link.Slot < 0 || link.Slot >= GameScene.Game.BigPatchBox.Protect.Links.Length) continue;
 
-                GameScene.Game.AutoPotionBox.Links[link.Slot] = link;
+                GameScene.Game.BigPatchBox.Protect.Links[link.Slot] = link;
             }
-            GameScene.Game.AutoPotionBox.UpdateLinks();
+            GameScene.Game.BigPatchBox.Protect.UpdateLinks();
 
             GameScene.Game.CommunicationBox.OnlineState = info.OnlineState;
             GameScene.Game.CommunicationBox.FriendList = info.Friends;
