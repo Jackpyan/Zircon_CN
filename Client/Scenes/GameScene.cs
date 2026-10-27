@@ -210,6 +210,7 @@ namespace Client.Scenes
         public BuffDialog BuffBox;
         public StorageDialog StorageBox;
         public AutoPotionDialog AutoPotionBox;
+        public BigPatchDialog BigPatchBox;
         public CharacterDialog InspectBox;
         public RankingDialog RankingBox;
         public GameStoreDialog GameStoreBox;
@@ -615,6 +616,11 @@ namespace Client.Scenes
                 Parent = this,
                 Visible = false
             };
+            BigPatchBox = new BigPatchDialog
+            {
+                Parent = this,
+                Visible = false
+            };
             NPCRefinementStoneBox = new NPCRefinementStoneDialog
             {
                 Parent = this,
@@ -897,6 +903,8 @@ namespace Client.Scenes
             StorageBox.Location = new Point(Size.Width - StorageBox.Size.Width - InventoryBox.Size.Width, 0);
 
             AutoPotionBox.Location = new Point((Size.Width - AutoPotionBox.Size.Width) / 2, (Size.Height - AutoPotionBox.Size.Height) / 2);
+
+            BigPatchBox.Location = new Point((Size.Width - BigPatchBox.Size.Width) / 2, (Size.Height - BigPatchBox.Size.Height) / 2);
 
             InspectBox.Location = new Point(CharacterBox.Size.Width, 0);
 
@@ -1265,7 +1273,8 @@ namespace Client.Scenes
                         GroupBox.Visible = !GroupBox.Visible;
                         break;
                     case KeyBindAction.AutoPotionWindow:
-                        AutoPotionBox.Visible = !AutoPotionBox.Visible;
+                        // 阶段 1：A 键改为打开"辅助功能"窗口（原 AutoPotionDialog 保留但不再由 A 键直接打开）
+                        BigPatchBox.Visible = !BigPatchBox.Visible;
                         break;
                     case KeyBindAction.StorageWindow:
                         StorageBox.Visible = !StorageBox.Visible;
@@ -4910,6 +4919,14 @@ namespace Client.Scenes
                         AutoPotionBox.Dispose();
 
                     AutoPotionBox = null;
+                }
+
+                if (BigPatchBox != null)
+                {
+                    if (!BigPatchBox.IsDisposed)
+                        BigPatchBox.Dispose();
+
+                    BigPatchBox = null;
                 }
 
                 if (InspectBox != null)
