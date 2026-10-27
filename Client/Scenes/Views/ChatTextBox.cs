@@ -435,8 +435,11 @@ namespace Client.Scenes.Views
 
         protected override void Dispose(bool disposing)
         {
-            base.Dispose(disposing);
-
+            // ⚠ 顺序很重要：必须先清理自身对子控件的引用，最后才调用 base.Dispose。
+            // DXControl.Dispose(bool) 会销毁全部子控件，DXTextBox 销毁时会把内部 _TextBox 置 null，
+            // 若先调用 base.Dispose，下面访问 TextBox.TextBox 就会抛 NullReferenceException；
+            // 而 BaseConnection.Process 对非 NotImplementedException 是 `throw;` 重抛，
+            // 会直接把客户端进程崩掉（表现为「退出游戏→角色选择」瞬间闪退）。
             if (disposing)
             {
                 _Mode = 0;
@@ -478,6 +481,7 @@ namespace Client.Scenes.Views
                 }
             }
 
+            base.Dispose(disposing);
         }
 
         #endregion

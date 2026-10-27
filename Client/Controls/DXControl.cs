@@ -2303,7 +2303,9 @@ BorderInformation = new[]
                 _IgnoreMoveBounds = false;
                 _Opacity = 0F;
                 DXControl parent = _Parent;
-                parent?.Controls.Remove(this);
+                // 必须对 parent.Controls 也做空判断：父控件可能已被先销毁（Dispose 里会把 Controls 置 null），
+                // 此时子控件才被释放，直接 Remove 会抛 NullReferenceException。
+                parent?.Controls?.Remove(this);
                 _Parent = null;
                 parent?.InvalidateChildCache();
                 _PassThrough = false;
