@@ -131,5 +131,49 @@ namespace Client.Envir
         public static Color TargetPlayerFriendlyColour { get; set; } = Color.Cyan;
         public static Color TargetPlayerEnemyColour { get; set; } = Color.Red;
         public static Color TargetNPCColour { get; set; } = Color.Cyan;
+
+        #region 辅助功能（BigPatch）
+
+        // 说明：本段移植自 A端 Client\Envir\Config.cs 的 [ConfigSection("BigPatch")]。
+        // 属性名即 Zircon.ini 中的键名，中文键可直接使用（ConfigReader 用 property.Name 作 key）。
+        // 分阶段添加，阶段 2 只包含「常用」标签页需要的字段。
+
+        [ConfigSection("BigPatch")]
+        // 常用
+        public static bool 免蜡烛 { get; set; } = false;
+        public static bool 免助跑 { get; set; } = false;
+        public static bool 免SHIFT { get; set; } = false;
+        public static bool 跑不停 { get; set; } = false;
+        public static bool 数字显血 { get; set; } = false;
+        public static bool 在安全处有效 { get; set; } = false;
+        public static bool 组队数字显血 { get; set; } = false;
+        public static bool Boss提示 { get; set; } = false;
+        public static bool 自动关组 { get; set; } = false;
+        public static bool 清理尸体 { get; set; } = false;
+        public static bool 攻击锁定目标 { get; set; } = false;
+        public static bool 关闭经验提示 { get; set; } = false;
+        public static bool 锁怪效果 { get; set; } = false;
+        public static bool 稳如泰山 { get; set; } = false;
+        public static bool 转生残影 { get; set; } = false;
+        public static bool 死亡红屏 { get; set; } = false;
+        public static bool 快速自动拾取 { get; set; } = false;
+        public static bool Tab捡取 { get; set; } = false;
+        public static bool 自动学习技能书 { get; set; } = false;
+        public static bool 启用Ctrl数字控制宠物 { get; set; } = false;
+
+        // 天气
+        public static int 天气效果 { get; set; } = 0;
+
+        // 自动练技能
+        public static bool 是否开启自动练技能 { get; set; } = false;
+        public static int 自动练F几技能 { get; set; } = 0;
+        public static long 隔多少秒自动练技能 { get; set; } = 10;
+
+        // 鼠标中键
+        public static bool 是否开启鼠标中间按钮自动使用坐骑 { get; set; } = false;
+        public static bool 是否开启鼠标中间按钮自动使用技能 { get; set; } = false;
+        public static int 鼠标中间按钮使用F几的技能 { get; set; } = 0;
+
+        #endregion
     }
 }
