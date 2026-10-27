@@ -249,7 +249,15 @@ namespace Library.Network.ClientPackets
         public bool Enabled { get; set; }
     }
 
-    public sealed class PickUp : Packet { }
+    /// <summary>
+    /// 拾取。
+    /// `Location` 为空 → 保持原有行为（扫描 PickUpRadius 范围内第一件物品）；
+    /// `Location` 非空 → 只拾取该格上的物品（辅助功能的过滤自动拾取用）。
+    /// </summary>
+    public sealed class PickUp : Packet
+    {
+        public Point Location { get; set; }
+    }
 
     public sealed class Chat : Packet
     {

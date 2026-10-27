@@ -8520,9 +8520,24 @@ namespace Server.Models
         }
         public void PickUp()
         {
+            PickUp(Point.Empty);
+        }
+
+        /// <summary>
+        /// 拾取。<paramref name="location"/> 非空时只拾取该格上的物品
+        /// （辅助功能的过滤自动拾取用，避免"扫描到第一件就捡"把垃圾一起捡起来）。
+        /// </summary>
+        public void PickUp(Point location)
+        {
             if (Dead) return;
 
             int range = Stats[Stat.PickUpRadius];
+
+            if (!location.IsEmpty)
+            {
+                PickUpAt(location, range);
+                return;
+            }
 
             for (int d = 0; d <= range; d++)
             {
@@ -8551,6 +8566,29 @@ namespace Server.Models
 
                     }
                 }
+            }
+        }
+
+        /// <summary>拾取指定格子上的物品（只拾一件）。</summary>
+        private void PickUpAt(Point location, int range)
+        {
+            if (CurrentMap == null) return;
+
+            if (location.X < 0 || location.Y < 0 || location.X >= CurrentMap.Width || location.Y >= CurrentMap.Height) return;
+
+            if (Functions.Distance(CurrentLocation, location) > range) return;
+
+            Cell cell = CurrentMap.Cells[location.X, location.Y];
+
+            if (cell?.Objects == null) return;
+
+            foreach (MapObject cellObject in cell.Objects)
+            {
+                if (cellObject.Race != ObjectType.Item) continue;
+
+                ItemObject item = (ItemObject)cellObject;
+
+                if (item.PickUpItem(this)) return;
             }
         }
 

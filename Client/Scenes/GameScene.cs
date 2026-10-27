@@ -1150,6 +1150,10 @@ namespace Client.Scenes
             {
                 BigPatchBox?.Helper?.UpdateAutoAssist();
                 BigPatchBox?.Answering?.ProcessAutoShout();
+
+                // 快速自动拾取：按拾取页白名单逐个指定格子拾取
+                if (Config.快速自动拾取)
+                    BigPatchBox?.PickupItems();
             }
 
             if (AutoPathRoute == null)

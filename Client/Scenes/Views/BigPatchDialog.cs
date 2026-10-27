@@ -251,6 +251,96 @@ namespace Client.Scenes.Views
             return item.Info.Rarity == Rarity.Common;
         }
 
+        /// <summary>
+        /// 按品质判断是否该捡：非白色物品。
+        /// 金币/经验不参与品质判定（仍走白名单）。
+        /// </summary>
+        private static bool IsPickableByColour(ItemObject itemObject)
+        {
+            ClientUserItem item = itemObject?.Item;
+
+            if (item?.Info == null) return false;
+
+            // B 端没有 ItemEffect.Gold（金币走 CurrencyInfo），只需排除经验球
+            if (item.Info.ItemEffect == ItemEffect.Experience) return false;
+
+            return !IsWhiteItem(item);
+        }
+
+        /// <summary>该地面物品是否在白名单里（角色拾取）。</summary>
+        private bool ShouldPick(ItemObject itemObject)
+        {
+            if (itemObject?.Item?.Info == null) return false;
+
+            ItemInfo info = itemObject.Item.Info;
+            int index = info.Index;
+
+            // 碎片：地面物品用附加属性里的 ItemIndex 指代具体碎片
+            if (info.ItemEffect == ItemEffect.ItemPart)
+                index = itemObject.Item.AddedStats[Stat.ItemIndex];
+
+            if (PickFilter != null && PickFilter.dictItems.TryGetValue(index, out CItemFilterSet set) && set.pick)
+                return true;
+
+            return Config.拾取非白色物品 && IsPickableByColour(itemObject);
+        }
+
+        /// <summary>
+        /// 快速自动拾取：按拾取页的白名单 / 品质规则，**逐个指定格子**发送拾取包。
+        ///
+        /// 为什么需要服务端配合：B 端原本的 `C.PickUp` 无参，服务端会扫描半径内
+        /// 第一件物品就捡，客户端无法指定目标 → 会把白装垃圾一起捡起来。
+        /// 阶段 6 给 `C.PickUp` 加了 `Location`，这里就能精确指定了。
+        ///
+        /// 返回 true 表示本帧已发出一次拾取。
+        /// </summary>
+        public bool PickupItems()
+        {
+            GameScene scene = GameScene.Game;
+
+            if (scene?.User == null || scene.Observer || scene.User.Dead) return false;
+            if (scene.MapControl?.Cells == null) return false;
+            if (CEnvir.Now < scene.PickUpTime) return false;
+
+            EnsureAutoPickInitialized();
+
+            if (PickFilter == null) return false;
+
+            int radius = scene.User.Stats[Stat.PickUpRadius];
+            Point user = scene.User.CurrentLocation;
+
+            int minX = Math.Max(user.X - radius, 0);
+            int maxX = Math.Min(user.X + radius, scene.MapControl.Width - 1);
+            int minY = Math.Max(user.Y - radius, 0);
+            int maxY = Math.Min(user.Y + radius, scene.MapControl.Height - 1);
+
+            for (int x = minX; x <= maxX; x++)
+            {
+                for (int y = minY; y <= maxY; y++)
+                {
+                    Cell cell = scene.MapControl.Cells[x, y];
+
+                    if (cell?.Objects == null) continue;
+
+                    foreach (MapObject ob in cell.Objects)
+                    {
+                        if (ob == null || ob.Race != ObjectType.Item) continue;
+
+                        if (!ShouldPick((ItemObject)ob)) continue;
+
+                        CEnvir.Enqueue(new C.PickUp { Location = new Point(x, y) });
+
+                        // 节流：服务端一次只捡一件，给一点间隔避免刷包
+                        scene.PickUpTime = CEnvir.Now.AddMilliseconds(300);
+
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         #endregion
 
         /// <summary>
