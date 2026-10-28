@@ -467,6 +467,9 @@ namespace Client.Scenes.Views
             NoteBook?.Save();
             Answering?.SaveSaywords();
 
+            // 按角色的辅助功能配置（Zircon.ini 里已排除这些字段）
+            CharacterConfigStore.Save();
+
             base.Dispose(disposing);
 
             if (disposing)

@@ -164,10 +164,20 @@ namespace Client.Envir
         public static bool 拾取非白色物品 { get; set; } = false;
 
         // 聊天页
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动回复 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static int 自动回复时用第几行句子 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动喊话 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 多少秒一次自动喊话 { get; set; } = 10000;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static List<string> 自动喊话内内容 { get; set; } = new List<string>();
         public static bool 是否关闭NPC话 { get; set; } = false;
         public static bool 是否关闭怪物话 { get; set; } = false;
@@ -178,8 +188,14 @@ namespace Client.Envir
         public static int 天气效果 { get; set; } = 0;
 
         // 自动练技能
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启自动练技能 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static int 自动练F几技能 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 隔多少秒自动练技能 { get; set; } = 10;
 
         // 鼠标中键
@@ -190,80 +206,190 @@ namespace Client.Envir
         // ===== 以下为阶段 4「辅助」页新增 =====
 
         // 自动施法 - 战士
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动烈火 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动翔空 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动莲月 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动快刀斩马 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动天雷锤 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动铁布衫 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动破血 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动移花接木 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动金刚之躯 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动半月弯刀 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动十方斩 { get; set; } = false;
 
         // 自动施法 - 法师
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动魔法盾 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动凝血 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动天打雷劈 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动法师连续技能 { get; set; } = true;
 
         // 自动施法 - 道士
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动道士连续技能 { get; set; } = true;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动换毒 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动换符 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动阴阳盾 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 有宠物时自动移花接玉 { get; set; } = true;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动吸星大法 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动施放神圣战甲术 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动施放幽灵盾 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动给宠物施放猛虎强势 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动强魔震法 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动施展秒影恢复血量 { get; set; } = false;
 
         // 自动施法 - 刺客
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动四花 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动风之闪避 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动风之守护 { get; set; } = false;
 
         // 自动技能 1 / 2
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 自动技能1多长时间使用一次 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static MagicType 自动技能1 { get; set; } = MagicType.None;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启自动技能1 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 自动技能2多长时间使用一次 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static MagicType 自动技能2 { get; set; } = MagicType.None;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启自动技能2 { get; set; } = false;
         public static bool 暂停辅助功能 { get; set; } = false;
 
         // 挂机
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 开始挂机 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动上毒 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 自动躲避 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 死亡回城 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否远战挂机 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 远战挂机是否使用技能 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static MagicType 挂机自动技能 { get; set; } = MagicType.None;
 
         /// <summary>挂机群攻技能：周围怪 ≥2 时优先使用；None 表示不用。</summary>
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static MagicType 挂机自动技能2 { get; set; } = MagicType.None;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static Point 范围挂机坐标 { get; set; } = Point.Empty;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 范围距离 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 范围挂机 { get; set; } = false;
 
         // 挂机保护
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 血量剩下百分之多少时自动回城 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启回城保护 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 血量剩下百分之多少时自动随机 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启随机保护 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 隔多少秒自动随机一次 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启每间隔自动随机 { get; set; } = false;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static long 多少秒无经验或者未杀死目标自动随机 { get; set; } = 0;
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static bool 是否开启指定时间无经验或者未杀死目标自动随机 { get; set; } = false;
 
         /// <summary>
         /// 技能辅助配置表（自动换符/换毒、施法目标限制）。
         /// 移植自 A 端 Config.cs:265。由 GameScene.GetMagicHelpper 按 MagicType 查找。
         /// </summary>
+        [ConfigPropertyIgnore]
+        [CharacterScoped]
         public static List<MagicHelper> magics { get; set; } = new List<MagicHelper>();
 
         #endregion

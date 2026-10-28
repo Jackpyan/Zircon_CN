@@ -33,6 +33,9 @@ namespace Client
             }
 
             ConfigReader.Save(typeof(Config).Assembly);
+
+            // 按角色的辅助功能配置（[CharacterScoped] 的字段不进 Zircon.ini，单独落盘）
+            Client.Envir.CharacterConfigStore.Save();
         }
 
         static void Init(string[] args)

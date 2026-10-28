@@ -752,6 +752,11 @@ namespace Client.Envir
                         select.Dispose();
                         DXSoundManager.StopAllSounds();
 
+                        // 按角色加载辅助功能配置。
+                        // ⚠ 必须在 new GameScene 之前：GameScene 构造时就会建 BigPatchDialog，
+                        //    各页签控件在构造期读取 Config 的值，晚了就会显示上一个角色的配置。
+                        CharacterConfigStore.Load(p.StartInformation.Name);
+
                         GameScene scene = new GameScene(Config.GameSize);
                         DXControl.ActiveScene = scene;
 
