@@ -327,45 +327,6 @@ namespace Server.DBModels
         }
         private string _BanReason;
 
-        /// <summary>
-        /// 挂机剩余时长（秒），按**账号**持久化。
-        /// 加时间药水（<see cref="ItemEffect.AutoTime"/>）累加；挂机中由服务端每秒回写。
-        /// 移植自 A 端 AccountInfo.AutoTime。
-        /// </summary>
-        public long AutoTime
-        {
-            get { return _AutoTime; }
-            set
-            {
-                if (_AutoTime == value) return;
-
-                var oldValue = _AutoTime;
-                _AutoTime = value;
-
-                OnChanged(oldValue, value, "AutoTime");
-            }
-        }
-        private long _AutoTime;
-
-        /// <summary>
-        /// 上次做「挂机时长月度清零」的月份（yyyyMM）。
-        /// 仅用于每月清零判定，见 PlayerObject.ProcessDetectionMonth。
-        /// </summary>
-        public int AutoTimeMonth
-        {
-            get { return _AutoTimeMonth; }
-            set
-            {
-                if (_AutoTimeMonth == value) return;
-
-                var oldValue = _AutoTimeMonth;
-                _AutoTimeMonth = value;
-
-                OnChanged(oldValue, value, "AutoTimeMonth");
-            }
-        }
-        private int _AutoTimeMonth;
-
         [IgnoreProperty]
         public UserCurrency Gold => Currencies.First(x => x.Info.Type == CurrencyType.Gold);
 

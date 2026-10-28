@@ -174,7 +174,7 @@ namespace Server.Models
 
         /// <summary>
         /// 挂机到期时刻（内存值）。由 <see cref="CharacterInfo.Account"/> 的
-        /// <see cref="AccountInfo.AutoTime"/>（剩余秒数）换算而来。
+        /// <see cref="CharacterInfo.AutoTime"/>（剩余秒数，按角色存）换算而来。
         /// 移植自 A 端 PlayerObject.AutoTime。
         /// </summary>
         public DateTime AutoTime { get; private set; }
@@ -611,7 +611,7 @@ namespace Server.Models
         ///
         /// 规则：
         /// - 只有「开始挂机」勾着（<see cref="AutoSetConf.SetAutoOnHookBox"/>）才扣时间；
-        ///   取消勾选 = 暂停，剩余秒数原样留在 <see cref="AccountInfo.AutoTime"/>。
+        ///   取消勾选 = 暂停，剩余秒数原样留在 <see cref="CharacterInfo.AutoTime"/>。
         /// - 整秒没变化就不发包（避免每帧刷包）。
         /// - 时间耗尽 → 清零 + 自动关挂机 + 提示。
         /// </summary>
@@ -629,16 +629,16 @@ namespace Server.Models
 
             if (remaining > 0)
             {
-                if (Character.Account.AutoTime == remaining) return;   // 整秒没变就不发包
+                if (Character.AutoTime == remaining) return;   // 整秒没变就不发包
 
-                Character.Account.AutoTime = remaining;
+                Character.AutoTime = remaining;
 
                 Enqueue(new S.AutoTimeChanged { AutoTime = remaining });
                 return;
             }
 
             // 时间耗尽：清零 + 关挂机 + 提示
-            Character.Account.AutoTime = 0;
+            Character.AutoTime = 0;
             AutoTime = SEnvir.Now;
 
             setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
@@ -660,13 +660,13 @@ namespace Server.Models
         {
             int month = SEnvir.Now.Year * 100 + SEnvir.Now.Month;
 
-            if (Character.Account.AutoTimeMonth == month) return;
+            if (Character.AutoTimeMonth == month) return;
 
             // 首次记录（AutoTimeMonth == 0）只记月份、不清零，
             // 避免老账号/新账号第一次上线就被清空。
-            if (Character.Account.AutoTimeMonth != 0 && Character.Account.AutoTime > 0)
+            if (Character.AutoTimeMonth != 0 && Character.AutoTime > 0)
             {
-                Character.Account.AutoTime = 0;
+                Character.AutoTime = 0;
                 AutoTime = SEnvir.Now;
 
                 setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
@@ -676,7 +676,7 @@ namespace Server.Models
                 Connection?.ReceiveChat("新的一个月开始了，挂机时长已清零。", MessageType.System);
             }
 
-            Character.Account.AutoTimeMonth = month;
+            Character.AutoTimeMonth = month;
         }
 
         public void ProcessItemExpire()
@@ -1144,7 +1144,7 @@ namespace Server.Models
             //Send Items
 
             // 挂机剩余时长（按账号持久化），客户端用于在「辅助」页显示
-            Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+            Enqueue(new S.AutoTimeChanged { AutoTime = Character.AutoTime });
 
             Connection.ReceiveChatWithObservers(con => con.Language.Welcome, MessageType.Announcement);
 
@@ -6462,11 +6462,11 @@ namespace Server.Models
                     //   但 B 端 Shape 29 已被「瞬息移动」「战刃」占用，改用 ItemEffect 标识。
                     if (item.Info.ItemEffect == ItemEffect.AutoTime)
                     {
-                        Character.Account.AutoTime += item.Info.Durability;
+                        Character.AutoTime += item.Info.Durability;
 
-                        AutoTime = SEnvir.Now.AddSeconds(Character.Account.AutoTime);
+                        AutoTime = SEnvir.Now.AddSeconds(Character.AutoTime);
 
-                        Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+                        Enqueue(new S.AutoTimeChanged { AutoTime = Character.AutoTime });
 
                         RefreshStats();
 
@@ -8667,11 +8667,11 @@ namespace Server.Models
             {
                 // 勾上时「续算」：从此刻起按剩余秒数倒计时；取消只停表，不动剩余秒数
                 if (p.Enabled)
-                    AutoTime = SEnvir.Now.AddSeconds(Character.Account.AutoTime);
+                    AutoTime = SEnvir.Now.AddSeconds(Character.AutoTime);
 
                 setConfArr[(int)p.Slot] = p.Enabled;
 
-                Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+                Enqueue(new S.AutoTimeChanged { AutoTime = Character.AutoTime });
                 return;
             }
 

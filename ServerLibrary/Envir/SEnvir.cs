@@ -4135,6 +4135,11 @@ namespace Server.Envir
                 }
 
                 character.Deleted = true;
+
+                // 角色删除 → 清掉该角色的挂机时长（挂机时长按角色存，不随账号共享）
+                character.AutoTime = 0;
+                character.AutoTimeMonth = 0;
+
                 con.Enqueue(new S.DeleteCharacter { Result = DeleteCharacterResult.Success, DeletedIndex = character.Index });
 
                 Log($"[角色已删除] 角色：{character.CharacterName}，IP 地址：{con.IPAddress}，安全码：{p.CheckSum}");

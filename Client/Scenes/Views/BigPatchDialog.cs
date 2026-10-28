@@ -1929,7 +1929,7 @@ namespace Client.Scenes.Views
                 AndroidPlayer = CreateCheckBox(Android, "开始挂机", x + 170, y, OnHangupToggled, Config.开始挂机);
 
                 // 勾选挂机时的校验见 OnHangupToggled：
-                // ① 挂机时长必须 > 0（服务端 AccountInfo.AutoTime）② 地图必须 AllowRT ③ 发 C.AutoFightConfChanged 让服务端开始倒计时。
+                // ① 挂机时长必须 > 0（服务端 CharacterInfo.AutoTime（按角色存））② 地图必须 AllowRT ③ 发 C.AutoFightConfChanged 让服务端开始倒计时。
 
                 y += 25;
                 AndroidPoisonDust = CreateCheckBox(Android, "自动上毒", x, y,
