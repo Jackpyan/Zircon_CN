@@ -929,6 +929,19 @@ namespace Client.Scenes.Views
                 Mining = false;
             }
 
+            // 挂机 AI：开启后本帧完全由 AI 接管，跳过后续鼠标输入处理
+            // （否则鼠标位置会参与方向计算，导致角色乱走）。
+            //
+            // ⚠ 必须放在下面的「贴身物理攻击」之前：
+            // 那个分支会直接 return，导致挂机 AI 一整帧不执行，
+            // 法师被怪贴脸时只做普通攻击、永远放不出技能。
+            if (Config.开始挂机)
+            {
+                _lastAutoAndroidState = true;
+                ProcessAndroid();
+                return;
+            }
+
             bool haselementalhurricane = MapObject.User.VisibleBuffs.ContainsKey(BuffType.ElementalHurricane);
 
             if (!haselementalhurricane && MapObject.TargetObject != null && !MapObject.TargetObject.Dead && ((MapObject.TargetObject.Race == ObjectType.Monster && string.IsNullOrEmpty(MapObject.TargetObject.PetOwner)) || CEnvir.Shift))
@@ -944,15 +957,6 @@ namespace Client.Scenes.Views
                         Element.None));
                     return;
                 }
-            }
-
-            // 挂机 AI：开启后本帧完全由 AI 接管，跳过后续鼠标输入处理
-            // （否则鼠标位置会参与方向计算，导致角色乱走）。
-            if (Config.开始挂机)
-            {
-                _lastAutoAndroidState = true;
-                ProcessAndroid();
-                return;
             }
 
             if (_lastAutoAndroidState)
@@ -1290,8 +1294,14 @@ namespace Client.Scenes.Views
 
             int distance = Functions.Distance(User.CurrentLocation, target.CurrentLocation);
 
-            // 已经贴身：ProcessInput 上方的攻击分支会处理，这里保持静止等待攻击冷却
-            if (distance <= AndroidAttackRange) return;
+            // 贴身：技能优先（法师/道士被怪贴脸也要放技能），技能放不出来再普通物理攻击
+            if (distance <= AndroidAttackRange)
+            {
+                if (CanCastAutoSkill() && TryAutoSkill()) return;
+
+                AndroidAttack(target);
+                return;
+            }
 
             // 远程挂机：进入射程后优先放技能（技能不可用则继续追击）
             if (Config.是否远战挂机 && Functions.InRange(target.CurrentLocation, User.CurrentLocation, AndroidDetectRange))
@@ -1607,6 +1617,53 @@ namespace Client.Scenes.Views
         /// true  = 本帧行动已被技能流程占用（调用方不要再追击 / 平砍）；
         /// false = 技能不可用（未配置 / 未学会 / 是开关型技能），调用方应回退到普通攻击。
         /// </summary>
+        /// <summary>
+        /// 当前是否真的「能放出」挂机自动技能。
+        /// 与 <see cref="TryAutoSkill"/> 的区别：冷却中 / 蓝不够 / 动作未结束一律返回 false，
+        /// 这样贴身时可以先判断「放不出技能 → 改普通攻击」，而不是站着干等。
+        /// </summary>
+        private bool CanCastAutoSkill()
+        {
+            MagicType type = Config.挂机自动技能;
+
+            if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
+            if (CEnvir.Now < _nextAutoSkillTime) return false;
+
+            if (MapObject.User.ActionQueue != null && MapObject.User.ActionQueue.Count > 0) return false;
+            if (MapObject.User.MagicAction != null) return false;
+
+            ClientUserMagic magic = GameScene.Game.GetMagic(type);
+
+            if (magic == null) return false;                 // 未学会
+            if (CEnvir.Now < magic.NextCast) return false;   // 冷却中
+            if (magic.Cost > User.CurrentMP) return false;   // 蓝不够
+
+            MapObject target = MapObject.TargetObject;
+
+            return target != null && !target.Dead;
+        }
+
+        /// <summary>
+        /// 挂机时对贴身目标做普通物理攻击。
+        /// 挂机分支已经提到 ProcessInput 的「手动攻击」之前，所以这里要自己实现一份，
+        /// 否则近战角色挂机会完全不出手。
+        /// </summary>
+        private void AndroidAttack(MapObject target)
+        {
+            if (target == null || target.Dead) return;
+            if (User.Horse != HorseType.None) return;
+            if (CEnvir.Now <= User.AttackTime) return;
+            if (Functions.Distance(User.CurrentLocation, target.CurrentLocation) > AndroidAttackRange) return;
+
+            MapObject.User.AttemptAction(new ObjectAction(
+                MirAction.Attack,
+                Functions.DirectionFromPoint(User.CurrentLocation, target.CurrentLocation),
+                MapObject.User.CurrentLocation,
+                0, // Ranged Attack Target ID
+                MagicType.None,
+                Element.None));
+        }
+
         private bool TryAutoSkill()
         {
             MagicType type = Config.挂机自动技能;
