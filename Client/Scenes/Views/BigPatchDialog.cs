@@ -1597,6 +1597,9 @@ namespace Client.Scenes.Views
             public DXCheckBox AndroidEluded;
             public DXCheckBox AndroidBackCastle;
             public DXComboBox AndroidSkills;
+
+            /// <summary>挂机群攻技能（周围怪 ≥2 时优先）。</summary>
+            public DXComboBox AndroidSkills2;
             public DXCheckBox AndroidLongRange;
             public DXNumberBox AndroidCoordX;
             public DXNumberBox AndroidCoordY;
@@ -1974,7 +1977,34 @@ namespace Client.Scenes.Views
                     }
                 };
 
-                y += 40;
+                // 群攻技能：周围怪 ≥2 时优先使用（单攻技能照旧）
+                y += 25;
+
+                DXLabel groupSkillTitle = new DXLabel
+                {
+                    Parent = Android,
+                    Text = "群攻",
+                    Outline = true,
+                    Location = new Point(x + 70, y),
+                };
+
+                AndroidSkills2 = new DXComboBox
+                {
+                    Parent = Android,
+                    Size = new Size(120, 18),
+                    Location = new Point(x + 70 + groupSkillTitle.Size.Width + 5, y),
+                };
+                AndroidSkills2.SelectedItemChanged += (o, e) =>
+                {
+                    DXListBoxItem selected = AndroidSkills2.ListBox.SelectedItem;
+
+                    Config.挂机自动技能2 = selected?.Item == null ? MagicType.None : (MagicType)selected.Item;
+                };
+
+                // 原来这里是 y += 40（给上面一行留的空隙）。插入「群攻」一行后拆成 25 + 20，
+                // 下面整体下移 5px（后面还有 50px 余量，不会碰到统计面板）。
+                y += 20;
+
                 DXLabel xTitle = new DXLabel
                 {
                     Parent = Android,
@@ -2364,6 +2394,13 @@ namespace Client.Scenes.Views
                         Label = { Text = info.Name },
                         Item = info.Magic,
                     };
+
+                    new DXListBoxItem
+                    {
+                        Parent = AndroidSkills2.ListBox,
+                        Label = { Text = info.Name },
+                        Item = info.Magic,
+                    };
                 }
 
                 CombSkill1.ListBox.SelectItem(Config.自动技能1);
@@ -2380,6 +2417,12 @@ namespace Client.Scenes.Views
                     AndroidSkills.ListBox.SelectItem(null);
                 else
                     AndroidSkills.ListBox.SelectItem(Config.挂机自动技能);
+
+                // 群攻技能：存的是开关型技能时同样重置
+                if (Config.挂机自动技能2 != MagicType.None && MapControl.NonAutoSkillMagics.Contains(Config.挂机自动技能2))
+                    Config.挂机自动技能2 = MagicType.None;
+
+                AndroidSkills2.ListBox.SelectItem(Config.挂机自动技能2 == MagicType.None ? null : (object)Config.挂机自动技能2);
             }
 
             /// <summary>
@@ -2489,6 +2532,31 @@ namespace Client.Scenes.Views
             {
                 if (scene?.User == null) return false;
                 if (scene.GetMagic(type) == null) return false;
+
+                MapControl map = scene.MapControl;
+
+                // 地面指向技能（火墙 / 施毒 / 疾风剑 …）取 MapLocation 作为施法点，
+                // 自动施法时鼠标位置不可控 → 临时指向目标格（自身/队伍类指向自己脚下），
+                // 调用完立刻还原。与挂机路径（MapControl.TryAutoSkill）保持同一套做法。
+                if (map != null && MapControl.IsGroundTargetMagic(type))
+                {
+                    Point oldMapLocation = map.MapLocation;
+
+                    map.MapLocation = MapControl.IsSelfCenteredMagic(type)
+                        ? scene.User.CurrentLocation
+                        : target?.CurrentLocation ?? scene.User.CurrentLocation;
+
+                    try
+                    {
+                        scene.UseMagic(type, target);
+                    }
+                    finally
+                    {
+                        map.MapLocation = oldMapLocation;
+                    }
+
+                    return true;
+                }
 
                 scene.UseMagic(type, target);
                 return true;

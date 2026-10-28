@@ -1262,6 +1262,9 @@ namespace Client.Scenes.Views
             if (!combatNearby && Config.快速自动拾取 && TryAndroidLoot())
                 return;
 
+            // 道士挂机：宝宝没了就补召
+            if (TrySummonPet()) return;
+
             MapObject target = MapObject.TargetObject;
 
             // 目标失效（死亡 / 不可攻击 / 跑太远 / 出了范围挂机区域）→ 丢弃重选
@@ -1294,9 +1297,13 @@ namespace Client.Scenes.Views
 
             int distance = Functions.Distance(User.CurrentLocation, target.CurrentLocation);
 
-            // 贴身：技能优先（法师/道士被怪贴脸也要放技能），技能放不出来再普通物理攻击
             if (distance <= AndroidAttackRange)
             {
+                // 远程职业被贴身 → 先退一步（放风筝），退不动再考虑输出。
+                // 开关沿用「自动躲避」与「法系挂机」：勾了任一才退，避免战士挂机乱跑。
+                if ((Config.自动躲避 || Config.是否远战挂机) && TryStepAway(target)) return;
+
+                // 贴身：技能优先（法师/道士被怪贴脸也要放技能），放不出来再普通物理攻击
                 if (CanCastAutoSkill() && TryAutoSkill()) return;
 
                 AndroidAttack(target);
@@ -1618,13 +1625,142 @@ namespace Client.Scenes.Views
         /// false = 技能不可用（未配置 / 未学会 / 是开关型技能），调用方应回退到普通攻击。
         /// </summary>
         /// <summary>
+        /// 放一个指定技能（不看「挂机自动技能」配置），用于召唤等辅助行为。
+        /// 返回 true 表示已经发出施法动作。
+        /// </summary>
+        private bool TryCastMagic(MagicType type)
+        {
+            if (type == MagicType.None) return false;
+
+            ClientUserMagic magic = GameScene.Game.GetMagic(type);
+
+            if (magic == null) return false;                 // 未学会
+            if (CEnvir.Now < magic.NextCast) return false;   // 冷却中
+            if (magic.Cost > User.CurrentMP) return false;   // 蓝不够
+
+            if (MapObject.User.MagicAction != null) return false;
+            if (MapObject.User.ActionQueue != null && MapObject.User.ActionQueue.Count > 0) return false;
+
+            GameScene.Game.UseMagic(type);
+            return true;
+        }
+
+        /// <summary>
+        /// 道士挂机：场上没有自己的宝宝时自动召唤（先骷髅、后神兽）。
+        /// 其它职业直接返回 false。
+        /// </summary>
+        private bool TrySummonPet()
+        {
+            if (User.Class != MirClass.Taoist) return false;
+
+            // 场上已有自己的宝宝 → 不用召
+            if (Objects != null)
+            {
+                foreach (MapObject ob in Objects)
+                {
+                    if (ob == null || ob.Dead) continue;
+                    if (ob.Race != ObjectType.Monster) continue;
+                    if (ob.PetOwner != User.Name) continue;
+
+                    return false;
+                }
+            }
+
+            return TryCastMagic(MagicType.SummonSkeleton)
+                || TryCastMagic(MagicType.SummonShinsu);
+        }
+
+        /// <summary>
+        /// 朝「远离威胁」的方向走一步（远程职业放风筝）。
+        /// 只走一格，且不会走出范围挂机的区域；找不到更好的格子就返回 false。
+        /// </summary>
+        private bool TryStepAway(MapObject threat)
+        {
+            if (threat == null) return false;
+            if (!GameScene.Game.MoveFrame) return false;
+            if ((User.Poison & PoisonType.WraithGrip) == PoisonType.WraithGrip) return false;
+
+            int currentDistance = Functions.Distance(User.CurrentLocation, threat.CurrentLocation);
+
+            MirDirection best = MirDirection.Up;
+            int bestDistance = currentDistance;
+
+            for (MirDirection dir = MirDirection.Up; dir <= MirDirection.UpLeft; dir++)
+            {
+                if (!CanMove(dir, 1)) continue;
+
+                Point next = Functions.Move(User.CurrentLocation, dir, 1);
+
+                if (!EmptyCell(next)) continue;
+                if (!InAndroidRange(next)) continue;
+
+                int distance = Functions.Distance(next, threat.CurrentLocation);
+
+                if (distance <= bestDistance) continue;
+
+                bestDistance = distance;
+                best = dir;
+            }
+
+            if (bestDistance <= currentDistance) return false;   // 退无可退（被逼到角落）
+
+            MapObject.User.AttemptAction(new ObjectAction(
+                MirAction.Moving, best, Functions.Move(User.CurrentLocation, best, 1), 1, MagicType.None));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 当前该用哪个挂机技能：
+        /// 周围怪 ≥2 且配了群攻技能（已学会、未被黑名单排除）→ 用群攻，否则用单攻技能。
+        /// </summary>
+        private MagicType PickAutoSkillType()
+        {
+            MagicType group = Config.挂机自动技能2;
+
+            if (group != MagicType.None
+                && !NonAutoSkillMagics.Contains(group)
+                && CountNearbyMonsters(AndroidDetectRange) >= 2)
+            {
+                ClientUserMagic groupMagic = GameScene.Game.GetMagic(group);
+
+                // 群攻技能冷却中 / 蓝不够 → 退回单攻技能，避免干等
+                if (groupMagic != null && CEnvir.Now >= groupMagic.NextCast && groupMagic.Cost <= User.CurrentMP)
+                    return group;
+            }
+
+            return Config.挂机自动技能;
+        }
+
+        /// <summary>统计范围内的可攻击怪物数量（不含他人宝宝）。</summary>
+        private int CountNearbyMonsters(int range)
+        {
+            if (Objects == null) return 0;
+
+            int count = 0;
+
+            foreach (MapObject ob in Objects)
+            {
+                if (ob == null || ob.Dead || ob == User) continue;
+                if (ob.Race != ObjectType.Monster) continue;
+                if (!string.IsNullOrEmpty(ob.PetOwner)) continue;
+                if (!GameScene.Game.CanAttackTarget(ob)) continue;
+                if (Functions.Distance(User.CurrentLocation, ob.CurrentLocation) > range) continue;
+
+                count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
         /// 当前是否真的「能放出」挂机自动技能。
         /// 与 <see cref="TryAutoSkill"/> 的区别：冷却中 / 蓝不够 / 动作未结束一律返回 false，
         /// 这样贴身时可以先判断「放不出技能 → 改普通攻击」，而不是站着干等。
         /// </summary>
         private bool CanCastAutoSkill()
         {
-            MagicType type = Config.挂机自动技能;
+            MagicType type = PickAutoSkillType();
 
             if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
             if (CEnvir.Now < _nextAutoSkillTime) return false;
@@ -1666,7 +1802,7 @@ namespace Client.Scenes.Views
 
         private bool TryAutoSkill()
         {
-            MagicType type = Config.挂机自动技能;
+            MagicType type = PickAutoSkillType();
 
             if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
 
@@ -1725,7 +1861,7 @@ namespace Client.Scenes.Views
         /// 1. 用 MapLocation 做距离校验的那组；2. targetLocation 直接取 MapLocation 的那组。
         /// 仅用于挂机施法，不影响手动释放。
         /// </summary>
-        private static bool IsGroundTargetMagic(MagicType type)
+        public static bool IsGroundTargetMagic(MagicType type)
         {
             switch (type)
             {
@@ -1773,7 +1909,7 @@ namespace Client.Scenes.Views
         /// 以「自己脚下」为施法点的技能（自身 / 队伍范围效果）。
         /// 挂机时不该指向怪物格。
         /// </summary>
-        private static bool IsSelfCenteredMagic(MagicType type)
+        public static bool IsSelfCenteredMagic(MagicType type)
         {
             switch (type)
             {

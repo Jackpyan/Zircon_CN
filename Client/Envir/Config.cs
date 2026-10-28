@@ -243,6 +243,9 @@ namespace Client.Envir
         public static bool 是否远战挂机 { get; set; } = false;
         public static bool 远战挂机是否使用技能 { get; set; } = false;
         public static MagicType 挂机自动技能 { get; set; } = MagicType.None;
+
+        /// <summary>挂机群攻技能：周围怪 ≥2 时优先使用；None 表示不用。</summary>
+        public static MagicType 挂机自动技能2 { get; set; } = MagicType.None;
         public static Point 范围挂机坐标 { get; set; } = Point.Empty;
         public static long 范围距离 { get; set; } = 0;
         public static bool 范围挂机 { get; set; } = false;
