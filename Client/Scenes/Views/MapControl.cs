@@ -1631,10 +1631,108 @@ namespace Client.Scenes.Views
             // 显式传入目标：挂机时鼠标多半不在目标身上，
             // UseMagic(type) 默认会打 MouseObject，导致技能打空/打错。
             MapObject.MagicObject = target;
-            GameScene.Game.UseMagic(type, target);
+
+            if (IsGroundTargetMagic(type))
+            {
+                // 有一类技能不是锁定目标，而是「打鼠标所指的地面」（火墙 / 流星 / 施毒 …），
+                // 施法点取 MapControl.MapLocation。挂机时鼠标位置不可控，技能会打空。
+                //
+                // 这里只临时把 MapLocation 指向目标格，调用完立刻还原：
+                // GameScene.UseMagic 一个字都不用改，非挂机玩家完全不受影响。
+                // 自身/队伍类技能（群体治愈、隐身、魔防…）指向自己脚下而不是怪物格。
+                Point oldMapLocation = MapLocation;
+
+                MapLocation = IsSelfCenteredMagic(type) ? User.CurrentLocation : target.CurrentLocation;
+
+                try
+                {
+                    GameScene.Game.UseMagic(type, target);
+                }
+                finally
+                {
+                    MapLocation = oldMapLocation;
+                }
+            }
+            else
+            {
+                GameScene.Game.UseMagic(type, target);
+            }
 
             _nextAutoSkillTime = CEnvir.Now.AddMilliseconds(600);
             return true;
+        }
+
+        /// <summary>
+        /// 该技能是否「打鼠标所指的地面」而不是锁定目标。
+        /// 分类依据 GameScene.UseMagic 里现成的两处 switch：
+        /// 1. 用 MapLocation 做距离校验的那组；2. targetLocation 直接取 MapLocation 的那组。
+        /// 仅用于挂机施法，不影响手动释放。
+        /// </summary>
+        private static bool IsGroundTargetMagic(MagicType type)
+        {
+            switch (type)
+            {
+                // —— 以地图位置为施法点 ——
+                case MagicType.SwiftBlade:
+                case MagicType.FireWall:
+                case MagicType.FireStorm:
+                case MagicType.LightningWave:
+                case MagicType.IceStorm:
+                case MagicType.DragonTornado:
+                case MagicType.GeoManipulation:
+                case MagicType.Transparency:
+                case MagicType.MeteorShower:
+                case MagicType.Tempest:
+                case MagicType.Asteroid:
+                case MagicType.Tornado:
+                case MagicType.MagicResistance:
+                case MagicType.Resilience:
+                case MagicType.LifeSteal:
+                case MagicType.MassInvisibility:
+                case MagicType.TrapOctagon:
+                case MagicType.ElementalSuperiority:
+                case MagicType.BloodLust:
+                case MagicType.MassHeal:
+                case MagicType.BurningFire:
+
+                // —— targetLocation 强制取地图位置（道士符咒/施毒类）——
+                case MagicType.Purification:
+                case MagicType.EvilSlayer:
+                case MagicType.GreaterEvilSlayer:
+                case MagicType.ExplosiveTalisman:
+                case MagicType.ImprovedExplosiveTalisman:
+                case MagicType.PoisonDust:
+                case MagicType.Neutralize:
+                case MagicType.BindingTalisman:
+                case MagicType.BrainStorm:
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// 以「自己脚下」为施法点的技能（自身 / 队伍范围效果）。
+        /// 挂机时不该指向怪物格。
+        /// </summary>
+        private static bool IsSelfCenteredMagic(MagicType type)
+        {
+            switch (type)
+            {
+                case MagicType.Transparency:
+                case MagicType.MagicResistance:
+                case MagicType.Resilience:
+                case MagicType.MassInvisibility:
+                case MagicType.ElementalSuperiority:
+                case MagicType.BloodLust:
+                case MagicType.MassHeal:
+                case MagicType.LifeSteal:
+                    return true;
+
+                default:
+                    return false;
+            }
         }
 
         #endregion
