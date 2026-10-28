@@ -381,6 +381,7 @@ namespace Server.Envir
         public static DBCollection<CharacterInfo> CharacterInfoList;
         public static DBCollection<CharacterBeltLink> BeltLinkList;
         public static DBCollection<AutoPotionLink> AutoPotionLinkList;
+        public static DBCollection<AutoFightConfig> AutoFightConfList;
         public static DBCollection<UserItem> UserItemList;
         public static DBCollection<UserCurrency> UserCurrencyList;
         public static DBCollection<RefineInfo> RefineInfoList;
@@ -603,6 +604,7 @@ namespace Server.Envir
             CharacterInfoList = Session.GetCollection<CharacterInfo>();
             BeltLinkList = Session.GetCollection<CharacterBeltLink>();
             AutoPotionLinkList = Session.GetCollection<AutoPotionLink>();
+            AutoFightConfList = Session.GetCollection<AutoFightConfig>();
             UserItemList = Session.GetCollection<UserItem>();
             UserCurrencyList = Session.GetCollection<UserCurrency>();
             UserItemStatsList = Session.GetCollection<UserItemStat>();
@@ -1420,6 +1422,7 @@ namespace Server.Envir
 
             BeltLinkList = null;
             AutoPotionLinkList = null;
+            AutoFightConfList = null;
             UserItemList = null;
             UserCurrencyList = null;
             RefineInfoList = null;

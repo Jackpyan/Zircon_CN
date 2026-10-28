@@ -59,6 +59,28 @@ namespace Client.Models
         private int _level;
         #endregion
 
+        #region AutoTime
+
+        /// <summary>
+        /// 账号剩余挂机时长（秒）。由服务端 <see cref="S.AutoTimeChanged"/> 下发。
+        /// 0 表示不能挂机，需要使用「挂机时间药水」补充。
+        /// </summary>
+        public long AutoTime
+        {
+            get { return _AutoTime; }
+            set
+            {
+                if (_AutoTime == value) return;
+
+                _AutoTime = value;
+
+                GameScene.Game?.AutoTimeChanged();
+            }
+        }
+        private long _AutoTime;
+
+        #endregion
+
         #region Class
         public override MirClass Class
         {

@@ -168,6 +168,27 @@ namespace Server.Models
         public MagicList MagicObjects = new MagicList();
 
         public List<AutoPotionLink> AutoPotions = new List<AutoPotionLink>();
+
+        /// <summary>辅助功能（自动战斗）各开关的持久化配置。</summary>
+        public List<AutoFightConfig> AutoFights = new List<AutoFightConfig>();
+
+        /// <summary>
+        /// 挂机到期时刻（内存值）。由 <see cref="CharacterInfo.Account"/> 的
+        /// <see cref="AccountInfo.AutoTime"/>（剩余秒数）换算而来。
+        /// 移植自 A 端 PlayerObject.AutoTime。
+        /// </summary>
+        public DateTime AutoTime { get; private set; }
+
+        /// <summary>
+        /// 自动战斗开关数组，索引为 <see cref="AutoSetConf"/>。
+        /// 其中 <see cref="AutoSetConf.SetAutoOnHookBox"/>（挂机总开关）**不写库**。
+        /// </summary>
+        /// <summary>
+        /// 与 A 端一致用 60（AutoSetConf 里 36/37 已超出 SetMaxConf=35，
+        /// 数组开小了会在后续扩展时越界）。
+        /// </summary>
+        public bool[] setConfArr = new bool[60];
+
         public CellLinkInfo DelayItemUse;
         public decimal MaxExperience, ExperienceAccumulated;
 
@@ -224,6 +245,17 @@ namespace Server.Models
             AutoPotions.AddRange(Character.AutoPotionLinks);
 
             AutoPotions.Sort((x1, x2) => x1.Slot.CompareTo(x2.Slot));
+
+            // 载入自动战斗开关配置（挂机总开关除外，见 AutoFightConfChanged）
+            AutoFights.AddRange(Character.AutoFightLinks);
+
+            foreach (AutoFightConfig link in AutoFights)
+            {
+                if ((int)link.Slot < 0 || (int)link.Slot >= setConfArr.Length) continue;
+                if (link.Slot == AutoSetConf.SetAutoOnHookBox) continue;
+
+                setConfArr[(int)link.Slot] = link.Enabled;
+            }
 
             if (Character.Account.Admin || Character.Account.TempAdmin)
             {
@@ -342,6 +374,8 @@ namespace Server.Models
             ProcessAutoPotion();
 
             ProcessItemExpire();
+
+            ProcessAutoTime();
 
             ProcessQuests();
 
@@ -569,6 +603,77 @@ namespace Server.Models
             }
 
             AutoPotionCheckTime = SEnvir.Now.AddMilliseconds(200);
+        }
+
+        /// <summary>
+        /// 挂机时长倒计时。
+        /// 移植自 A 端 PlayerObject.ProcessSkill() 里的计时部分。
+        ///
+        /// 规则：
+        /// - 只有「开始挂机」勾着（<see cref="AutoSetConf.SetAutoOnHookBox"/>）才扣时间；
+        ///   取消勾选 = 暂停，剩余秒数原样留在 <see cref="AccountInfo.AutoTime"/>。
+        /// - 整秒没变化就不发包（避免每帧刷包）。
+        /// - 时间耗尽 → 清零 + 自动关挂机 + 提示。
+        /// </summary>
+        private void ProcessAutoTime()
+        {
+            ProcessAutoTimeMonthlyReset();
+
+            if (!setConfArr[(int)AutoSetConf.SetAutoOnHookBox]) return;
+            if (Dead) return;
+
+            if (AutoTime > SEnvir.Now)
+            {
+                long oldValue = Character.Account.AutoTime;
+
+                Character.Account.AutoTime = (long)(AutoTime - SEnvir.Now).TotalSeconds;
+
+                if (Character.Account.AutoTime == oldValue) return;
+
+                Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+            }
+            else
+            {
+                Character.Account.AutoTime = 0;
+                AutoTime = SEnvir.Now;
+
+                setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
+
+                Enqueue(new S.AutoTimeChanged { AutoTime = 0 });
+
+                Connection?.ReceiveChat("挂机时间已用完，已自动结束挂机。请使用挂机时间药水补充。", MessageType.System);
+            }
+        }
+
+        /// <summary>
+        /// 挂机时长「每月清零」。
+        /// 移植自 A 端 ProcessDetectionMonth()（A 端用 Account.FlashTime 的月份变化判定）；
+        /// B 端 AccountInfo 没有 FlashTime，改用 AutoTimeMonth（yyyyMM）记录上次清零的月份。
+        ///
+        /// ⚠ 如需取消每月清零：注释掉 ProcessAutoTime() 里的
+        ///   `ProcessAutoTimeMonthlyReset();` 这一行即可（或把本方法体清空）。
+        /// </summary>
+        private void ProcessAutoTimeMonthlyReset()
+        {
+            int month = SEnvir.Now.Year * 100 + SEnvir.Now.Month;
+
+            if (Character.Account.AutoTimeMonth == month) return;
+
+            // 首次记录（AutoTimeMonth == 0）只记月份、不清零，
+            // 避免老账号/新账号第一次上线就被清空。
+            if (Character.Account.AutoTimeMonth != 0 && Character.Account.AutoTime > 0)
+            {
+                Character.Account.AutoTime = 0;
+                AutoTime = SEnvir.Now;
+
+                setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
+
+                Enqueue(new S.AutoTimeChanged { AutoTime = 0 });
+
+                Connection?.ReceiveChat("新的一个月开始了，挂机时长已清零。", MessageType.System);
+            }
+
+            Character.Account.AutoTimeMonth = month;
         }
 
         public void ProcessItemExpire()
@@ -1034,6 +1139,9 @@ namespace Server.Models
 
             Enqueue(new S.StartGame { Result = StartGameResult.Success, StartInformation = GetStartInformation() });
             //Send Items
+
+            // 挂机剩余时长（按账号持久化），客户端用于在「辅助」页显示
+            Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
 
             Connection.ReceiveChatWithObservers(con => con.Language.Welcome, MessageType.Announcement);
 
@@ -1518,6 +1626,7 @@ namespace Server.Models
             TradeItems?.Clear();
 
             AutoPotions?.Clear();
+            AutoFights?.Clear();
         }
 
         #endregion
@@ -6345,6 +6454,26 @@ namespace Server.Models
                 case ItemType.Consumable:
                     if ((SEnvir.Now < UseItemTime && item.Info.ItemEffect != ItemEffect.ElixirOfPurification)) return;
 
+                    // ★ 挂机时间药水：按 Durability（秒）累加账号挂机时长。
+                    //   移植自 A 端 PlayerObject.cs 的 `switch (item.Info.Shape) case 29`，
+                    //   但 B 端 Shape 29 已被「瞬息移动」「战刃」占用，改用 ItemEffect 标识。
+                    if (item.Info.ItemEffect == ItemEffect.AutoTime)
+                    {
+                        Character.Account.AutoTime += item.Info.Durability;
+
+                        AutoTime = SEnvir.Now.AddSeconds(Character.Account.AutoTime);
+
+                        Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+
+                        RefreshStats();
+
+                        // 与其它消耗品一致地设置使用间隔，然后跳出 ItemType 的 switch，
+                        // 由方法末尾统一扣数量 / RemoveItem。
+                        UseItemTime = SEnvir.Now.AddMilliseconds(Math.Max(item.Info.Durability, 250));
+                        AutoPotionCheckTime = UseItemTime.AddMilliseconds(500);
+                        break;
+                    }
+
                     bool work;
                     bool hasSpace;
                     UserItem weapon;
@@ -8517,6 +8646,52 @@ namespace Server.Models
 
             AutoPotions.Add(aLink);
             AutoPotions.Sort((x1, x2) => x1.Slot.CompareTo(x2.Slot));
+        }
+
+        /// <summary>
+        /// 辅助功能（自动战斗）开关变化。
+        /// 移植自 A 端 PlayerObject.AutoFightConfChanged。
+        ///
+        /// 注意：挂机总开关（<see cref="AutoSetConf.SetAutoOnHookBox"/>）**不写库**，
+        /// 只在内存里改 <see cref="setConfArr"/>，避免重登后自动继续挂机扣时。
+        /// </summary>
+        public void AutoFightConfChanged(C.AutoFightConfChanged p)
+        {
+            if (p.Slot >= AutoSetConf.SetMaxConf) return;
+
+            if (p.Slot == AutoSetConf.SetAutoOnHookBox)
+            {
+                // 勾上时「续算」：从此刻起按剩余秒数倒计时；取消只停表，不动剩余秒数
+                if (p.Enabled)
+                    AutoTime = SEnvir.Now.AddSeconds(Character.Account.AutoTime);
+
+                setConfArr[(int)p.Slot] = p.Enabled;
+
+                Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+                return;
+            }
+
+            setConfArr[(int)p.Slot] = p.Enabled;
+
+            foreach (AutoFightConfig link in Character.AutoFightLinks)
+            {
+                if (link.Slot != p.Slot) continue;
+
+                link.MagicIndex = p.MagicIndex;
+                link.TimeCount = p.TimeCount;
+                link.Enabled = p.Enabled;
+                return;
+            }
+
+            AutoFightConfig newObject = SEnvir.AutoFightConfList.CreateNewObject();
+
+            newObject.Character = Character;
+            newObject.Slot = p.Slot;
+            newObject.MagicIndex = p.MagicIndex;
+            newObject.TimeCount = p.TimeCount;
+            newObject.Enabled = p.Enabled;
+
+            AutoFights.Add(newObject);
         }
         public void PickUp()
         {

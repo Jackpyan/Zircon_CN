@@ -822,6 +822,18 @@ namespace Library
     }
 
     /// <summary>
+    /// 辅助功能（自动战斗）单项配置，服务端持久化后回传给客户端。
+    /// 移植自 A 端 zircon-legend-library\Library\Globals.cs。
+    /// </summary>
+    public sealed class ClientAutoFightLink
+    {
+        public AutoSetConf Slot { get; set; }
+        public MagicType MagicIndex { get; set; }
+        public int TimeCount { get; set; }
+        public bool Enabled { get; set; }
+    }
+
+    /// <summary>
     /// 技能辅助配置项（自动换符/换毒、施法目标限制）。
     /// 移植自 A 端 zircon-legend-library\Library\Globals.cs:1186-1201。
     /// 由 Config.magics 持有，GameScene.GetMagicHelpper 按 TypeID 查找。

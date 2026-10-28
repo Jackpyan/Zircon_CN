@@ -568,6 +568,12 @@ namespace Server.Envir
 
             Player.PickUp(p.Location);
         }
+        public void Process(C.AutoFightConfChanged p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.AutoFightConfChanged(p);
+        }
         public void Process(C.CurrencyDrop p)
         {
             if (Stage != GameStage.Game) return;

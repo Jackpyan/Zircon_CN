@@ -2042,6 +2042,9 @@ namespace Client.Envir
             }
             else
                 GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperience, p.Amount), MessageType.Combat);
+
+            // 辅助页统计面板（纯显示）
+            GameScene.Game.BigPatchBox?.Helper?.GainedExperience(p.Amount);
         }
 
         public void Process(S.ObjectLeveled p)
@@ -2250,12 +2253,26 @@ namespace Client.Envir
         {
             var currency = GameScene.Game.User.Currencies.First(x => x.Info.Index == p.CurrencyIndex);
 
+            decimal oldAmount = currency.Amount;
+
             currency.Amount = p.Amount;
 
             GameScene.Game.CurrencyChanged();
 
+            // 辅助页统计面板（纯显示）：只统计增加的部分
+            decimal gained = p.Amount - oldAmount;
+
             if (currency.Info.Type == CurrencyType.Gold)
+            {
+                if (gained > 0)
+                    GameScene.Game.BigPatchBox?.Helper?.GainedGold(gained);
+
                 DXSoundManager.Play(SoundIndex.GoldGained);
+            }
+            else if (currency.Info.Type == CurrencyType.HuntGold && gained > 0)
+            {
+                GameScene.Game.BigPatchBox?.Helper?.GainedHuntGold(gained);
+            }
         }
 
         public void Process(S.ItemChanged p)
@@ -2747,6 +2764,13 @@ namespace Client.Envir
             cell.Item.Flags = p.Flags;
 
             cell.RefreshItem();
+        }
+
+        public void Process(S.AutoTimeChanged p)
+        {
+            if (GameScene.Game?.User == null) return;
+
+            GameScene.Game.User.AutoTime = p.AutoTime;
         }
 
         public void Process(S.Chat p)

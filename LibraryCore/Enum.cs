@@ -1871,7 +1871,14 @@ namespace Library
         RefineExtractor = 92,
 
         DualWield = 100,
-        MagicRing = 101
+        MagicRing = 101,
+
+        /// <summary>
+        /// 挂机时间药水：使用后按 <see cref="ItemInfo.Durability"/>（秒）累加账号挂机时长。
+        /// 移植自 A 端「Shape == 29」的判定，但 A 端 Shape 29 在 B 端已被
+        /// 「瞬息移动」(Book) 与「战刃」(Weapon) 占用，因此改用独立 ItemEffect 标识。
+        /// </summary>
+        AutoTime = 110
     }
 
     public enum BundleType

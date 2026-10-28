@@ -190,6 +190,9 @@ namespace Client.Scenes.Views
 
             // 魔法页：把已学技能同步到 Config.magics（自动换符的数据源）
             Magic?.UpdateMagic();
+
+            // 挂机剩余时长（服务端在登录时下发，这里兜底刷新一次）
+            OnTimerChanged(GameScene.Game?.User?.AutoTime ?? 0);
         }
 
         #region 拾取过滤
@@ -405,15 +408,23 @@ namespace Client.Scenes.Views
 
         /// <summary>
         /// 挂机剩余时间更新。移植自 A端 BigPatchDialog.cs:189-217。
-        /// ⚠️ B端没有 S.AutoTimeChanged 包，本方法暂无人调用，
-        /// 剩余时间标签会一直显示「0 小时 0 分钟 0 秒」，等阶段 6 补包后接入。
+        /// 由 <see cref="GameScene.AutoTimeChanged"/> 调用（服务端 <c>S.AutoTimeChanged</c> 驱动）。
+        /// 时间归零时自动取消勾选，保证 UI 与服务端状态一致。
         /// </summary>
         public void OnTimerChanged(long autoTime)
         {
             if (Helper?.TimeLable == null) return;
 
             TimeSpan timeSpan = new TimeSpan(0, 0, (int)autoTime);
+
             Helper.TimeLable.Text = $"{timeSpan.Hours + timeSpan.Days * 24} 小时 {timeSpan.Minutes} 分钟 {timeSpan.Seconds} 秒";
+
+            if (autoTime > 0) return;
+            if (Helper.AndroidPlayer == null || !Helper.AndroidPlayer.Checked) return;
+
+            // 时间耗尽：服务端已自动关挂机，客户端同步取消勾选（静默，避免再发一次包）
+            Helper.AndroidPlayer.SetSilentState(false);
+            Config.开始挂机 = false;
         }
 
         #endregion
@@ -1917,8 +1928,8 @@ namespace Client.Scenes.Views
 
                 AndroidPlayer = CreateCheckBox(Android, "开始挂机", x + 170, y, OnHangupToggled, Config.开始挂机);
 
-                // 注：A端此处会检查 User.AutoTime 与地图 AllowRT 后发包启动挂机 AI。
-                // B端没有 User.AutoTime 字段，也没有挂机 AI（阶段 4b），故仅保留地图检查。
+                // 勾选挂机时的校验见 OnHangupToggled：
+                // ① 挂机时长必须 > 0（服务端 AccountInfo.AutoTime）② 地图必须 AllowRT ③ 发 C.AutoFightConfChanged 让服务端开始倒计时。
 
                 y += 25;
                 AndroidPoisonDust = CreateCheckBox(Android, "自动上毒", x, y,
@@ -2156,22 +2167,54 @@ namespace Client.Scenes.Views
             /// </summary>
             private void OnHangupToggled(object sender, EventArgs e)
             {
-                Config.开始挂机 = AndroidPlayer.Checked;
+                bool enabled = AndroidPlayer.Checked;
 
-                if (!AndroidPlayer.Checked) return;
+                Config.开始挂机 = enabled;
 
-                // 挂机 AI 接管移动。B 端 ProcessInput 只在 AutoPathRoute == null 时才被调用，
-                // 若此时存在服务端下发的自动寻路，必须先取消，否则挂机不会生效。
-                GameScene.Game?.CancelAutoPath();
-
-                MapInfo mapInfo = GameScene.Game?.MapControl?.MapInfo;
-                if (mapInfo != null && !mapInfo.AllowRT)
+                // 取消勾选：只让服务端停表，剩余秒数原样保留
+                if (!enabled)
                 {
-                    // 不允许挂机的地图，直接撤销勾选（用 SetSilentState 避免重入触发一次多余的「结束挂机」）
+                    CEnvir.Enqueue(new C.AutoFightConfChanged
+                    {
+                        Slot = AutoSetConf.SetAutoOnHookBox,
+                        Enabled = false,
+                    });
+                    return;
+                }
+
+                // ① 没有挂机时长 → 不能挂机
+                long autoTime = GameScene.Game?.User?.AutoTime ?? 0;
+
+                if (autoTime <= 0)
+                {
                     AndroidPlayer.SetSilentState(false);
                     Config.开始挂机 = false;
-                    GameScene.Game.ReceiveChat("目前您在不允许使用自动打怪功能的地图，因此不能挂机", MessageType.System);
+                    GameScene.Game?.ReceiveChat("挂机时间为 0，无法挂机。请使用「挂机时间药水」补充时长。", MessageType.System);
+                    return;
                 }
+
+                // ② 不允许挂机的地图 → 撤销勾选
+                MapInfo mapInfo = GameScene.Game?.MapControl?.MapInfo;
+
+                if (mapInfo != null && !mapInfo.AllowRT)
+                {
+                    // 用 SetSilentState 避免重入触发一次多余的「结束挂机」
+                    AndroidPlayer.SetSilentState(false);
+                    Config.开始挂机 = false;
+                    GameScene.Game?.ReceiveChat("目前您在不允许使用自动打怪功能的地图，因此不能挂机", MessageType.System);
+                    return;
+                }
+
+                // ③ 挂机 AI 接管移动。B 端 ProcessInput 只在 AutoPathRoute == null 时才被调用，
+                //    若此时存在服务端下发的自动寻路，必须先取消，否则挂机不会生效。
+                GameScene.Game?.CancelAutoPath();
+
+                // ④ 通知服务端开始倒计时
+                CEnvir.Enqueue(new C.AutoFightConfChanged
+                {
+                    Slot = AutoSetConf.SetAutoOnHookBox,
+                    Enabled = true,
+                });
             }
 
             #endregion
@@ -2224,8 +2267,8 @@ namespace Client.Scenes.Views
             }
 
             /// <summary>
-            /// 由 GameScene 在获得经验时调用。
-            /// ⚠️ 阶段 4 尚未接入调用点，统计面板会一直显示 0，等阶段 4b 一起接。
+            /// 由 <c>CConnection.Process(S.GainedExperience)</c> 调用（纯显示，不参与逻辑）。
+            /// ⚠️ A 端把 `skilledCount++` 同时用于比较和统计，有副作用；这里已拆开。
             /// </summary>
             public void GainedExperience(decimal amount)
             {
@@ -2244,7 +2287,7 @@ namespace Client.Scenes.Views
                 SummerLabelExfen.Text = $"分钟经验:{totalExperience / minutes:#,##0}";
             }
 
-            /// <summary>由 GameScene 在获得金币时调用（阶段 4b 接入）。</summary>
+            /// <summary>由 <c>CConnection.Process(S.CurrencyChanged)</c> 在金币增加时调用。</summary>
             public void GainedGold(decimal amount)
             {
                 TimeSpan elapsed = DateTime.Now - LastTimes;
@@ -2255,7 +2298,7 @@ namespace Client.Scenes.Views
                 SummerLabelGoldfen.Text = $"分钟金币:{totalGold / minutes:#,##0}";
             }
 
-            /// <summary>由 GameScene 在获得赏金时调用（阶段 4b 接入）。</summary>
+            /// <summary>由 <c>CConnection.Process(S.CurrencyChanged)</c> 在赏金增加时调用。</summary>
             public void GainedHuntGold(decimal amount)
             {
                 TimeSpan elapsed = DateTime.Now - LastTimes;

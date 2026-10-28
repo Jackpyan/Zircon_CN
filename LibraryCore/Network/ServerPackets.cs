@@ -644,6 +644,15 @@ namespace Library.Network.ServerPackets
         public bool OverheadOnly { get; set; }
     }
 
+    /// <summary>
+    /// 账号剩余挂机时长（秒）。登录时下发一次，喝药加时、倒计时整秒变化、耗尽时再下发。
+    /// 移植自 A 端 ServerPackets.AutoTimeChanged。
+    /// </summary>
+    public sealed class AutoTimeChanged : Packet
+    {
+        public long AutoTime { get; set; }
+    }
+
     public sealed class NPCResponse : Packet
     {
         public uint ObjectID { get; set; }

@@ -4310,6 +4310,12 @@ namespace Client.Scenes
             CharacterBox.MarriageLabel.Text = Partner?.Name;
         }
 
+        /// <summary>账号挂机时长变化（登录、喝药加时、倒计时、耗尽）。</summary>
+        public void AutoTimeChanged()
+        {
+            BigPatchBox?.OnTimerChanged(User?.AutoTime ?? 0);
+        }
+
         public void ReceiveChat(string message, MessageType type, List<ClientUserItem> linkedItems = null)
         {
             if (Config.LogChat)
