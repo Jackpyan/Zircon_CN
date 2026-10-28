@@ -622,27 +622,30 @@ namespace Server.Models
             if (!setConfArr[(int)AutoSetConf.SetAutoOnHookBox]) return;
             if (Dead) return;
 
-            if (AutoTime > SEnvir.Now)
+            // 注意用「剩余秒数」判定，不要用 AutoTime > Now：
+            // 到期前最后一秒 (AutoTime - Now).TotalSeconds 已经是 0，
+            // 若还走「未到期」分支，客户端会先自行取消勾选，导致下面这句提示发不出来。
+            long remaining = (long)(AutoTime - SEnvir.Now).TotalSeconds;
+
+            if (remaining > 0)
             {
-                long oldValue = Character.Account.AutoTime;
+                if (Character.Account.AutoTime == remaining) return;   // 整秒没变就不发包
 
-                Character.Account.AutoTime = (long)(AutoTime - SEnvir.Now).TotalSeconds;
+                Character.Account.AutoTime = remaining;
 
-                if (Character.Account.AutoTime == oldValue) return;
-
-                Enqueue(new S.AutoTimeChanged { AutoTime = Character.Account.AutoTime });
+                Enqueue(new S.AutoTimeChanged { AutoTime = remaining });
+                return;
             }
-            else
-            {
-                Character.Account.AutoTime = 0;
-                AutoTime = SEnvir.Now;
 
-                setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
+            // 时间耗尽：清零 + 关挂机 + 提示
+            Character.Account.AutoTime = 0;
+            AutoTime = SEnvir.Now;
 
-                Enqueue(new S.AutoTimeChanged { AutoTime = 0 });
+            setConfArr[(int)AutoSetConf.SetAutoOnHookBox] = false;
 
-                Connection?.ReceiveChat("挂机时间已用完，已自动结束挂机。请使用挂机时间药水补充。", MessageType.System);
-            }
+            Enqueue(new S.AutoTimeChanged { AutoTime = 0 });
+
+            Connection?.ReceiveChat("挂机时间已用完，已自动结束挂机。请使用挂机时间药水补充。", MessageType.System);
         }
 
         /// <summary>
