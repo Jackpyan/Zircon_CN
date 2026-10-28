@@ -6467,9 +6467,10 @@ namespace Server.Models
 
                         RefreshStats();
 
-                        // 与其它消耗品一致地设置使用间隔，然后跳出 ItemType 的 switch，
-                        // 由方法末尾统一扣数量 / RemoveItem。
-                        UseItemTime = SEnvir.Now.AddMilliseconds(Math.Max(item.Info.Durability, 250));
+                        // ⚠ Durability 在本物品上表示「增加的秒数」，不能拿来当使用冷却
+                        //   （其它消耗品的 Durability 是冷却毫秒数）。A 端对挂机药水同样特判 250ms。
+                        //   随后跳出 ItemType 的 switch，由方法末尾统一扣数量 / RemoveItem。
+                        UseItemTime = SEnvir.Now.AddMilliseconds(250);
                         AutoPotionCheckTime = UseItemTime.AddMilliseconds(500);
                         break;
                     }
