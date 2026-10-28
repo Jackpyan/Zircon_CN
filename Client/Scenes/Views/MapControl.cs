@@ -1300,8 +1300,12 @@ namespace Client.Scenes.Views
             if (distance <= AndroidAttackRange)
             {
                 // 远程职业被贴身 → 先退一步（放风筝），退不动再考虑输出。
-                // 开关沿用「自动躲避」与「法系挂机」：勾了任一才退，避免战士挂机乱跑。
-                if ((Config.自动躲避 || Config.是否远战挂机) && TryStepAway(target)) return;
+                //
+                // ⚠ 只认「自动躲避」这一个开关：
+                // Config 里的配置是**全局**的（存 Zircon.ini，不分角色），
+                // 若把「法系挂机」也算进条件，玩家用法师勾过之后切到战士仍然会一直后退。
+                // 再加一层职业限制：只有远程职业才放风筝，近战（战士/刺客）勾了也不后退。
+                if (Config.自动躲避 && IsRangedClass(User.Class) && TryStepAway(target)) return;
 
                 // 贴身：技能优先（法师/道士被怪贴脸也要放技能），放不出来再普通物理攻击
                 if (CanCastAutoSkill() && TryAutoSkill()) return;
@@ -1311,7 +1315,9 @@ namespace Client.Scenes.Views
             }
 
             // 远程挂机：进入射程后优先放技能（技能不可用则继续追击）
-            if (Config.是否远战挂机 && Functions.InRange(target.CurrentLocation, User.CurrentLocation, AndroidDetectRange))
+            // 同样加职业限制：Config 是全局的，战士勾过「法系挂机」不该停在中距离发呆
+            if (Config.是否远战挂机 && IsRangedClass(User.Class)
+                && Functions.InRange(target.CurrentLocation, User.CurrentLocation, AndroidDetectRange))
             {
                 if (TryAutoSkill())
                     return;
@@ -1668,6 +1674,12 @@ namespace Client.Scenes.Views
 
             return TryCastMagic(MagicType.SummonSkeleton)
                 || TryCastMagic(MagicType.SummonShinsu);
+        }
+
+        /// <summary>远程职业（法师/道士）才会放风筝，近战不后退。</summary>
+        private static bool IsRangedClass(MirClass cls)
+        {
+            return cls == MirClass.Wizard || cls == MirClass.Taoist;
         }
 
         /// <summary>
