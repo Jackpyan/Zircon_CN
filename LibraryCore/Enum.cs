@@ -2413,17 +2413,25 @@ namespace Library
 
     public enum CraftingCategory : byte
     {
+        [Description("武器")]
         Weapon = 0,
+        [Description("护甲")]
         Armour = 1,
+        [Description("首饰")]
         Accessories = 2,
+        [Description("消耗品")]
         Consumable = 3,
+        [Description("材料")]
         Ingredients = 4,
     }
 
     public enum CraftingResult : byte
     {
+        [Description("成功")]
         Success,
+        [Description("失败")]
         Failed,
+        [Description("已取消")]
         Cancelled,
     }
 

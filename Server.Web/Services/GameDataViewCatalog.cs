@@ -83,6 +83,11 @@ public sealed class GameDataViewCatalog
             View<LootBoxInfo>("loot-boxes", "/data/loot-boxes", "宝箱数据", "LootBoxInfoView", "物品", "宝箱货币和物品内容。",
                 "Index", "Description", "Currency", "Item", "Amount"),
 
+            View<CraftingRecipeInfo>("crafting-recipes", "/data/crafting-recipes", "合成配方", "CraftingInfoView", "物品", "合成配方、材料、费用、耗时与成功率。",
+                "Description", "Category", "Item", "Amount", "RequiredLevel", "RequiredGold", "Experience", "Duration", "SuccessRate"),
+            View<CraftingLevelInfo>("crafting-levels", "/data/crafting-levels", "合成等级", "CraftingInfoView", "物品", "合成等级与升级所需经验。",
+                "Level", "RequiredExperience"),
+
             View<MonsterInfo>("monsters", "/data/monsters", "怪物数据", "MonsterInfoView", "怪物", "怪物基础属性、行为与标记。",
                 "MonsterName", "Image", "AI", "Level", "Experience", "ViewRange", "CoolEye", "AttackDelay", "MoveDelay", "IsBoss", "Undead", "CanPush", "CanTame", "Flag", "FaceImage"),
             View<MonsterInfoStat>("monster-stats", "/data/monster-stats", "怪物属性", "MonsterInfoStatView", "怪物", "怪物附加属性。",
@@ -198,6 +203,12 @@ public sealed class GameDataViewCatalog
             [typeof(LootBoxInfo)] =
             [
                 Rel("Contents", ["Amount", "Item"])
+            ],
+            [typeof(CraftingRecipeInfo)] =
+            [
+                Rel("Design1Ingredients", ["Item", "Amount"]),
+                Rel("Design2Ingredients", ["Item", "Amount"]),
+                Rel("Design3Ingredients", ["Item", "Amount"])
             ],
             [typeof(MilestoneInfo)] =
             [

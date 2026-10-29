@@ -87,6 +87,8 @@ public static class UiText
         ["StackSize"] = "堆叠上限", ["StartClass"] = "初始职业", ["StartItem"] = "初始物品",
         ["StartNPC"] = "开始 NPC", ["StartTime"] = "开始时间", ["Stat"] = "属性", ["Stats"] = "属性",
         ["StatParameter1"] = "属性参数 1", ["StringParameter1"] = "字符串参数 1", ["SuccessPage"] = "成功页面",
+        ["SuccessRate"] = "成功率",
+        ["Design1Ingredients"] = "设计 1 材料", ["Design2Ingredients"] = "设计 2 材料", ["Design3Ingredients"] = "设计 3 材料",
         ["Task"] = "任务内容", ["Tasks"] = "任务内容", ["ThrowQuality"] = "抛竿品质",
         ["TimeLimitInMinutes"] = "时间限制（分钟）", ["Title"] = "标题", ["TrackingType"] = "追踪类型",
         ["TriggerValue"] = "触发值", ["Triggers"] = "触发条件", ["Type"] = "类型", ["Types"] = "类型",
