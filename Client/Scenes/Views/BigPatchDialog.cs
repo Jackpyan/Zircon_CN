@@ -1947,7 +1947,11 @@ namespace Client.Scenes.Views
 
                 y += 25;
                 AndroidLongRange = CreateCheckBox(Android, "法系挂机", x, y,
-                    (o, e) => Config.是否远战挂机 = AndroidLongRange.Checked, Config.是否远战挂机);
+                    (o, e) =>
+                    {
+                        Config.是否远战挂机 = AndroidLongRange.Checked;
+                        UpdateAndroidSkillState();
+                    }, Config.是否远战挂机);
 
                 DXLabel skillTitle = new DXLabel
                 {
@@ -2450,6 +2454,21 @@ namespace Client.Scenes.Views
                     Config.挂机自动技能2 = MagicType.None;
 
                 AndroidSkills2.ListBox.SelectItem(Config.挂机自动技能2 == MagicType.None ? null : (object)Config.挂机自动技能2);
+
+                // 「法系挂机」未勾选时，技能/群攻下拉置灰，避免误以为仍在放技能
+                UpdateAndroidSkillState();
+            }
+
+            /// <summary>
+            /// 「法系挂机」未勾选时禁用技能/群攻下拉（仅视觉提示，真正的拦截在
+            /// MapControl.CanCastAutoSkill / TryAutoSkill 里）。
+            /// </summary>
+            private void UpdateAndroidSkillState()
+            {
+                bool enabled = Config.是否远战挂机;
+
+                if (AndroidSkills != null) AndroidSkills.Enabled = enabled;
+                if (AndroidSkills2 != null) AndroidSkills2.Enabled = enabled;
             }
 
             /// <summary>

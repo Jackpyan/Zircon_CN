@@ -1918,6 +1918,11 @@ namespace Client.Scenes.Views
         /// </summary>
         private bool CanCastAutoSkill()
         {
+            // 「法系挂机」未勾选 = 纯物理挂机，任何职业都不放技能。
+            // 之前贴身分支只判断「远战挂机是否使用技能」，而该开关是全局配置且
+            // 从下拉框选过技能后一直为 true → 取消勾选「法系挂机」后战士仍会继续放迅捷剑法。
+            if (!Config.是否远战挂机) return false;
+
             MagicType type = PickAutoSkillType();
 
             if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
@@ -1960,6 +1965,9 @@ namespace Client.Scenes.Views
 
         private bool TryAutoSkill()
         {
+            // 同上：未勾选「法系挂机」一律不放技能，避免历史配置（远战挂机是否使用技能=true）残留生效。
+            if (!Config.是否远战挂机) return false;
+
             MagicType type = PickAutoSkillType();
 
             if (type == MagicType.None || NonAutoSkillMagics.Contains(type)) return false;
