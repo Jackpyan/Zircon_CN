@@ -605,6 +605,20 @@ namespace Client.Models
                 case MirAction.Pushed:
                     if (!GameScene.Game.MoveFrame) return;
                     break;
+                case MirAction.Dead:
+                    // 清理尸体：勾选后隐藏尸体、取消尸体特效（移植自 A 端 MapObject.UpdateFrame）
+                    if (Visible && Config.清理尸体)
+                    {
+                        Visible = false;
+                        Effects.Clear();
+                        break;
+                    }
+                    if (!Visible && !Config.清理尸体)
+                    {
+                        Visible = true;
+                        break;
+                    }
+                    break;
             }
 
             int frame = CurrentFrame.GetFrame(FrameStart, CEnvir.Now, (this != User || GameScene.Game.Observer) && ActionQueue.Count > 1);

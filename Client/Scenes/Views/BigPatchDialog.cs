@@ -2313,11 +2313,35 @@ namespace Client.Scenes.Views
                 totalExperience += amount;
                 if (amount <= 0) return;
 
+                LastGainEx = DateTime.Now;   // 有经验进账，重置"无经验"计时
+
                 skilledCount++;
                 SummerLabelKill.Text = $"杀怪数量:{skilledCount:#,##0}";
                 SummerLabelKillfen.Text = $"分钟杀怪:{skilledCount / minutes:#,##0}";
                 SummerLabelEx.Text = $"获得经验:{totalExperience:#,##0}";
                 SummerLabelExfen.Text = $"分钟经验:{totalExperience / minutes:#,##0}";
+            }
+
+            private DateTime LastGainEx = DateTime.Now;   // 最近一次获得经验的时刻（无经验自动随机用）
+
+            /// <summary>
+            /// 无经验/未杀死目标自动随机：超过设定秒数没经验，就用随机传送卷换位置。
+            /// 移植自 A 端 BigPatchDialog.ExpAutoRandoms（计时在 GainedExperience 中重置）。
+            /// </summary>
+            public void ExpAutoRandoms()
+            {
+                long seconds = Config.多少秒无经验或者未杀死目标自动随机;
+                if (seconds <= 0) return;
+                if ((DateTime.Now - LastGainEx).TotalSeconds <= seconds) return;
+
+                LastGainEx = DateTime.Now.AddSeconds(1);   // 避免每帧重试
+
+                DXItemCell cell = GameScene.Game?.InventoryBox?.Grid?.Grid?.FirstOrDefault(x => x?.Item?.Info.ItemName == "随机传送卷");
+                if (cell != null && cell.UseItem())
+                {
+                    _ProtectTime = CEnvir.Now.AddSeconds(5.0);
+                    LastGainEx = DateTime.Now;
+                }
             }
 
             /// <summary>由 <c>CConnection.Process(S.CurrencyChanged)</c> 在金币增加时调用。</summary>
@@ -2565,6 +2589,75 @@ namespace Client.Scenes.Views
                 return true;
             }
 
+            private DateTime AutoPoisonTime = DateTime.MinValue;
+
+            /// <summary>
+            /// 道士自动上毒：目标没中毒就补（感染术 / 红毒 / 绿毒）。
+            /// 移植自 A 端 GameScene.AutoPoison()；改用 TryCast 以正确处理地面指向技能（施毒术取 MapLocation）。
+            /// </summary>
+            private bool AutoPoison()
+            {
+                GameScene scene = GameScene.Game;
+                if (scene?.User == null) return false;
+                if (CEnvir.Now < AutoPoisonTime) return false;
+                AutoPoisonTime = CEnvir.Now.AddMilliseconds(300);
+
+                if (!Config.自动上毒 || scene.User.Class != MirClass.Taoist) return false;
+
+                MapObject target = MapObject.TargetObject;
+
+                // 没有目标时，就近选一个 10 格内、可攻击的怪
+                if (target == null || target.Dead)
+                {
+                    target = null;
+                    int best = int.MaxValue;
+                    foreach (MapObject ob in scene.MapControl.Objects)
+                    {
+                        if (ob == null || ob.Dead || ob == scene.User) continue;
+                        if (ob.Race != ObjectType.Monster) continue;
+                        if (!string.IsNullOrEmpty(ob.PetOwner)) continue;
+
+                        int d = Functions.Distance(ob.CurrentLocation, scene.User.CurrentLocation);
+                        if (d <= 0 || d > 10 || d >= best) continue;
+
+                        best = d;
+                        target = ob;
+                    }
+                }
+
+                if (target == null || target.Dead) return false;
+                if (!Functions.InRange(target.CurrentLocation, scene.User.CurrentLocation, 10)) return false;
+
+                // 必须已学会施毒术（未学会时 TryCast 是空操作，不必再往下判断）
+                if (scene.GetMagic(MagicType.PoisonDust) == null) return false;
+
+                MagicHelper helpper = scene.GetMagicHelpper(MagicType.PoisonDust);
+                ItemInfo item = (helpper != null && helpper.Amulet > 0)
+                    ? Globals.ItemInfoList.Binding.FirstOrDefault(x => x.Index == helpper.Amulet)
+                    : null;
+
+                bool lacksRed = (target.Poison & PoisonType.Red) != PoisonType.Red;
+                bool lacksGreen = (target.Poison & PoisonType.Green) != PoisonType.Green;
+
+                // 注：B 端没有 Infection（感染术）技能与毒型，只做红毒 / 绿毒。
+                // 未指定具体毒（Amulet<=0，默认 -1）时，红/绿任一缺失就尝试，服务器按实际装备的毒生效。
+                bool needCast;
+                if (item != null && item.ItemName == "红毒")
+                    needCast = lacksRed;
+                else if (item != null && item.ItemName == "绿毒")
+                    needCast = lacksGreen;
+                else
+                    needCast = lacksRed || lacksGreen;
+
+                if (needCast && TryCast(scene, MagicType.PoisonDust, target))
+                {
+                    AutoSkillsTime = CEnvir.Now.AddMilliseconds(500);
+                    return true;
+                }
+
+                return false;
+            }
+
             /// <summary>
             /// 自动施法主逻辑，按职业分发。移植自 A 端 BigPatchDialog.cs:300-630。
             /// </summary>
@@ -2795,8 +2888,12 @@ namespace Client.Scenes.Views
                                 && TryCast(scene, MagicType.Resilience, scene.User))
                                 return;
 
-                            // 注：A 端此处还有「开始挂机时调 GameScene.AutoPoison()」，
-                            // B 端没有 AutoPoison（挂机 AI 属后续阶段），暂不移植。
+                            // 自动上毒（仅挂机时）：目标缺毒就补感染术 / 红毒 / 绿毒
+                            if (Config.开始挂机)
+                            {
+                                if (AutoPoison())
+                                    return;
+                            }
 
                             if (Config.自动施放幽灵盾 || Config.自动给宠物施放猛虎强势 || Config.自动施放神圣战甲术)
                             {
@@ -3097,6 +3194,10 @@ namespace Client.Scenes.Views
                     if (cell != null && cell.UseItem())
                         _ProtectTime = CEnvir.Now.AddSeconds(Config.隔多少秒自动随机一次);
                 }
+
+                // 无经验/未杀目标自动随机（超过设定秒数没经验就随机换位）
+                if (Config.是否开启指定时间无经验或者未杀死目标自动随机)
+                    ExpAutoRandoms();
             }
 
             /// <summary>背包里找一本能学的技能书并使用。移植自 A 端 BigPatchDialog.cs:879-893。</summary>

@@ -271,6 +271,7 @@ namespace Client.Scenes
 
         public bool MoveFrame { get; set; }
         public DateTime MoveTime, OutputTime, ItemRefreshTime;
+        private DateTime skillTime1, skillTime2;   // 自动技能1/2 下次可用时间
 
         public bool CanRun;
 
@@ -1154,6 +1155,9 @@ namespace Client.Scenes
                 // 快速自动拾取：按拾取页白名单逐个指定格子拾取
                 if (Config.快速自动拾取)
                     BigPatchBox?.PickupItems();
+
+                // 自动技能1/2：按设定间隔循环施放（移植自 A 端 GameScene.ProcessSkills）
+                ProcessSkills();
             }
 
             if (AutoPathRoute == null)
@@ -1221,6 +1225,27 @@ namespace Client.Scenes
             base.OnKeyDown(e);
 
             if (e.Handled) return;
+
+            // 宠物模式快捷键 Ctrl+1 到 Ctrl+5（辅助页「启用Ctrl数字控制宠物」开关，移植自 A 端 GameScene.OnKeyDown）
+            if (e.Control && !Observer && Config.启用Ctrl数字控制宠物)
+            {
+                PetMode? targetMode = null;
+                switch (e.KeyCode)
+                {
+                    case Keys.D1: targetMode = PetMode.None; break;
+                    case Keys.D2: targetMode = PetMode.Both; break;
+                    case Keys.D3: targetMode = PetMode.Move; break;
+                    case Keys.D4: targetMode = PetMode.Attack; break;
+                    case Keys.D5: targetMode = PetMode.PvP; break;
+                }
+                if (targetMode.HasValue)
+                {
+                    User.PetMode = targetMode.Value;
+                    CEnvir.Enqueue(new C.ChangePetMode { Mode = User.PetMode });
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             if (e.Control && e.Shift && e.KeyCode == Keys.F12)
             {
@@ -3139,6 +3164,54 @@ namespace Client.Scenes
         }
 
         /// <summary>
+        /// 自动换毒：毒药位（EquipmentSlot.Poison）上的毒不对或用完时，从背包换一种毒。
+        /// 移植自 A 端 GameScene.AutoChangePoison。
+        /// </summary>
+        private void AutoChangePoison(ClientUserMagic magic)
+        {
+            MagicHelper helper = null;
+
+            if (Config.magics != null)
+            {
+                for (int i = 0; i < Config.magics.Count; i++)
+                {
+                    if (Config.magics[i] != null && Config.magics[i].TypeID == magic.Info.Magic)
+                    {
+                        helper = Config.magics[i];
+                        break;
+                    }
+                }
+            }
+
+            if (helper == null) return;
+
+            DXItemCell poisonCell = CharacterBox?.Grid[(int)EquipmentSlot.Poison];
+            ClientUserItem equipped = poisonCell?.Item;
+
+            if (helper.Amulet > 0 && (equipped?.Info?.Index ?? -1) == helper.Amulet) return;
+
+            for (int i = 0; i < Inventory.Length; i++)
+            {
+                ClientUserItem item = Inventory[i];
+
+                if (helper.Amulet > 0 && (item?.Info?.Index ?? -1) == helper.Amulet)
+                {
+                    poisonCell?.ToEquipment(InventoryBox.Grid.Grid[i]);
+                    return;
+                }
+                else if (helper.Amulet == 0
+                    && (item?.Info?.ItemType ?? ItemType.Nothing) == ItemType.Poison
+                    && (item?.Info?.Index ?? helper.Amulet) != helper.Amulet)
+                {
+                    poisonCell?.ToEquipment(InventoryBox.Grid.Grid[i]);
+                    return;
+                }
+            }
+
+            ReceiveChat("你的毒用完了，释放失败", MessageType.Hint);
+        }
+
+        /// <summary>
         /// 按技能类型施放（自动施法用）。map_ob 为空时沿用鼠标悬停目标。
         /// </summary>
         public void UseMagic(MagicType type, MapObject map_ob = null)
@@ -3206,6 +3279,9 @@ namespace Client.Scenes
             {
                 if (User.Level < magic.Info.NeedLevel1) return;
             }
+
+            // 自动换符：护身符位上的符不对时从背包换（移植自 A 端 UseMagic → TakeAmulet）
+            TakeAmulet(magic);
 
             switch (magic.Info.Magic)
             {
@@ -3444,6 +3520,10 @@ namespace Client.Scenes
                 case MagicType.Hemorrhage:
                 case MagicType.FlamingDaggers:
                 case MagicType.Shredding:
+                    // 自动换毒：毒药位上的毒不对/用完时从背包换（移植自 A 端 GameScene）
+                    if (Config.自动换毒 && magic.Info.Magic == MagicType.PoisonDust)
+                        AutoChangePoison(magic);
+
                     if (CanAttackTarget(MagicObject))
                         target = MagicObject;
 
@@ -3698,6 +3778,25 @@ namespace Client.Scenes
             LastTarget = target;
 
             User.MagicAction = new ObjectAction(MirAction.Spell, direction, MapObject.User.CurrentLocation, magic.Info.Magic, new List<uint> { targetID }, new List<Point> { targetLocation }, false, Element.None);
+        }
+
+        /// <summary>
+        /// 自动技能1/2：按「多长时间使用一次」的间隔循环施放（移植自 A 端 GameScene.ProcessSkills）。
+        /// </summary>
+        private void ProcessSkills()
+        {
+            if (Config.是否开启自动技能1 && !Config.暂停辅助功能 && CEnvir.Now >= skillTime1)
+            {
+                if (Config.自动技能1 != MagicType.None)
+                    UseMagic(Config.自动技能1);
+                skillTime1 = CEnvir.Now + TimeSpan.FromSeconds(Config.自动技能1多长时间使用一次 > 0L ? (double)Config.自动技能1多长时间使用一次 : 10.0);
+            }
+            if (Config.是否开启自动技能2 && !Config.暂停辅助功能 && CEnvir.Now >= skillTime2)
+            {
+                if (Config.自动技能2 != MagicType.None)
+                    UseMagic(Config.自动技能2);
+                skillTime2 = CEnvir.Now + TimeSpan.FromSeconds(Config.自动技能2多长时间使用一次 > 0L ? (double)Config.自动技能2多长时间使用一次 : 10.0);
+            }
         }
 
         public bool CanAttackTarget(MapObject ob)

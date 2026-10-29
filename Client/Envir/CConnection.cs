@@ -2040,12 +2040,13 @@ namespace Client.Envir
                     weapon.Level++;
                     weapon.Flags |= UserItemFlags.Refinable;
 
+                    // 武器可精炼：即使勾选"关闭经验提示"也要提示（移植自 A 端 CConnection）
                     GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperienceAndReadyForRefine, p.Amount), MessageType.Combat);
                 }
-                else
+                else if (!Config.关闭经验提示)
                     GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperienceAndWeaponExperience, p.Amount, p.Amount / 10), MessageType.Combat);
             }
-            else
+            else if (!Config.关闭经验提示)
                 GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperience, p.Amount), MessageType.Combat);
 
             // 辅助页统计面板（纯显示）
