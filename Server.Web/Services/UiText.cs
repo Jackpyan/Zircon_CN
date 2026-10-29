@@ -136,6 +136,7 @@ public static class UiText
         ["PKPointTickRate"] = "PK 点数增长间隔", ["RedPoint"] = "红名点数", ["PvPCurseDuration"] = "玩家对战诅咒时长",
         ["PvPCurseRate"] = "玩家对战诅咒概率", ["AutoReviveDelay"] = "自动复活延迟",
         ["RankChangeResetDelay"] = "排名变更重置间隔", ["EnableStruck"] = "启用受击效果", ["EnableHermit"] = "启用隐士系统",
+        ["EnableGroupLoot"] = "启用组队分配",
         ["DeadDuration"] = "尸体保留时间", ["HarvestDuration"] = "采集持续时间", ["MysteryShipRegionIndex"] = "神秘船区域索引",
         ["LairRegionIndex"] = "巢穴区域索引", ["DropDuration"] = "掉落保留时间", ["DropDistance"] = "掉落距离",
         ["DropLayers"] = "掉落层数", ["TorchRate"] = "火把倍率", ["MaxGemPurity"] = "宝石最高纯度",
