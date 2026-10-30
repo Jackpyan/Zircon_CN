@@ -1207,7 +1207,7 @@ namespace Server.Models
             if (refines.Count > 0)
                 Enqueue(new S.RefineList { List = refines });
 
-            Enqueue(new S.MarketPlaceConsign { Consignments = Character.Account.Auctions.Select(x => x.ToClientInfo(Character.Account)).ToList(), ObserverPacket = false });
+            Enqueue(new S.MarketPlaceConsign { Consignments = Character.Account.Auctions.Where(x => x.Character == Character || x.Character == null || x.Character.Deleted).Select(x => x.ToClientInfo(Character.Account)).ToList(), ObserverPacket = false });
 
             Enqueue(new S.MailList { Mail = Character.Account.Mail.Select(x => x.ToClientInfo()).ToList() });
             Enqueue(new S.GameStoreData
@@ -4036,7 +4036,8 @@ namespace Server.Models
 
             int cost = Globals.MarketPlaceFee;
 
-            if (Character.Account.Auctions.Count >= Character.Account.HighestLevel() * 3 + Character.Account.StorageSize - Globals.StorageSize)
+            // 名额按角色统计：同账号其它角色的上架不占本角色的额度
+            if (Character.Account.Auctions.Count(x => x.Character == Character) >= Character.Account.HighestLevel() * 3 + Character.Account.StorageSize - Globals.StorageSize)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.ConsignLimit, MessageType.System);
                 return;
@@ -4126,7 +4127,10 @@ namespace Server.Models
         {
             if (p.Count <= 0) return;
 
-            AuctionInfo info = Character.Account.Auctions?.FirstOrDefault(x => x.Index == p.Index);
+            // 寄售按角色归属：同账号的其它角色不得取回/取消别人上架的东西
+            // 自己的寄售，或角色已被删除的孤儿寄售（同账号可代取回）
+            AuctionInfo info = Character.Account.Auctions?.FirstOrDefault(x => x.Index == p.Index
+                && (x.Character == Character || x.Character == null || x.Character.Deleted));
 
             if (info == null) return;
 

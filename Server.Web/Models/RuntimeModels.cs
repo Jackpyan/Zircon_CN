@@ -15,7 +15,8 @@ public sealed record RuntimeCollectionDescriptor(
     string DisplayName,
     string FieldName,
     string LegacyView,
-    IReadOnlyList<RuntimeColumnDefinition> Columns);
+    IReadOnlyList<RuntimeColumnDefinition> Columns,
+    bool NewestFirst = false);
 
 public sealed record RuntimeColumnDefinition(string Field, string Title, bool Editable = true);
 

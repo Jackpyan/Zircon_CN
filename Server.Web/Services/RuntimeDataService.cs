@@ -2,8 +2,11 @@ using System.Collections;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using Library;
+using Library.SystemModels;
 using MirDB;
 using Server.Envir;
+using Server.Models;
 using Server.Web.Models;
 
 namespace Server.Web.Services;
@@ -39,9 +42,11 @@ public sealed class RuntimeDataService(AdminAuditService audit)
         View("npcs", "NPC 数据", nameof(SEnvir.GameNPCList), "NPCListView",
             ("Category", "分类"), ("TypeValue", "类型值"), ("IntValue1", "整数值 1")),
         View("milestone-logs", "里程碑进度", nameof(SEnvir.UserMilestoneLogList), "UserMilestoneLogView",
+            newestFirst: true,
             ("Character", "角色"), ("Type", "类型"), ("Item", "物品"), ("Monster", "怪物"),
             ("Currency", "货币"), ("Region", "区域"), ("Count", "累计数量")),
         View("milestones-earned", "已达成里程碑", nameof(SEnvir.UserMilestoneList), "UserMilestoneView",
+            newestFirst: true,
             ("Character", "角色"), ("Info", "里程碑"), ("DateEarned", "达成时间"))
     ];
 
@@ -78,10 +83,70 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             return true;
         }, cancellationToken);
 
+    /// <summary>
+    /// 给指定角色发放物品（仅在线角色）。物品页「发放」按钮用。
+    /// </summary>
+    public async Task GiveItemAsync(int itemIndex, string characterName, int count, string user, CancellationToken cancellationToken = default)
+    {
+        await SEnvir.InvokeOnGameThreadAsync(() =>
+        {
+            if (count <= 0) throw new InvalidOperationException("数量必须大于 0。");
+            if (string.IsNullOrWhiteSpace(characterName)) throw new InvalidOperationException("角色名称不能为空。");
+
+            PlayerObject? player = SEnvir.GetPlayerByCharacter(characterName.Trim());
+
+            if (player == null) throw new InvalidOperationException($"角色不在线：{characterName}");
+
+            Library.SystemModels.ItemInfo? item = SEnvir.ItemInfoList.Binding.FirstOrDefault(x => x.Index == itemIndex);
+
+            if (item == null) throw new InvalidOperationException($"找不到物品 #{itemIndex}");
+
+            if (SEnvir.IsCurrencyItem(item))
+            {
+                Server.DBModels.UserCurrency currency = player.GetCurrency(item);
+                long original = currency.Amount;
+
+                currency.Amount = currency.Amount > long.MaxValue - count ? long.MaxValue : currency.Amount + count;
+
+                player.LogMilestone(MilestoneType.CurrencyGain, currency.Amount - original, currency: currency.Info);
+                player.CurrencyChanged(currency);
+            }
+            else
+            {
+                int remaining = count;
+                int stackSize = Math.Max(1, item.StackSize);
+
+                while (remaining > 0)
+                {
+                    int stack = Math.Min(remaining, stackSize);
+
+                    if (!player.CanGainItems(false, new ItemCheck(item, stack, UserItemFlags.GameMaster, TimeSpan.Zero)))
+                        throw new InvalidOperationException($"背包空间不足，还剩 {remaining} 个未能放入。");
+
+                    Server.DBModels.UserItem userItem = SEnvir.CreateDropItem(item, 0);
+                    userItem.Count = stack;
+                    userItem.Flags = UserItemFlags.GameMaster;
+
+                    remaining -= stack;
+                    player.GainItem(userItem);
+                }
+            }
+
+            audit.Record(user, "RuntimeData.GiveItem", $"{item.ItemName} x{count} -> {player.Character.CharacterName}");
+
+            return true;
+        }, cancellationToken);
+    }
+
     private static IReadOnlyList<RuntimeDataRow> ReadOnGameThread(RuntimeCollectionDescriptor descriptor, int maximum)
     {
+        IEnumerable<DBObject> source = GetItems(descriptor);
+
+        if (descriptor.NewestFirst)
+            source = source.OrderByDescending(item => item.Index);
+
         List<RuntimeDataRow> rows = [];
-        foreach (DBObject item in GetItems(descriptor).Take(maximum))
+        foreach (DBObject item in source.Take(maximum))
         {
             Dictionary<string, object?> values = [];
             foreach (RuntimeColumnDefinition column in descriptor.Columns)
@@ -139,5 +204,12 @@ public sealed class RuntimeDataService(AdminAuditService audit)
     private static RuntimeCollectionDescriptor View(
         string key, string title, string fieldName, string legacyView,
         params (string Field, string Title)[] columns) =>
-        new(key, title, fieldName, legacyView, columns.Select(column => new RuntimeColumnDefinition(column.Field, column.Title)).ToArray());
+        View(key, title, fieldName, legacyView, false, columns);
+
+    private static RuntimeCollectionDescriptor View(
+        string key, string title, string fieldName, string legacyView, bool newestFirst,
+        params (string Field, string Title)[] columns) =>
+        new(key, title, fieldName, legacyView,
+            columns.Select(column => new RuntimeColumnDefinition(column.Field, column.Title)).ToArray(),
+            newestFirst);
 }

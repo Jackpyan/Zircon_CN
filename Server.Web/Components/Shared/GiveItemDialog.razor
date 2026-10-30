@@ -1,0 +1,50 @@
+@inject DialogService DialogService
+
+<div class="give-item-dialog">
+    <p class="give-item-name">@ItemName</p>
+
+    <label>
+        <span>角色名称</span>
+        <input @bind="CharacterName" @bind:event="oninput" placeholder="输入在线角色名" />
+    </label>
+
+    <label>
+        <span>数量</span>
+        <input type="number" min="1" @bind="Count" />
+    </label>
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="alert danger" role="alert">@Error</div>
+    }
+
+    <div class="give-item-actions">
+        <RadzenButton Text="取消" ButtonStyle="ButtonStyle.Light" Click="Cancel" />
+        <RadzenButton Text="发放" ButtonStyle="ButtonStyle.Primary" Disabled="@(!CanSubmit)" Click="Submit" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public string ItemName { get; set; } = string.Empty;
+
+    private string CharacterName { get; set; } = string.Empty;
+    private int Count { get; set; } = 1;
+    private string? Error { get; set; }
+
+    private bool CanSubmit => !string.IsNullOrWhiteSpace(CharacterName) && Count > 0;
+
+    private void Submit()
+    {
+        if (!CanSubmit)
+        {
+            Error = "请填写角色名称和有效数量。";
+            return;
+        }
+
+        DialogService.Close(new GiveItemRequest(CharacterName.Trim(), Count));
+    }
+
+    private void Cancel() => DialogService.Close(null);
+
+    public sealed record GiveItemRequest(string CharacterName, int Count);
+}

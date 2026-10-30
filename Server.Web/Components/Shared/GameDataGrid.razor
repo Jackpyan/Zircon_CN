@@ -6,6 +6,7 @@
 @inject IGameServerController GameServer
 @inject IJSRuntime JS
 @inject DialogService DialogService
+@inject RuntimeDataService RuntimeData
 
 <PageTitle>@View.Title · Zircon</PageTitle>
 
@@ -164,10 +165,14 @@
                     </RadzenDataGridColumn>
                 }
             }
-            <RadzenDataGridColumn TItem="object" Title="操作" Width="82px" Filterable="false" Sortable="false" Frozen="true" FrozenPosition="FrozenColumnPosition.Right">
+            <RadzenDataGridColumn TItem="object" Title="操作" Width="@(SupportsGiveItem ? "126px" : "90px")" Filterable="false" Sortable="false" Frozen="true" FrozenPosition="FrozenColumnPosition.Right">
                 <Template Context="item">
                     <div class="grid-row-actions">
                         <RadzenButton Icon="edit" title="编辑" Variant="Variant.Flat" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => EditRow(item))" @onclick:stopPropagation="true"/>
+                        @if (SupportsGiveItem)
+                        {
+                            <RadzenButton Icon="card_giftcard" title="发放给角色" Variant="Variant.Flat" ButtonStyle="ButtonStyle.Success" Size="ButtonSize.Small" Click="@(() => GiveItem(item))" @onclick:stopPropagation="true"/>
+                        }
                         <RadzenButton Icon="delete" title="删除" Variant="Variant.Flat" ButtonStyle="ButtonStyle.Danger" Size="ButtonSize.Small" Click="@(() => DeleteRow(item))" @onclick:stopPropagation="true"/>
                     </div>
                 </Template>
@@ -221,6 +226,34 @@
 
     private void SelectRelation(int parentIndex, GameDataRelationDefinition relation) =>
         SelectedRelations[parentIndex] = relation.Property;
+
+    private bool SupportsGiveItem => Table.ModelType == typeof(Library.SystemModels.ItemInfo);
+
+    private async Task GiveItem(object item)
+    {
+        if (item is not Library.SystemModels.ItemInfo info) return;
+
+        object? result = await DialogService.OpenAsync<GiveItemDialog>($"发放物品 - {info.ItemName}",
+            new Dictionary<string, object> { ["ItemName"] = $"{info.ItemName}（#{info.Index}）" },
+            new DialogOptions { Width = "360px", CloseDialogOnOverlayClick = false });
+
+        if (result is not GiveItemDialog.GiveItemRequest request) return;
+
+        try
+        {
+            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+            await RuntimeData.GiveItemAsync(info.Index, request.CharacterName, request.Count, user);
+
+            HasError = false;
+            Message = $"已向 {request.CharacterName} 发放 {info.ItemName} x{request.Count}。";
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            Message = ex.InnerException?.Message ?? ex.Message;
+        }
+    }
 
     private Task AddRow() => Grid?.InsertRow(Activator.CreateInstance(Table.ModelType)!) ?? Task.CompletedTask;
     private Task EditRow(object item) => Grid?.EditRow(item) ?? Task.CompletedTask;
@@ -349,8 +382,26 @@
         return actual.IsPrimitive || actual.IsEnum || actual == typeof(string) || actual == typeof(decimal) || actual == typeof(DateTime) || actual == typeof(TimeSpan);
     }
 
-    private static string ColumnWidth(GameDataColumnDefinition column, Type type) => column.Width ??
-                                                                                     ((Nullable.GetUnderlyingType(type) ?? type) == typeof(string) ? "240px" : typeof(MirDB.DBObject).IsAssignableFrom(type) ? "220px" : "150px");
+    /// <summary>
+    /// 列宽：配置里显式指定的优先；否则按字段类型给一个「够显示内容」的固定宽度。
+    /// 不设宽度会被 Radzen 平均挤压成一排「金…」「全…」，所以必须显式给宽度；
+    /// 总宽超出容器时由底部横向滚动条拖动查看。
+    /// </summary>
+    private static string ColumnWidth(GameDataColumnDefinition column, Type type)
+    {
+        if (!string.IsNullOrWhiteSpace(column.Width)) return column.Width;
+
+        Type underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (typeof(MirDB.DBObject).IsAssignableFrom(underlying)) return "180px";
+        if (underlying == typeof(string)) return "190px";
+        if (underlying == typeof(bool)) return "80px";
+        if (underlying.IsEnum) return "110px";
+        if (underlying == typeof(long) || underlying == typeof(int) || underlying == typeof(short) ||
+            underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal)) return "100px";
+
+        return "130px";
+    }
 
     private static string FormatReference(object item, string field)
     {

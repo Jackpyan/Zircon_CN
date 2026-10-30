@@ -27,16 +27,46 @@ else
 
     <div class="runtime-grid-layout">
         <section class="legacy-grid-shell">
-            <RadzenDataGrid TItem="RuntimeDataRow" Data="@Rows" AllowPaging="true" PageSize="40" AllowSorting="true"
-                            AllowFiltering="true" FilterMode="FilterMode.Simple" AllowColumnResize="true" AllowColumnReorder="true"
+            <RadzenDataGrid TItem="RuntimeDataRow" Data="@VisibleRows" AllowPaging="true" PageSize="40" AllowSorting="true"
+                            AllowFiltering="false" AllowColumnResize="true" AllowColumnReorder="true"
                             SelectionMode="DataGridSelectionMode.Single" AllowRowSelectOnRowClick="true" Value="@SelectedItems" Change="SelectionChanged"
+                            RowClick="@(args => SelectRow(args.Data))" RowDoubleClick="@(args => SelectRow(args.Data))"
                             Density="Density.Compact" Class="legacy-data-grid runtime-radzen-grid" EmptyText="暂无运行时数据"
                             ShowPagingSummary="true" PagingSummaryFormat="第 {0}–{1} 条，共 {2} 条" FilterText="筛选"
                             FirstPageTitle="首页" FirstPageAriaLabel="转到首页" PrevPageTitle="上一页" PrevPageAriaLabel="转到上一页"
                             NextPageTitle="下一页" NextPageAriaLabel="转到下一页" LastPageTitle="末页" LastPageAriaLabel="转到末页"
                             PageTitleFormat="第 {0} 页" PageAriaLabelFormat="转到第 {0} 页">
                 <HeaderTemplate>
-                    <div class="radzen-grid-toolbar"><RadzenButton Text="刷新快照" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Load" /></div>
+                    <div class="radzen-grid-toolbar">
+                        <RadzenButton Text="刷新快照" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Load" />
+                        <div class="runtime-column-filters">
+                            @foreach (RuntimeColumnDefinition column in Definition.Columns)
+                            {
+                                <label>
+                                    <span>@column.Title</span>
+                                    @if (IsChoiceColumn(column.Field))
+                                    {
+                                        <select value="@GetFilter(column.Field)" @onchange="args => SetFilter(column.Field, args.Value?.ToString())">
+                                            <option value="">全部</option>
+                                            @foreach (string option in DistinctValues(column.Field))
+                                            {
+                                                <option value="@option">@option</option>
+                                            }
+                                        </select>
+                                    }
+                                    else
+                                    {
+                                        <input value="@GetFilter(column.Field)" placeholder="@column.Title"
+                                               @oninput="args => SetFilter(column.Field, args.Value?.ToString())" />
+                                    }
+                                </label>
+                            }
+                            @if (HasFilters)
+                            {
+                                <RadzenButton Text="清除筛选" ButtonStyle="ButtonStyle.Light" Click="ClearFilters" />
+                            }
+                        </div>
+                    </div>
                 </HeaderTemplate>
                 <Columns>
                     <RadzenDataGridColumn TItem="RuntimeDataRow" Property="Index" Title="序号" Width="86px" Frozen="true" />
@@ -46,6 +76,12 @@ else
                             <Template Context="row">@Format(row, column.Field)</Template>
                         </RadzenDataGridColumn>
                     }
+                    <RadzenDataGridColumn TItem="RuntimeDataRow" Title="操作" Width="88px" Filterable="false" Sortable="false">
+                        <Template Context="row">
+                            <RadzenButton Text="编辑" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                          Click="@(() => SelectRow(row))" />
+                        </Template>
+                    </RadzenDataGridColumn>
                 </Columns>
             </RadzenDataGrid>
         </section>
@@ -114,6 +150,15 @@ else
         await Load();
     }
 
+    /// <summary>单击 / 双击 / 右键 / 编辑按钮：统一选中该行并打开右侧编辑面板。</summary>
+    private void SelectRow(RuntimeDataRow? row)
+    {
+        if (row is null) return;
+
+        SelectedItems = [row];
+        EditValues = row.Values.ToDictionary(pair => pair.Key, pair => pair.Value?.ToString());
+    }
+
     private void SelectionChanged(IList<RuntimeDataRow> selected)
     {
         SelectedItems = selected;
@@ -146,4 +191,53 @@ else
     }
 
     private static string Format(RuntimeDataRow row, string field) => UiText.Value(row.Values.GetValueOrDefault(field));
+
+    private readonly Dictionary<string, string?> ColumnFilters = [];
+
+    private bool HasFilters => ColumnFilters.Values.Any(value => !string.IsNullOrWhiteSpace(value));
+
+    private IReadOnlyList<RuntimeDataRow> VisibleRows
+    {
+        get
+        {
+            if (!HasFilters) return Rows;
+
+            return Rows.Where(row => ColumnFilters.All(pair =>
+            {
+                if (string.IsNullOrWhiteSpace(pair.Value)) return true;
+
+                string text = Format(row, pair.Key);
+
+                // 下拉选择的列（角色/账号）走精确匹配，避免选 test 把 test02 也带出来
+                return IsChoiceColumn(pair.Key)
+                    ? string.Equals(text, pair.Value, StringComparison.OrdinalIgnoreCase)
+                    : text.Contains(pair.Value, StringComparison.OrdinalIgnoreCase);
+            })).ToList();
+        }
+    }
+
+    private string? GetFilter(string field) => ColumnFilters.GetValueOrDefault(field);
+
+    private void SetFilter(string field, string? value)
+    {
+        ColumnFilters[field] = value;
+        SelectedItems = [];
+        EditValues = [];
+    }
+
+    private void ClearFilters()
+    {
+        ColumnFilters.Clear();
+        SelectedItems = [];
+        EditValues = [];
+    }
+
+    /// <summary>角色 / 账号这类列用下拉选择，避免手输。</summary>
+    private static bool IsChoiceColumn(string field) => field is "Character" or "Account" or "Player";
+
+    private IEnumerable<string> DistinctValues(string field) =>
+        Rows.Select(row => Format(row, field))
+            .Where(value => !string.IsNullOrWhiteSpace(value) && value != "—")
+            .Distinct()
+            .OrderBy(value => value);
 }

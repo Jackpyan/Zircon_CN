@@ -164,6 +164,12 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .rz-data-grid{max-height: calc(100vh - 150px);}
 .radzen-grid-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; width: 100%; padding: 9px; }
 .radzen-grid-toolbar .rz-button, .control-cluster .rz-button { min-height: 34px; }
+.runtime-column-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.runtime-column-filters label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #9fb0b4; }
+.runtime-column-filters input, .runtime-column-filters select {
+    min-width: 96px; max-width: 150px; height: 28px; padding: 0 6px;
+    color: #dfe8ea; background: #131b1d; border: 1px solid #2a3a3e; border-radius: 3px;
+}
 .radzen-file-action { min-height: 34px; gap: 7px; color: #c6d0d3; background: #182124; }
 .grid-row-actions { display: flex; align-items: center; gap: 2px; }
 .grid-row-actions .rz-button { min-width: 32px; padding-inline: 6px; }
@@ -251,3 +257,18 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     .nav-group { display: contents; }
     .nav-group summary { display: none; }
 }
+
+.give-item-dialog { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.give-item-dialog .give-item-name { margin: 0; font-weight: 600; color: var(--cyan, #7fd4e0); }
+.give-item-dialog label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9fb0b4; }
+.give-item-dialog label span { width: 64px; flex: none; }
+.give-item-dialog label input {
+    flex: 1; height: 32px; padding: 0 8px; color: #dfe8ea;
+    background: #131b1d; border: 1px solid #2a3a3e; border-radius: 3px;
+}
+.give-item-dialog .give-item-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* 数据表格：列宽按内容自适应（保证内容显示完整），超宽时用底部横向滚动条拖动查看 */
+.legacy-data-grid .rz-cell-data,
+.legacy-data-grid .rz-column-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.legacy-data-grid .rz-frozen-cell-right { box-shadow: -6px 0 8px -6px rgba(0, 0, 0, .55); }
