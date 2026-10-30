@@ -362,5 +362,8 @@ namespace Server.Envir
         public abstract string FameNeedSpace { get; set; }
         public abstract string CraftingCannotStart { get; set; }
         public abstract string CraftingInterrupted { get; set; }
+        public abstract string CraftingMaxLevelReached { get; set; }
+        public abstract string CraftingLevelIncreased { get; set; }
+        public abstract string ClearBagRemoved { get; set; }
     }
 }

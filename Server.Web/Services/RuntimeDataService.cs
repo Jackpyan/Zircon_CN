@@ -37,7 +37,12 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             ("Sender", "发件人"), ("Recipient", "收件人"), ("Subject", "主题"), ("Message", "内容"),
             ("Date", "日期"), ("Gold", "金币"), ("HuntGold", "狩猎金币"), ("Read", "已读")),
         View("npcs", "NPC 数据", nameof(SEnvir.GameNPCList), "NPCListView",
-            ("Category", "分类"), ("TypeValue", "类型值"), ("IntValue1", "整数值 1"))
+            ("Category", "分类"), ("TypeValue", "类型值"), ("IntValue1", "整数值 1")),
+        View("milestone-logs", "里程碑进度", nameof(SEnvir.UserMilestoneLogList), "UserMilestoneLogView",
+            ("Character", "角色"), ("Type", "类型"), ("Item", "物品"), ("Monster", "怪物"),
+            ("Currency", "货币"), ("Region", "区域"), ("Count", "累计数量")),
+        View("milestones-earned", "已达成里程碑", nameof(SEnvir.UserMilestoneList), "UserMilestoneView",
+            ("Character", "角色"), ("Info", "里程碑"), ("DateEarned", "达成时间"))
     ];
 
     public RuntimeCollectionDescriptor Get(string key) => Collections.Single(item => string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase));

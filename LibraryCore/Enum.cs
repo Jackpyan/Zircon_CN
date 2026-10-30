@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 
 namespace Library
@@ -2043,84 +2043,134 @@ namespace Library
 
     public enum MilestoneType
     {
+        [Description("行走")]
         Walk = 0,
+        [Description("奔跑")]
         Run = 1,
+        [Description("骑乘")]
         Ride = 2,
+        [Description("采集")]
         Harvest = 3,
+        [Description("死亡")]
         Die = 4,
+        [Description("等级")]
         Level = 5, //Set
+        [Description("结婚")]
         Marry = 6,
+        [Description("离婚")]
         Divorce = 7,
+        [Description("交易")]
         Trade = 8,
+        [Description("转生")]
         Rebirth = 9, //Set
+        [Description("PK 值")]
         PKPoint = 10, //Set
+        [Description("排名")]
         Ranking = 11, //Set //Reverse
 
         //Tracked by Item
+        [Description("获得物品")]
         ItemGain = 20,
+        [Description("使用物品")]
         ItemUse = 21,
 
         //Tracked by Currency
+        [Description("获得货币")]
         CurrencyGain = 30,
 
         //Tracked by Quest
+        [Description("完成任务")]
         QuestComplete = 40,
 
+        [Description("领养宠物")]
         CompanionAdopt = 50,
 
         //Tracked by Magic
+        [Description("学习技能")]
         SkillLearn = 60,
+        [Description("技能等级")]
         SkillLevel = 61, //Set
 
         //Tracked by Monster
+        [Description("驯服宠物")]
         PetTame = 70,
+        [Description("召唤宠物")]
         PetSummon = 71,
 
+        [Description("加入行会")]
         GuildJoin = 80,
+        [Description("创建行会")]
         GuildCreate = 81,
 
+        [Description("加入队伍")]
         GroupJoin = 90,
+        [Description("创建队伍")]
         GroupCreate = 91,
 
+        [Description("发送邮件")]
         MailSend = 100,
 
+        [Description("添加好友")]
         FriendAdd = 110, //Set
 
+        [Description("挖矿")]
         MineCast = 120,
+        [Description("采矿获得")]
         MineCatch = 121, //Tracked by Item
 
+        [Description("抛竿")]
         FishingCast = 130,
+        [Description("钓鱼获得")]
         FishingCatch = 131, //Tracked by Item
+        [Description("钓鱼失败")]
         FishingFail = 132,
+        [Description("完美钓鱼")]
         FishingPerfect = 134,
 
         //Tracked by Instance
+        [Description("进入副本")]
         InstanceJoin = 140,
 
         //Tracked by Region
+        [Description("进入区域")]
         Region = 150,
 
         //Tracked by Item
+        [Description("商店购买")]
         ShopPurchase = 160,
+        [Description("商店出售")]
         ShopSell = 161,
 
         //Tracked by Item
+        [Description("寄售上架")]
         MarketConsign = 170,
+        [Description("寄售购买")]
         MarketPurchase = 171,
+        [Description("寄售售出")]
         MarketSell = 172,
 
         //Tracked by Monster
+        [Description("击杀怪物")]
         MonsterKill = 180,
+        [Description("被怪击杀")]
         MonsterDeath = 181,
+        [Description("对怪伤害")]
         MonsterDamageDone = 182,
+        [Description("受怪伤害")]
         MonsterDamageTake = 183,
+        [Description("宠物击杀怪物")]
         MonsterPetKill = 184,
 
         //Tracked by Player
+        [Description("击杀玩家")]
         PlayerKill = 190,
+        [Description("被玩家击杀")]
         PlayerDeath = 191,
+        [Description("对玩家伤害")]
         PlayerDamageDone = 192,
+        [Description("受玩家伤害")]
         PlayerDamageTake = 193,
+        [Description("宠物击杀玩家")]
         PlayerPetKill = 194,
     }
 

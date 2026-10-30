@@ -12,13 +12,13 @@ namespace Server.Envir.Commands.Command.Admin
         {
             if (!player.LevelCrafting())
             {
-                player.Connection.ReceiveChat("Crafting is already at the max level.", MessageType.System);
+                player.Connection.ReceiveChat(player.Connection.Language.CraftingMaxLevelReached, MessageType.System);
                 return;
             }
 
             bool maximum = SEnvir.CraftingLevelInfoList.Binding.All(x => x.Level != player.Character.CraftingLevel);
             string level = maximum ? "Max" : player.Character.CraftingLevel.ToString();
-            player.Connection.ReceiveChat($"Crafting increased to level {level}.", MessageType.System);
+            player.Connection.ReceiveChat(string.Format(player.Connection.Language.CraftingLevelIncreased, level), MessageType.System);
         }
     }
 }

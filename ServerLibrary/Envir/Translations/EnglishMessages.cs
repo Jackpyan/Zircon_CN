@@ -340,5 +340,8 @@ namespace Server.Envir.Translations
         public override string FameNeedSpace { get; set; } = "Unable to promote fame, Not enough space in your inventory.";
         public override string CraftingCannotStart { get; set; } = "Unable to craft this recipe. Check its level, gold, ingredients, and inventory space.";
         public override string CraftingInterrupted { get; set; } = "Crafting interrupted.";
+        public override string CraftingMaxLevelReached { get; set; } = "Crafting is already at the max level.";
+        public override string CraftingLevelIncreased { get; set; } = "Crafting increased to level {0}.";
+        public override string ClearBagRemoved { get; set; } = "[CLEAR BAG] Removed {0} item(s).";
     }
 }

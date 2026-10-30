@@ -352,5 +352,8 @@ namespace Server.Envir.Translations
         public override string FameNeedSpace { get; set; } = "Unable to promote fame, Not enough space in your inventory.";
         public override string CraftingCannotStart { get; set; } = "无法制作该配方。请检查制作等级、金币、材料和背包空间。";
         public override string CraftingInterrupted { get; set; } = "制造被中断。";
+        public override string CraftingMaxLevelReached { get; set; } = "制造等级已达上限。";
+        public override string CraftingLevelIncreased { get; set; } = "制造等级提升到 {0} 级。";
+        public override string ClearBagRemoved { get; set; } = "[清空背包] 已删除 {0} 件物品。";
     }
 }

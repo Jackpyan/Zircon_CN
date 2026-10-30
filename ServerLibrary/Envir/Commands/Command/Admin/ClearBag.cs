@@ -31,7 +31,7 @@ namespace Server.Envir.Commands.Command.Admin
             }
 
             player.RefreshWeight();
-            player.Connection.ReceiveChat($"[CLEAR BAG] Removed {count} item(s).", MessageType.System);
+            player.Connection.ReceiveChat(string.Format(player.Connection.Language.ClearBagRemoved, count), MessageType.System);
         }
     }
 }
