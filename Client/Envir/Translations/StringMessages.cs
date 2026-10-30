@@ -106,6 +106,15 @@ namespace Client.Envir.Translations
         public abstract string GroupLFGRequestSent { get; set; }
         public abstract string GroupDialogNotAllowingGroupMessage { get; set; }
         public abstract string GroupDialogCreateLFGButtonHint { get; set; }
+        public abstract string GroupDialogLfgUpdateButton { get; set; }
+        public abstract string GroupDialogLfgEnableButton { get; set; }
+        public abstract string GroupDialogLfgDisableButton { get; set; }
+        public abstract string GroupDialogLfgNameLabel { get; set; }
+        public abstract string GroupDialogLfgStatusLabel { get; set; }
+        public abstract string GroupDialogLfgTitle { get; set; }
+        public abstract string GroupDialogLfgHint { get; set; }
+        public abstract string GroupDialogLfgTypeMonster { get; set; }
+        public abstract string GroupDialogLfgTypePvp { get; set; }
         public abstract string MarketNoItemSelected { get; set; }
         public abstract string MarketInvalidPrice { get; set; }
         public abstract string BuySellOverweight { get; set; }
@@ -548,6 +557,18 @@ namespace Client.Envir.Translations
         public abstract string GroupLootVoteTime { get; set; }
         public abstract string GroupLootWon { get; set; }
         public abstract string GroupLootNoWinner { get; set; }
+        public abstract string GroupLootModeFreeForAll { get; set; }
+        public abstract string GroupLootModeRandom { get; set; }
+        public abstract string GroupLootModeNeedGreed { get; set; }
+        public abstract string GroupLootModeRoundRobin { get; set; }
+
+        /// <summary>
+        /// 枚举显示名（走语言文件，便于后续汉化/英化）。
+        /// 返回 null / 空串时调用方回退到枚举的 [Description] 或枚举原名。
+        /// </summary>
+        /// <param name="enumType">枚举类型名，如 "GroupLootMode"。</param>
+        /// <param name="name">枚举成员名，如 "FreeForAll"。</param>
+        public virtual string EnumValue(string enumType, string name) => null;
 
         public abstract string GuildDialogTitle { get; set; }
         public abstract string GuildDialogCreateTabLabel { get; set; }

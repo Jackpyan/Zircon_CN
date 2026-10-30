@@ -106,6 +106,15 @@ namespace Client.Envir.Translations
         public override string GroupLFGRequestSent { get; set; } = "Request to join group has been sent.";
         public override string GroupDialogNotAllowingGroupMessage { get; set; } = "You are not currently allowing group.";
         public override string GroupDialogCreateLFGButtonHint { get; set; } = "Create LFG";
+        public override string GroupDialogLfgUpdateButton { get; set; } = "Update";
+        public override string GroupDialogLfgEnableButton { get; set; } = "Enable";
+        public override string GroupDialogLfgDisableButton { get; set; } = "Disable";
+        public override string GroupDialogLfgNameLabel { get; set; } = "Group Name";
+        public override string GroupDialogLfgStatusLabel { get; set; } = "Status";
+        public override string GroupDialogLfgTitle { get; set; } = "Looking For Group";
+        public override string GroupDialogLfgHint { get; set; } = "Enter a group name, size and type. The listing stays for 1 hour or until you disable it.";
+        public override string GroupDialogLfgTypeMonster { get; set; } = "Hunting";
+        public override string GroupDialogLfgTypePvp { get; set; } = "PvP";
         public override string MarketNoItemSelected { get; set; } = "Error: No Item selected.";
         public override string MarketInvalidPrice { get; set; } = "Error: Invalid Price.";
         public override string BuySellOverweight { get; set; } = "You do not have enough weight to buy any '{0}'.";
@@ -551,6 +560,25 @@ namespace Client.Envir.Translations
         public override string GroupLootVoteTime { get; set; } = "Choose for {0} ({1}s)";
         public override string GroupLootWon { get; set; } = "{0} received {1}.";
         public override string GroupLootNoWinner { get; set; } = "No one received {0}.";
+        public override string GroupLootModeFreeForAll { get; set; } = "Free For All";
+        public override string GroupLootModeRandom { get; set; } = "Random";
+        public override string GroupLootModeNeedGreed { get; set; } = "Need / Greed";
+        public override string GroupLootModeRoundRobin { get; set; } = "Round Robin";
+
+        /// <summary>Enum display names (English). Unknown enums fall back to [Description] or the raw name.</summary>
+        private static readonly System.Collections.Generic.Dictionary<string, string> EnumDisplayText = new()
+        {
+            ["GroupLootMode.FreeForAll"] = "Free For All",
+            ["GroupLootMode.Random"] = "Random",
+            ["GroupLootMode.NeedGreed"] = "Need / Greed",
+            ["GroupLootMode.RoundRobin"] = "Round Robin",
+            ["Rarity.Common"] = "Common",
+            ["Rarity.Superior"] = "Superior",
+            ["Rarity.Elite"] = "Elite",
+        };
+
+        public override string EnumValue(string enumType, string name)
+            => EnumDisplayText.TryGetValue($"{enumType}.{name}", out string text) ? text : null;
 
         public override string GuildDialogTitle { get; set; } = "Guild";
         public override string GuildDialogCreateTabLabel { get; set; } = "Create";

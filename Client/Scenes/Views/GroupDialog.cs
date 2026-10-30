@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.UserModels;
 using Library;
@@ -451,7 +451,7 @@ namespace Client.Scenes.Views
 
                 if (lfg != null)
                 {
-                    window.EnableButton.Label.Text = "更新";
+                    window.EnableButton.Label.Text = CEnvir.Language.GroupDialogLfgUpdateButton;
 
                     window.NameTextBox.TextBox.Text = lfg.GroupName;
                     window.CountNumberBox.Value = lfg.MaxCount;
@@ -460,7 +460,7 @@ namespace Client.Scenes.Views
                 }
                 else
                 {
-                    window.EnableButton.Label.Text = "启用";
+                    window.EnableButton.Label.Text = CEnvir.Language.GroupDialogLfgEnableButton;
                     window.DisableButton.Enabled = false;
                 }
             };
@@ -478,7 +478,7 @@ namespace Client.Scenes.Views
 
             LFGNameLabel = new DXLabel
             {
-                Text = "队伍名称",
+                Text = CEnvir.Language.GroupDialogLfgNameLabel,
                 Parent = this,
                 IsControl = false,
                 Size = new Size(101, 20),
@@ -490,7 +490,7 @@ namespace Client.Scenes.Views
 
             LFGStatusLabel = new DXLabel
             {
-                Text = "状态",
+                Text = CEnvir.Language.GroupDialogLfgStatusLabel,
                 Parent = this,
                 IsControl = false,
                 Size = new Size(95, 20),
@@ -1200,7 +1200,7 @@ namespace Client.Scenes.Views
             HasFooter = true;
             DropShadow = true;
 
-            TitleLabel.Text = "寻找队伍";
+            TitleLabel.Text = CEnvir.Language.GroupDialogLfgTitle;
 
             Parent = ActiveScene;
             MessageBoxList.Add(this);
@@ -1210,7 +1210,7 @@ namespace Client.Scenes.Views
                 AutoSize = false,
                 Location = new Point(10, 35),
                 Parent = this,
-                Text = "请输入队伍名称、人数和类型。队伍招募信息将保留 1 小时，或持续到你将其停用。",
+                Text = CEnvir.Language.GroupDialogLfgHint,
                 DrawFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.HorizontalCenter
             };
             Label.Size = new Size(300, DXLabel.GetHeight(Label, 300).Height);
@@ -1238,13 +1238,13 @@ namespace Client.Scenes.Views
             _ = new DXListBoxItem
             {
                 Parent = TypeComboBox.ListBox,
-                Label = { Text = "打怪" },
+                Label = { Text = CEnvir.Language.GroupDialogLfgTypeMonster },
                 Item = "PvE"
             };
             _ = new DXListBoxItem
             {
                 Parent = TypeComboBox.ListBox,
-                Label = { Text = "对战" },
+                Label = { Text = CEnvir.Language.GroupDialogLfgTypePvp },
                 Item = "PvP"
             };
             TypeComboBox.ListBox.SelectItem(TypeValue);
@@ -1270,7 +1270,7 @@ namespace Client.Scenes.Views
                 Size = new Size(80, DefaultHeight),
                 LabelStyle = ButtonLabelStyle.Gold,
                 Parent = this,
-                Label = { Text = "启用" },
+                Label = { Text = CEnvir.Language.GroupDialogLfgEnableButton },
             };
             EnableButton.MouseClick += (o, e) => Dispose();
 
@@ -1280,7 +1280,7 @@ namespace Client.Scenes.Views
                 Size = new Size(80, DefaultHeight),
                 LabelStyle = ButtonLabelStyle.Gold,
                 Parent = this,
-                Label = { Text = "停用" }
+                Label = { Text = CEnvir.Language.GroupDialogLfgDisableButton }
             };
             DisableButton.MouseClick += (o, e) =>
             {

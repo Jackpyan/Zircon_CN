@@ -1,3 +1,4 @@
+using Client.Envir;
 using Library;
 using System;
 using System.Collections.Generic;
@@ -41,6 +42,11 @@ namespace Client.Controls
         public static string GetEnumDisplayText(Enum value)
         {
             if (value == null) return string.Empty;
+
+            // 优先走语言文件（ChineseMessages.ini / EnglishMessages.ini），
+            // 未收录时回退到 [Description] 或枚举原名。
+            string localized = CEnvir.Language?.EnumValue(value.GetType().Name, value.ToString());
+            if (!string.IsNullOrEmpty(localized)) return localized;
 
             MemberInfo member = value.GetType().GetMember(value.ToString()).FirstOrDefault();
             return member?.GetCustomAttribute<DescriptionAttribute>()?.Description ?? value.ToString();

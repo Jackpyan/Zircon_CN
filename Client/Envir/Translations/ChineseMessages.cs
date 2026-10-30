@@ -107,6 +107,15 @@ namespace Client.Envir.Translations
         public override string GroupLFGRequestSent { get; set; } = "加入队伍的申请已发送。";
         public override string GroupDialogNotAllowingGroupMessage { get; set; } = "你当前未允许他人组队。";
         public override string GroupDialogCreateLFGButtonHint { get; set; } = "发布队伍招募";
+        public override string GroupDialogLfgUpdateButton { get; set; } = "更新";
+        public override string GroupDialogLfgEnableButton { get; set; } = "启用";
+        public override string GroupDialogLfgDisableButton { get; set; } = "停用";
+        public override string GroupDialogLfgNameLabel { get; set; } = "队伍名称";
+        public override string GroupDialogLfgStatusLabel { get; set; } = "状态";
+        public override string GroupDialogLfgTitle { get; set; } = "寻找队伍";
+        public override string GroupDialogLfgHint { get; set; } = "请输入队伍名称、人数和类型。队伍招募信息将保留 1 小时，或持续到你将其停用。";
+        public override string GroupDialogLfgTypeMonster { get; set; } = "打怪";
+        public override string GroupDialogLfgTypePvp { get; set; } = "对战";
         public override string MarketNoItemSelected { get; set; } = "错误：尚未选择物品。";
         public override string MarketInvalidPrice { get; set; } = "错误：价格无效。";
         public override string BuySellOverweight { get; set; } = "负重不足，无法购买“{0}”。";
@@ -550,6 +559,25 @@ namespace Client.Envir.Translations
         public override string GroupLootVoteTime { get; set; } = "选择 {0}（{1}秒）";
         public override string GroupLootWon { get; set; } = "{0}获得了{1}。";
         public override string GroupLootNoWinner { get; set; } = "无人获得{0}。";
+        public override string GroupLootModeFreeForAll { get; set; } = "自由拾取";
+        public override string GroupLootModeRandom { get; set; } = "随机分配";
+        public override string GroupLootModeNeedGreed { get; set; } = "需求 / 贪婪";
+        public override string GroupLootModeRoundRobin { get; set; } = "轮流拾取";
+
+        /// <summary>枚举显示名（中文）。未收录的枚举回退到 [Description] 或枚举原名。</summary>
+        private static readonly System.Collections.Generic.Dictionary<string, string> EnumDisplayText = new()
+        {
+            ["GroupLootMode.FreeForAll"] = "自由拾取",
+            ["GroupLootMode.Random"] = "随机分配",
+            ["GroupLootMode.NeedGreed"] = "需求 / 贪婪",
+            ["GroupLootMode.RoundRobin"] = "轮流拾取",
+            ["Rarity.Common"] = "普通",
+            ["Rarity.Superior"] = "优秀",
+            ["Rarity.Elite"] = "稀有",
+        };
+
+        public override string EnumValue(string enumType, string name)
+            => EnumDisplayText.TryGetValue($"{enumType}.{name}", out string text) ? text : null;
 
         public override string GuildDialogTitle { get; set; } = "行会";
         public override string GuildDialogCreateTabLabel { get; set; } = "创建";
