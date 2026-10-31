@@ -125,6 +125,36 @@ namespace Library
 
         public static decimal MarketPlaceTax = 0.07M;  //2.5x Item cost
 
+        /// <summary>寄售上架费：按「挂单总价（单价 × 数量）」的百分比收取。</summary>
+        public static decimal MarketPlaceFeeRate = 0.01M;
+
+        /// <summary>寄售上架费最低值（不足此数按此数收）。</summary>
+        public static int MarketPlaceFeeMinimum = 100;
+
+        /// <summary>
+        /// 计算寄售上架费。客户端与服务端共用同一函数，保证弹窗显示 = 实际扣费。
+        /// 费用 = max(最低值, ceil(单价 × 数量 × 费率) + 固定附加费 MarketPlaceFee)
+        /// </summary>
+        public static int CalcMarketPlaceFee(long unitPrice, long count)
+            => CalcMarketPlaceFee(unitPrice, count, MarketPlaceFeeRate, MarketPlaceFeeMinimum);
+
+        /// <summary>
+        /// 按显式费率计算上架费。服务端传 Config 里的动态值，客户端传服务器下发的值，
+        /// 保证「弹窗显示 = 实际扣费」。
+        /// </summary>
+        public static int CalcMarketPlaceFee(long unitPrice, long count, decimal feeRate, int feeMinimum)
+        {
+            if (unitPrice <= 0) return 0;
+
+            decimal total = (decimal)unitPrice * Math.Max(1L, count);
+            decimal fee = Math.Ceiling(total * feeRate) + MarketPlaceFee;
+
+            if (fee < feeMinimum) fee = feeMinimum;
+            if (fee > int.MaxValue) fee = int.MaxValue;
+
+            return (int)fee;
+        }
+
         public static Regex LinkedItemRegex = new Regex(@"\[(?<Text>.*?):(?<ID>.+?)\]", RegexOptions.Compiled);
 
         public static long

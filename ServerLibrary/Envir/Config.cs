@@ -147,6 +147,13 @@ namespace Server.Envir
         public static int SkillRate { get; set; } = 0;
         public static int CompanionRate { get; set; } = 0;
 
+        /// <summary>寄售上架费率：按挂单总价（单价×数量）的百分比收取，0.01 = 1%。</summary>
+        public static decimal MarketPlaceFeeRate { get; set; } = 0.01M;
+        /// <summary>寄售上架费最低值。</summary>
+        public static int MarketPlaceFeeMinimum { get; set; } = 100;
+        /// <summary>寄售成交税率：从货款中扣除，0.07 = 7%。</summary>
+        public static decimal MarketPlaceTaxRate { get; set; } = 0.07M;
+
         [ConfigSection("Fishing")]
         public static bool FishEnablePerfectCatch { get; set; } = true;
         public static int FishNibbleChanceBase { get; set; } = 10;

@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 
 namespace Client.Envir.Translations
 {
@@ -116,6 +116,20 @@ namespace Client.Envir.Translations
         public override string GroupDialogLfgHint { get; set; } = "请输入队伍名称、人数和类型。队伍招募信息将保留 1 小时，或持续到你将其停用。";
         public override string GroupDialogLfgTypeMonster { get; set; } = "打怪";
         public override string GroupDialogLfgTypePvp { get; set; } = "对战";
+        public override string OnlineStateOnline { get; set; } = "在线";
+        public override string OnlineStateBusy { get; set; } = "忙碌";
+        public override string OnlineStateAway { get; set; } = "离开";
+        public override string OnlineStateOffline { get; set; } = "离线";
+        public override string FriendViewStatusAll { get; set; } = "全部";
+        public override string RequiredClassWarrior { get; set; } = "战士";
+        public override string RequiredClassWizard { get; set; } = "法师";
+        public override string RequiredClassTaoist { get; set; } = "道士";
+        public override string RequiredClassAssassin { get; set; } = "刺客";
+        public override string RequiredClassWarWizTao { get; set; } = "战士、法师、道士";
+        public override string RequiredClassWizTao { get; set; } = "法师、道士";
+        public override string RequiredClassAssWar { get; set; } = "战士、刺客";
+        public override string RequiredClassAll { get; set; } = "全部职业";
+        public override string RequiredClassNone { get; set; } = "无限制";
         public override string MarketNoItemSelected { get; set; } = "错误：尚未选择物品。";
         public override string MarketInvalidPrice { get; set; } = "错误：价格无效。";
         public override string BuySellOverweight { get; set; } = "负重不足，无法购买“{0}”。";

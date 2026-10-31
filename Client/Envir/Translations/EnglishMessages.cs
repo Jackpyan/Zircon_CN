@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 
 namespace Client.Envir.Translations
 {
@@ -115,6 +115,20 @@ namespace Client.Envir.Translations
         public override string GroupDialogLfgHint { get; set; } = "Enter a group name, size and type. The listing stays for 1 hour or until you disable it.";
         public override string GroupDialogLfgTypeMonster { get; set; } = "Hunting";
         public override string GroupDialogLfgTypePvp { get; set; } = "PvP";
+        public override string OnlineStateOnline { get; set; } = "Online";
+        public override string OnlineStateBusy { get; set; } = "Busy";
+        public override string OnlineStateAway { get; set; } = "Away";
+        public override string OnlineStateOffline { get; set; } = "Offline";
+        public override string FriendViewStatusAll { get; set; } = "All";
+        public override string RequiredClassWarrior { get; set; } = "Warrior";
+        public override string RequiredClassWizard { get; set; } = "Wizard";
+        public override string RequiredClassTaoist { get; set; } = "Taoist";
+        public override string RequiredClassAssassin { get; set; } = "Assassin";
+        public override string RequiredClassWarWizTao { get; set; } = "Warrior, Wizard, Taoist";
+        public override string RequiredClassWizTao { get; set; } = "Wizard, Taoist";
+        public override string RequiredClassAssWar { get; set; } = "Warrior, Assassin";
+        public override string RequiredClassAll { get; set; } = "All Classes";
+        public override string RequiredClassNone { get; set; } = "No Restriction";
         public override string MarketNoItemSelected { get; set; } = "Error: No Item selected.";
         public override string MarketInvalidPrice { get; set; } = "Error: Invalid Price.";
         public override string BuySellOverweight { get; set; } = "You do not have enough weight to buy any '{0}'.";

@@ -152,6 +152,22 @@ namespace Server.Envir.Translations
         public override string ConsignBuyGuildFundsCost { get; set; } = "Your Guild cannot afford to buy this many items.";
         public override string ConsignBuyGuildFundsUsed { get; set; } = "{0} used {1:#,##0} gold of guild funds to buy {2} x{3}.";
         public override string ConsignBuyCost { get; set; } = "You cannot afford to buy this many items.";
+        public override string MarketPlaceSender { get; set; } = "Market Place";
+        public override string MarketPlaceListingSaleSubject { get; set; } = "Listing Sale";
+        public override string MarketPlaceSoldHeader { get; set; } = "You have sold an item";
+        public override string MarketPlaceSoldBuyer { get; set; } = "Buyer: {0}";
+        public override string MarketPlaceSoldItem { get; set; } = "Item: {0} x{1}";
+        public override string MarketPlaceSoldPrice { get; set; } = "Price: {0:#,##0} each";
+        public override string MarketPlaceSoldSubTotal { get; set; } = "Sub Total: {0:#,##0}";
+        public override string MarketPlaceSoldTax { get; set; } = "Tax: {0:#,##0} ({1:p0})";
+        public override string MarketPlaceSoldTotal { get; set; } = "Total: {0:#,##0}";
+        public override string MarketPlaceListingCancelledSubject { get; set; } = "Listing Cancelled";
+        public override string MarketPlaceListingCancelledMessage { get; set; } = "You cancelled your sale of '{0}{1}' and was not able to collect the item.";
+        public override string MarketPlacePurchaseSubject { get; set; } = "Item Purchase";
+        public override string MarketPlacePurchaseMessage { get; set; } = "You purchased '{0}{1}' and was not able to collect the item.";
+        public override string MarketPlacePartSuffix { get; set; } = " - [Part]";
+        public override string MarketPlaceListingInvalidatedMessage { get; set; } = "Your listing was cancelled because of Item change(s).";
+        public override string SystemSender { get; set; } = "System";
 
         public override string StoreNotAvailable { get; set; } = "You cannot buy this item, It is not currently available for purchase.";
         public override string StoreNeedSpace { get; set; } = "You cannot carry this many items, please make room in your inventory.";

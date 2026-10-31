@@ -146,7 +146,7 @@ public static class UiText
         ["DropVisibleOtherPlayers"] = "其他玩家可见掉落", ["EnableFortune"] = "启用幸运系统",
         ["AdminStartInGamemasterMode"] = "管理员初始为游戏管理员模式", ["AdminStartInObserverMode"] = "管理员初始为观察者模式",
         ["AdminStartInSupermanMode"] = "管理员初始为无敌模式", ["ExperienceRate"] = "经验倍率", ["DropRate"] = "掉落倍率",
-        ["GoldRate"] = "金币倍率", ["SkillRate"] = "技能倍率", ["CompanionRate"] = "宠物倍率",
+        ["GoldRate"] = "金币倍率", ["SkillRate"] = "技能倍率", ["CompanionRate"] = "宠物倍率", ["MarketPlaceFeeRate"] = "寄售上架费率(0.01=1%)", ["MarketPlaceFeeMinimum"] = "寄售最低上架费", ["MarketPlaceTaxRate"] = "寄售成交税率(0.07=7%)",
         ["FishEnablePerfectCatch"] = "启用完美捕获", ["FishNibbleChanceBase"] = "基础咬钩几率",
         ["FishPointsRequired"] = "所需钓鱼点数", ["FishPointSuccessRewardMin"] = "成功奖励最小点数",
         ["FishPointSuccessRewardMax"] = "成功奖励最大点数", ["FishPointFailureRewardMin"] = "失败奖励最小点数",

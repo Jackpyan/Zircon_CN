@@ -1207,7 +1207,7 @@ namespace Server.Models
             if (refines.Count > 0)
                 Enqueue(new S.RefineList { List = refines });
 
-            Enqueue(new S.MarketPlaceConsign { Consignments = Character.Account.Auctions.Where(x => x.Character == Character || x.Character == null || x.Character.Deleted).Select(x => x.ToClientInfo(Character.Account)).ToList(), ObserverPacket = false });
+            SendConsignments();
 
             Enqueue(new S.MailList { Mail = Character.Account.Mail.Select(x => x.ToClientInfo()).ToList() });
             Enqueue(new S.GameStoreData
@@ -3980,6 +3980,31 @@ namespace Server.Models
 
         #region MarketPlace
 
+        /// <summary>
+        /// 下发本角色的寄售列表，并带上服务器当前的上架费率/最低费
+        /// （客户端用它显示「寄售费用」，保证显示 = 实扣）。
+        /// </summary>
+        public void SendConsignments()
+        {
+            Enqueue(new S.MarketPlaceConsign
+            {
+                Consignments = Character.Account.Auctions
+                    .Where(x => x.Character == Character || x.Character == null || x.Character.Deleted)
+                    .Select(x => x.ToClientInfo(Character.Account)).ToList(),
+                FeeRate = Config.MarketPlaceFeeRate,
+                FeeMinimum = Config.MarketPlaceFeeMinimum,
+                ObserverPacket = false,
+            });
+        }
+
+        /// <summary>
+        /// 邮件文案语言：优先用收件人在线连接的语言，离线时回退服务端默认（中文）。
+        /// 邮件正文/标题是**存库**的，所以必须在生成时按目标语言渲染。
+        /// </summary>
+        private static StringMessages MailLanguage(AccountInfo account)
+            => account?.Connection?.Language
+               ?? (StringMessages)ConfigReader.ConfigObjects[typeof(Server.Envir.Translations.ChineseMessages)];
+
         public void MarketPlaceConsign(C.MarketPlaceConsign p)
         {
             S.ItemChanged result = new S.ItemChanged
@@ -4034,7 +4059,8 @@ namespace Server.Models
 
             if (p.Price <= 0) return; // Buy Out Less than 1
 
-            int cost = Globals.MarketPlaceFee;
+            // 上架费 = 挂单总价 × 费率（费率/最低值来自 Config，可在 Web 后台动态调整）
+            int cost = Globals.CalcMarketPlaceFee(p.Price, p.Link.Count, Config.MarketPlaceFeeRate, Config.MarketPlaceFeeMinimum);
 
             // 名额按角色统计：同账号其它角色的上架不占本角色的额度
             if (Character.Account.Auctions.Count(x => x.Character == Character) >= Character.Account.HighestLevel() * 3 + Character.Account.StorageSize - Globals.StorageSize)
@@ -4120,7 +4146,7 @@ namespace Server.Models
 
             LogMilestone(MilestoneType.MarketConsign, auctionItem.Count, item: auctionItem.Info);
 
-            Enqueue(new S.MarketPlaceConsign { Consignments = new List<ClientMarketPlaceInfo> { auction.ToClientInfo(Character.Account) }, ObserverPacket = false });
+            Enqueue(new S.MarketPlaceConsign { Consignments = new List<ClientMarketPlaceInfo> { auction.ToClientInfo(Character.Account) }, FeeRate = Config.MarketPlaceFeeRate, FeeMinimum = Config.MarketPlaceFeeMinimum, ObserverPacket = false });
             Connection.ReceiveChatWithObservers(con => con.Language.ConsignComplete, MessageType.System);
         }
         public void MarketPlaceCancelConsign(C.MarketPlaceCancelConsign p)
@@ -4163,9 +4189,11 @@ namespace Server.Models
                 MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
                 mail.Account = Character.Account;
-                mail.Subject = "Listing Cancelled";
-                mail.Message = string.Format("You cancelled your sale of '{0}{1}' and was not able to collect the item.", item.Info.ItemName, item.Count == 1 ? "" : "x" + item.Count);
-                mail.Sender = "Market Place";
+                StringMessages mailLang = MailLanguage(Character.Account);
+
+                mail.Subject = mailLang.MarketPlaceListingCancelledSubject;
+                mail.Message = string.Format(mailLang.MarketPlaceListingCancelledMessage, item.Info.ItemName, item.Count == 1 ? "" : "x" + item.Count);
+                mail.Sender = mailLang.MarketPlaceSender;
                 item.Mail = mail;
                 item.Slot = 0;
                 mail.HasItem = true;
@@ -4282,10 +4310,13 @@ namespace Server.Models
 
             mail.Account = info.Account;
 
-            long tax = (long)(cost * Globals.MarketPlaceTax);
+            decimal taxRate = Config.MarketPlaceTaxRate;
+            long tax = (long)(cost * taxRate);
 
-            mail.Subject = "Listing Sale";
-            mail.Sender = "Market Place";
+            StringMessages saleLang = MailLanguage(info.Account);
+
+            mail.Subject = saleLang.MarketPlaceListingSaleSubject;
+            mail.Sender = saleLang.MarketPlaceSender;
 
             ItemInfo itemInfo = item.Info;
             int partIndex = item.Stats[Stat.ItemIndex];
@@ -4293,17 +4324,17 @@ namespace Server.Models
             string itemName;
 
             if (item.Info.ItemEffect == ItemEffect.ItemPart)
-                itemName = SEnvir.ItemInfoList.Binding.First(x => x.Index == partIndex).ItemName + " - [Part]";
+                itemName = SEnvir.ItemInfoList.Binding.First(x => x.Index == partIndex).ItemName + saleLang.MarketPlacePartSuffix;
             else
                 itemName = item.Info.ItemName;
 
-            mail.Message = $"You have sold an item\n\n" +
-                           string.Format("Buyer: {0}\n", Name) +
-                           string.Format("Item: {0} x{1}\n", itemName, p.Count) +
-                           string.Format("Price: {0:#,##0} each\n", info.Price) +
-                           string.Format("Sub Total: {0:#,##0}\n\n", cost) +
-                           string.Format("Tax: {0:#,##0} ({1:p0})\n\n", tax, Globals.MarketPlaceTax) +
-                           string.Format("Total: {0:#,##0}", cost - tax);
+            mail.Message = saleLang.MarketPlaceSoldHeader + "\n\n" +
+                           string.Format(saleLang.MarketPlaceSoldBuyer, Name) + "\n" +
+                           string.Format(saleLang.MarketPlaceSoldItem, itemName, p.Count) + "\n" +
+                           string.Format(saleLang.MarketPlaceSoldPrice, info.Price) + "\n" +
+                           string.Format(saleLang.MarketPlaceSoldSubTotal, cost) + "\n\n" +
+                           string.Format(saleLang.MarketPlaceSoldTax, tax, taxRate) + "\n\n" +
+                           string.Format(saleLang.MarketPlaceSoldTotal, cost - tax);
 
             UserItem gold = SEnvir.CreateFreshItem(SEnvir.GoldInfo);
             gold.Count = (long)(cost - tax);
@@ -4328,9 +4359,11 @@ namespace Server.Models
 
                 mail.Account = Character.Account;
 
-                mail.Subject = "Item Purchase";
-                mail.Sender = "Market Place";
-                mail.Message = string.Format("You purchased '{0}{1}' and was not able to collect the item.", itemName, item.Count == 1 ? "" : "x" + item.Count);
+                StringMessages buyLang = MailLanguage(Character.Account);
+
+                mail.Subject = buyLang.MarketPlacePurchaseSubject;
+                mail.Sender = buyLang.MarketPlaceSender;
+                mail.Message = string.Format(buyLang.MarketPlacePurchaseMessage, itemName, item.Count == 1 ? "" : "x" + item.Count);
 
                 item.Mail = mail;
                 item.Slot = 0;
@@ -4663,10 +4696,12 @@ namespace Server.Models
 
                 MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
+                StringMessages invalidLang = MailLanguage(info.Account);
+
                 mail.Account = info.Account;
-                mail.Subject = "Listing Cancelled";
-                mail.Message = "Your listing was cancelled because of Item change(s).";
-                mail.Sender = "System";
+                mail.Subject = invalidLang.MarketPlaceListingCancelledSubject;
+                mail.Message = invalidLang.MarketPlaceListingInvalidatedMessage;
+                mail.Sender = invalidLang.SystemSender;
                 item.Mail = mail;
                 item.Slot = 0;
                 mail.HasItem = true;

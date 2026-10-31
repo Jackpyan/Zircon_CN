@@ -72,6 +72,46 @@ namespace Client.Envir
 
         public static StringMessages Language { get; set; }
 
+        /// <summary>物品「职业要求」显示名（RequiredClass 单值原本无 Description，会显示英文）。</summary>
+        public static string RequiredClassText(RequiredClass value)
+        {
+            switch (value)
+            {
+                case RequiredClass.None: return Language.RequiredClassNone;
+                case RequiredClass.Warrior: return Language.RequiredClassWarrior;
+                case RequiredClass.Wizard: return Language.RequiredClassWizard;
+                case RequiredClass.Taoist: return Language.RequiredClassTaoist;
+                case RequiredClass.Assassin: return Language.RequiredClassAssassin;
+                case RequiredClass.WarWizTao: return Language.RequiredClassWarWizTao;
+                case RequiredClass.WizTao: return Language.RequiredClassWizTao;
+                case RequiredClass.AssWar: return Language.RequiredClassAssWar;
+                case RequiredClass.All: return Language.RequiredClassAll;
+                default: return value.ToString();
+            }
+        }
+
+        /// <summary>服务器下发的寄售上架费率（随 S.MarketPlaceConsign 更新，默认取本地常量）。</summary>
+        public static decimal MarketPlaceFeeRate = Globals.MarketPlaceFeeRate;
+
+        /// <summary>服务器下发的最低上架费。</summary>
+        public static int MarketPlaceFeeMinimum = Globals.MarketPlaceFeeMinimum;
+
+        /// <summary>按服务器当前费率计算上架费（与服务端扣费完全一致）。</summary>
+        public static int CalcMarketPlaceFee(long unitPrice, long count)
+            => Globals.CalcMarketPlaceFee(unitPrice, count, MarketPlaceFeeRate, MarketPlaceFeeMinimum);
+
+        /// <summary>好友状态显示名（走语言文件，避免界面出现 Online/Busy/Away/Offline 英文）。</summary>
+        public static string OnlineStateText(OnlineState state)
+        {
+            switch (state)
+            {
+                case OnlineState.Online: return Language.OnlineStateOnline;
+                case OnlineState.Busy: return Language.OnlineStateBusy;
+                case OnlineState.Away: return Language.OnlineStateAway;
+                default: return Language.OnlineStateOffline;
+            }
+        }
+
 
         static CEnvir()
         {

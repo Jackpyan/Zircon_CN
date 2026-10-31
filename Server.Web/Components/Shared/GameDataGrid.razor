@@ -233,8 +233,12 @@
     {
         if (item is not Library.SystemModels.ItemInfo info) return;
 
+        // Radzen 的 OpenAsync 形参是 Dictionary<string, object?>（值可空），
+        // 类型必须完全一致，否则触发 CS8620 可空性警告。
+        Dictionary<string, object?> parameters = new() { ["ItemName"] = $"{info.ItemName}（#{info.Index}）" };
+
         object? result = await DialogService.OpenAsync<GiveItemDialog>($"发放物品 - {info.ItemName}",
-            new Dictionary<string, object> { ["ItemName"] = $"{info.ItemName}（#{info.Index}）" },
+            parameters,
             new DialogOptions { Width = "360px", CloseDialogOnOverlayClick = false });
 
         if (result is not GiveItemDialog.GiveItemRequest request) return;

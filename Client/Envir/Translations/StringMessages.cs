@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 
 namespace Client.Envir.Translations
 {
@@ -115,6 +115,22 @@ namespace Client.Envir.Translations
         public abstract string GroupDialogLfgHint { get; set; }
         public abstract string GroupDialogLfgTypeMonster { get; set; }
         public abstract string GroupDialogLfgTypePvp { get; set; }
+        // 好友状态（聊天窗口「状态」下拉 / 好友列表状态标签）
+        public abstract string OnlineStateOnline { get; set; }
+        public abstract string OnlineStateBusy { get; set; }
+        public abstract string OnlineStateAway { get; set; }
+        public abstract string OnlineStateOffline { get; set; }
+        public abstract string FriendViewStatusAll { get; set; }
+        // 物品「职业要求」（RequiredClass 单值原本没有 Description，会显示英文）
+        public abstract string RequiredClassWarrior { get; set; }
+        public abstract string RequiredClassWizard { get; set; }
+        public abstract string RequiredClassTaoist { get; set; }
+        public abstract string RequiredClassAssassin { get; set; }
+        public abstract string RequiredClassWarWizTao { get; set; }
+        public abstract string RequiredClassWizTao { get; set; }
+        public abstract string RequiredClassAssWar { get; set; }
+        public abstract string RequiredClassAll { get; set; }
+        public abstract string RequiredClassNone { get; set; }
         public abstract string MarketNoItemSelected { get; set; }
         public abstract string MarketInvalidPrice { get; set; }
         public abstract string BuySellOverweight { get; set; }

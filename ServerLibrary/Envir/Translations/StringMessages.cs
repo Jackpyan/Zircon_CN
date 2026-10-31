@@ -164,6 +164,23 @@ namespace Server.Envir
         public abstract string ConsignBuyGuildFundsCost { get; set; }
         public abstract string ConsignBuyGuildFundsUsed { get; set; }
         public abstract string ConsignBuyCost { get; set; }
+        // 寄售邮件（服务端生成后存库，按收件人语言生成）
+        public abstract string MarketPlaceSender { get; set; }
+        public abstract string MarketPlaceListingSaleSubject { get; set; }
+        public abstract string MarketPlaceSoldHeader { get; set; }
+        public abstract string MarketPlaceSoldBuyer { get; set; }
+        public abstract string MarketPlaceSoldItem { get; set; }
+        public abstract string MarketPlaceSoldPrice { get; set; }
+        public abstract string MarketPlaceSoldSubTotal { get; set; }
+        public abstract string MarketPlaceSoldTax { get; set; }
+        public abstract string MarketPlaceSoldTotal { get; set; }
+        public abstract string MarketPlaceListingCancelledSubject { get; set; }
+        public abstract string MarketPlaceListingCancelledMessage { get; set; }
+        public abstract string MarketPlacePurchaseSubject { get; set; }
+        public abstract string MarketPlacePurchaseMessage { get; set; }
+        public abstract string MarketPlacePartSuffix { get; set; }
+        public abstract string MarketPlaceListingInvalidatedMessage { get; set; }
+        public abstract string SystemSender { get; set; }
         public abstract string StoreNotAvailable { get; set; }
         public abstract string StoreNeedSpace { get; set; }
         public abstract string StoreCost { get; set; }

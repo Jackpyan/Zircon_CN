@@ -3704,6 +3704,11 @@ namespace Client.Envir
 
         public void Process(S.MarketPlaceConsign p)
         {
+            // 服务器下发的上架费率/最低费，用于确认弹窗显示（与服务端实扣一致）。
+            // 无条件赋值：允许管理员把费率调成 0（免费上架）。
+            CEnvir.MarketPlaceFeeRate = p.FeeRate;
+            CEnvir.MarketPlaceFeeMinimum = p.FeeMinimum;
+
             GameScene.Game.ConsignmentBox.AddConsignments(p.Consignments);
         }
         public void Process(S.MarketPlaceSearch p)

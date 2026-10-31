@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.UserModels;
@@ -1592,6 +1592,7 @@ namespace Client.Scenes.Views
             public DXCheckBox AutoSkill_2;
 
             public DXCheckBox ChkPauseAutoSkills;
+            public DXLabel LblAutoSkillNote;
 
             // 挂机
             public DXLabel TimeLable;
@@ -1647,6 +1648,17 @@ namespace Client.Scenes.Views
                     (o, e) => Config.暂停辅助功能 = ChkPauseAutoSkills.Checked,
                     Config.暂停辅助功能);
                 ChkPauseAutoSkills.Hint = "勾选后将暂停所有职业技能辅助功能和自动施法，但保留设置";
+
+                // 单行说明，放在「暂停…」下面；宽度跟随左列，避免压到右侧挂机面板
+                LblAutoSkillNote = new DXLabel
+                {
+                    Parent = this,
+                    Text = "自动技能在战斗中自动施放，与挂机开关无关",
+                    AutoSize = false,
+                    Size = new Size(280, 16),
+                    DrawFormat = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter,
+                    ForeColour = Constants.PrimaryColour,
+                };
             }
 
             #region 分组框创建
@@ -1706,8 +1718,9 @@ namespace Client.Scenes.Views
                     (o, e) => Config.自动半月弯刀 = AutoHalfMoon.Checked, Config.自动半月弯刀);
 
                 y += 25;
-                AutoSwiftBlade = CreateCheckBox(Warrior, "自动快刀斩马", ColX, y,
+                AutoSwiftBlade = CreateCheckBox(Warrior, "自动迅捷剑法", ColX, y,
                     (o, e) => Config.自动快刀斩马 = AutoSwiftBlade.Checked, Config.自动快刀斩马);
+                AutoSwiftBlade.Hint = "战斗中自动施放「迅捷剑法」（旧名：快刀斩马）。\n勾选即生效，与「开始挂机」开关无关。";
                 AutoThunderStrike = CreateCheckBox(Warrior, "自动天雷锤", Col2, y,
                     (o, e) => Config.自动天雷锤 = AutoThunderStrike.Checked, Config.自动天雷锤);
 
@@ -3269,6 +3282,12 @@ namespace Client.Scenes.Views
 
                 if (ChkPauseAutoSkills != null)
                     ChkPauseAutoSkills.Location = new Point(AutoSkill.Location.X + 5, AutoSkill.Location.Y + AutoSkill.Size.Height + 5);
+
+                if (LblAutoSkillNote != null)
+                {
+                    LblAutoSkillNote.Location = new Point(AutoSkill.Location.X + 5, ChkPauseAutoSkills.Location.Y + 19);
+                    LblAutoSkillNote.Size = new Size(width - 10, 16);
+                }
 
                 // 右列：挂机
                 if (Android != null)

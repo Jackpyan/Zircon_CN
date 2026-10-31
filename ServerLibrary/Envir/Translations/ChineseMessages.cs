@@ -161,6 +161,22 @@ namespace Server.Envir.Translations
         public override string ConsignBuyGuildFundsCost { get; set; } = "行会基金不足，无法使用行会基金购买物品";
         public override string ConsignBuyGuildFundsUsed { get; set; } = "{0}使用{1:#,##0}行会基金购买了{2}x{3}";
         public override string ConsignBuyCost { get; set; } = "你买不起这商品";
+        public override string MarketPlaceSender { get; set; } = "寄售市场";
+        public override string MarketPlaceListingSaleSubject { get; set; } = "寄售售出";
+        public override string MarketPlaceSoldHeader { get; set; } = "你售出了一件物品";
+        public override string MarketPlaceSoldBuyer { get; set; } = "买家：{0}";
+        public override string MarketPlaceSoldItem { get; set; } = "物品：{0} x{1}";
+        public override string MarketPlaceSoldPrice { get; set; } = "单价：{0:#,##0}";
+        public override string MarketPlaceSoldSubTotal { get; set; } = "小计：{0:#,##0}";
+        public override string MarketPlaceSoldTax { get; set; } = "税：{0:#,##0}（{1:p0}）";
+        public override string MarketPlaceSoldTotal { get; set; } = "合计：{0:#,##0}";
+        public override string MarketPlaceListingCancelledSubject { get; set; } = "寄售撤回";
+        public override string MarketPlaceListingCancelledMessage { get; set; } = "你撤回了「{0}{1}」的寄售，但背包已满，物品未能取回。";
+        public override string MarketPlacePurchaseSubject { get; set; } = "寄售购买";
+        public override string MarketPlacePurchaseMessage { get; set; } = "你购买了「{0}{1}」，但背包已满，物品未能取回。";
+        public override string MarketPlacePartSuffix { get; set; } = " - [部件]";
+        public override string MarketPlaceListingInvalidatedMessage { get; set; } = "因物品数据变更，你的寄售已自动下架。";
+        public override string SystemSender { get; set; } = "系统";
 
 
         public override string StoreNotAvailable { get; set; } = "你无法购买此商品，该商品已经下架或者售出";

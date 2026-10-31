@@ -882,6 +882,11 @@ namespace Library.Network.ServerPackets
     public sealed class MarketPlaceConsign : Packet
     {
         public List<ClientMarketPlaceInfo> Consignments { get; set; }
+
+        /// <summary>服务器当前上架费率（0.01 = 1%），供客户端弹窗显示。</summary>
+        public decimal FeeRate { get; set; }
+        /// <summary>服务器当前最低上架费。</summary>
+        public int FeeMinimum { get; set; }
     }
 
     public sealed class MarketPlaceSearch : Packet

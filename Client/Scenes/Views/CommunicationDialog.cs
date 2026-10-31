@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.UserModels;
@@ -490,7 +490,7 @@ namespace Client.Scenes.Views
                 new DXListBoxItem
                 {
                     Parent = FriendOnlineStateBox.ListBox,
-                    Label = { Text = val.ToString() },
+                    Label = { Text = CEnvir.OnlineStateText((OnlineState)val) },
                     Item = val
                 };
             }
@@ -522,7 +522,7 @@ namespace Client.Scenes.Views
             new DXListBoxItem
             {
                 Parent = FriendViewStatusBox.ListBox,
-                Label = { Text = "全部" },
+                Label = { Text = CEnvir.Language.FriendViewStatusAll },
                 Item = "All"
             };
 
@@ -531,7 +531,7 @@ namespace Client.Scenes.Views
                 new DXListBoxItem
                 {
                     Parent = FriendViewStatusBox.ListBox,
-                    Label = { Text = val.GetType().GetMember(val.ToString())[0].GetCustomAttribute<DescriptionAttribute>()?.Description ?? val.ToString() },
+                    Label = { Text = CEnvir.OnlineStateText((OnlineState)val) },
                     Item = val
                 };
             }
@@ -1790,7 +1790,7 @@ namespace Client.Scenes.Views
 
         public void UpdateStateLabel()
         {
-            StatusLabel.Text = $"({OnlineState})";
+            StatusLabel.Text = $"({CEnvir.OnlineStateText(OnlineState)})";
             StatusLabel.Location = new Point(Size.Width - StatusLabel.Size.Width, 0);
 
             switch (OnlineState)

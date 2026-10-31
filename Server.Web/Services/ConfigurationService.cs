@@ -8,6 +8,7 @@ using Library.SystemModels;
 using MirDB;
 using Server.DBModels;
 using Server.Envir;
+using Server.Models;
 using Server.Web.Models;
 using S = Library.Network.ServerPackets;
 
@@ -85,6 +86,19 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
                 ConfigReader.Save(_assembly);
                 Config.LoadVersion();
                 if (SEnvir.Started) SEnvir.ServerBuffChanged = true;
+
+                // 寄售费率/最低费变化 → 立即推给在线玩家，避免「弹窗显示旧费、实际按新费扣」
+                if (SEnvir.Started && originals.Keys.Any(property =>
+                        property.Name is nameof(Config.MarketPlaceFeeRate) or nameof(Config.MarketPlaceFeeMinimum)))
+                {
+                    _ = SEnvir.InvokeOnGameThreadAsync(() =>
+                    {
+                        foreach (PlayerObject player in SEnvir.Players)
+                            player.SendConsignments();
+
+                        return true;
+                    });
+                }
                 audit.Record(user, "Configuration.Save", $"Updated {originals.Count} configuration values");
             }
             catch

@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.Scenes.Views;
@@ -2898,10 +2898,10 @@ namespace Client.Scenes
                         break;
                 }
 
+                // 组合值（Male|Female）也按「男女皆可」显示，避免落到 ToString() 出现英文
                 string genderText = displayInfo.RequiredGender == RequiredGender.Male ? "男" :
                                     displayInfo.RequiredGender == RequiredGender.Female ? "女" :
-                                    displayInfo.RequiredGender == RequiredGender.None ? "男女皆可" :
-                                    displayInfo.RequiredGender.ToString();
+                                    "男女皆可";
                 builder.AddLine($"性别要求：{genderText}", colour);
             }
 
@@ -2934,11 +2934,7 @@ namespace Client.Scenes
                         break;
                 }
 
-                Type type = displayInfo.RequiredClass.GetType();
-                MemberInfo[] infos = type.GetMember(displayInfo.RequiredClass.ToString());
-                DescriptionAttribute description = infos[0].GetCustomAttribute<DescriptionAttribute>();
-
-                builder.AddLine($"职业要求：{description?.Description ?? displayInfo.RequiredClass.ToString()}", colour);
+                builder.AddLine($"职业要求：{CEnvir.RequiredClassText(displayInfo.RequiredClass)}", colour);
             }
 
             if (displayInfo.RequiredAmount <= 0) return;

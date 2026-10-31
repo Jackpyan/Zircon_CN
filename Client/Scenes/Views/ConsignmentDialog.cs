@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.UserModels;
@@ -1208,7 +1208,7 @@ namespace Client.Scenes.Views
                 return;
             }
 
-            string message = string.Format(CEnvir.Language.ConsignmentDialogConsignConfirmMessage, ItemNameLabel.Text, cell.LinkedCount, Price, Globals.MarketPlaceFee);
+            string message = string.Format(CEnvir.Language.ConsignmentDialogConsignConfirmMessage, ItemNameLabel.Text, cell.LinkedCount, Price, CEnvir.CalcMarketPlaceFee(Price, cell.LinkedCount));
             if (_Owner.ConsignGuildBox.Checked)
                 message += CEnvir.Language.ConsignmentDialogUsingGuildFunds;
             DXMessageBox box = new DXMessageBox(message, CEnvir.Language.ConsignmentDialogConsignConfirmCaption, DXMessageBoxButtons.YesNo);
