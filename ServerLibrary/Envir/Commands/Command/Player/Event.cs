@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Player
     class Event : AbstractParameterizedCommand<IPlayerCommand>
     {
         public override string VALUE => "EVENT";
+        public override string ALIAS => "活动";
         public override int PARAMS_LENGTH => 1;
 
         public static Dictionary<string, string> LastCommand { get; set; } = [];

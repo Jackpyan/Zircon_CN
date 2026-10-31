@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Library.Network.ServerPackets;
 using Server.DBModels;
 using Server.Models;
@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class LevelWeapon : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "LEVELWEAPON";
+        public override string ALIAS => "武器等级";
 
         public override void Action(PlayerObject player)
         {

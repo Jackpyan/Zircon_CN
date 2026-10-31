@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ToggleGameMaster : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "GAMEMASTER";
+        public override string ALIAS => "GM模式";
 
         public override void Action(PlayerObject player)
         {

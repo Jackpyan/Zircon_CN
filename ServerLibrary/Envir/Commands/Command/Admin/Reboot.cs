@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Reboot : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "REBOOT";
+        public override string ALIAS => "重启";
 
         public override void Action(PlayerObject player)
         {

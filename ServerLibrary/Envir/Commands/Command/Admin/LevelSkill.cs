@@ -10,6 +10,7 @@ namespace Server.Envir.Commands.Command.Admin
     class LevelSkill : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "LEVELSKILL";
+        public override string ALIAS => "技能等级";
         public override int PARAMS_LENGTH => 4;
 
         public override void Action(PlayerObject player, string[] vals)

@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Player
     class ToggleTrade : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "ALLOWTRADE";
+        public override string ALIAS => "允许交易";
 
         public override void Action(PlayerObject player)
         {

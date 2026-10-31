@@ -828,7 +828,10 @@ namespace Server.Envir
 
             foreach (CharacterInfo cInfo in Rankings)
             {
-                if (cInfo.Account.Admin) continue;
+                // 与 A 端一致：只排除已删除 / 未激活 / 被封禁的账号。
+                // 以前这里排除全部 Admin，导致管理员角色永远进不了 TopRankings，
+                // 非 GM 模式下头顶拿不到「尊」（Ranking）特效，和普通玩家表现不一致。
+                if (cInfo.Deleted || !cInfo.Account.Activated || cInfo.Account.Banned) continue;
 
                 switch (cInfo.Class)
                 {

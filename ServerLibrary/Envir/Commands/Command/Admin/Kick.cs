@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Kick : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "KICK";
+        public override string ALIAS => "踢人";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

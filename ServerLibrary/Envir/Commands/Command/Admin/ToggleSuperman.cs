@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ToggleSuperman : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "SUPERMAN";
+        public override string ALIAS => "无敌";
 
         public override void Action(PlayerObject player)
         {

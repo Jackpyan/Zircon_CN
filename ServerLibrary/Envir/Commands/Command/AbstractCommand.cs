@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command
         where CommandType : ICommand
     {
         public abstract string VALUE { get; }
+        public virtual string ALIAS => null;
         public abstract void Action(PlayerObject player);
     }
 }

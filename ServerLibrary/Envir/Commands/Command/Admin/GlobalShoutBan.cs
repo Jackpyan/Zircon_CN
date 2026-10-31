@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class GlobalShoutBan : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GLOBALBAN";
+        public override string ALIAS => "全服禁言";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Player
     class ToggleGuildInvite : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "ALLOWGUILD";
+        public override string ALIAS => "允许入会";
 
         public override void Action(PlayerObject player)
         {

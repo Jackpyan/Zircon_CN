@@ -260,7 +260,10 @@ namespace Server.Models
                 setConfArr[(int)link.Slot] = link.Enabled;
             }
 
-            if (Character.Account.Admin || Character.Account.TempAdmin)
+            // 三种「管理员初始模式」只对「角色名 + server.ini 的 MasterPassword」登录（TempAdmin）生效。
+            // 「邮箱 + 账号密码」登录的管理员一律以普通用户状态进入，
+            // 需在游戏内输入 @gamemaster 手动开启 GM 模式（头顶挂 Developer 特效 + GM 命令可用）。
+            if (Character.Account.TempAdmin)
             {
                 GameMaster = Config.AdminStartInGamemasterMode;
                 Observer = Config.AdminStartInObserverMode;
@@ -868,6 +871,29 @@ namespace Server.Models
             }
         }
 
+        /// <summary>
+        /// 切换 GM 模式（命令：@gamemaster）。
+        /// 开启后头顶名字变金色、所有 GM 命令可用；关闭后恢复普通状态。
+        /// 只有账号具备管理权限（Admin 或主密码登录的 TempAdmin）才能切换。
+        /// </summary>
+        public void ToggleGameMasterMode()
+        {
+            if (Character?.Account == null) return;
+            if (!Character.Account.Admin && !Character.Account.TempAdmin) return; // 普通用户：无任何反应
+
+            GameMaster = !GameMaster;
+
+            // 头顶 GM 渲染 = BuffType.Developer（客户端渲染 GameInter 资源 3410 的橙色特效）
+            if (GameMaster)
+                BuffAdd(BuffType.Developer, TimeSpan.MaxValue, null, true, false, TimeSpan.Zero);
+            else
+                BuffRemove(BuffType.Developer);
+
+            Connection.ReceiveChat(GameMaster
+                ? "GM 模式已开启：头顶显示 GM 特效，GM 命令可用"
+                : "GM 模式已关闭：恢复普通外观，GM 命令不可用", MessageType.System);
+        }
+
         public override void ProcessNameColour()
         {
             NameColour = Color.White;
@@ -1249,10 +1275,15 @@ namespace Server.Models
 
             SendLFGList();
 
+            // 排行榜集合可能是在本角色登录前算好的（历史上管理员被排除在外），
+            // 登录时刷新一次，确保「非 GM 模式下的排行榜头顶特效」不会缺失。
+            SEnvir.UpdateLead();
+
             if (SEnvir.TopRankings.Contains(Character))
                 BuffAdd(BuffType.Ranking, TimeSpan.MaxValue, null, true, false, TimeSpan.Zero);
 
-            if (Character.Account.Admin)
+            // 头顶 GM 特效只在 GM 模式下挂（邮箱登录的管理员默认不是 GM 模式）
+            if (GameMaster)
                 BuffAdd(BuffType.Developer, TimeSpan.MaxValue, null, true, false, TimeSpan.Zero);
 
             Enqueue(new S.HelmetToggle { HideHelmet = Character.HideHelmet });
@@ -1843,6 +1874,17 @@ namespace Server.Models
                 parts = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
                 if (parts.Length == 0) return;
+
+                // GM 模式切换命令：@gamemaster
+                // 有管理权限 → 切换 GM 模式（不受当前 GM 状态限制，否则永远开不起来）；
+                // 无权限 → 交给命令处理器，输出与普通未知命令完全一致的提示。
+                if ((string.Equals(parts[0], "GAMEMASTER", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(parts[0], "GM模式", StringComparison.Ordinal))
+                    && (Character.Account.Admin || Character.Account.TempAdmin))
+                {
+                    ToggleGameMasterMode();
+                    return;
+                }
 
                 SEnvir.CommandHandler.Handle(this, parts);
             }

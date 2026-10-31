@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Player
     abstract class AbstractToggleCompanion : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "ENABLELEVEL{0}";
+        public override string ALIAS => "开启等级{0}";
 
         public override void Action(PlayerObject player)
         {

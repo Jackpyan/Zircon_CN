@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Admin
     class PromoteFame : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "PROMOTEFAME";
+        public override string ALIAS => "加声望";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

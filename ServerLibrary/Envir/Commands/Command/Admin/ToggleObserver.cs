@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ToggleObserver : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "OBSERVER";
+        public override string ALIAS => "观察者";
 
         public override void Action(PlayerObject player)
         {

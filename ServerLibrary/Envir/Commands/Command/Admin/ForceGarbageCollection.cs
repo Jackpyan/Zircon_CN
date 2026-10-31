@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ForceGarbageCollection : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "GCOLLECT";
+        public override string ALIAS => "强制回收";
 
         public override void Action(PlayerObject player)
         {

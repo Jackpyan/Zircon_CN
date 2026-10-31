@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Level : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "LEVEL";
+        public override string ALIAS => "等级";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

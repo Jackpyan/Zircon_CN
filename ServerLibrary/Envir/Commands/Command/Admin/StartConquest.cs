@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class StartConquest : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "STARTCONQUEST";
+        public override string ALIAS => "开始攻城";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

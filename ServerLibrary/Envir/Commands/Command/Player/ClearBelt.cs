@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Player
     class ClearBelt : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "CLEARBELT";
+        public override string ALIAS => "清快捷栏";
 
         public override void Action(PlayerObject player)
         {

@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Goto : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GOTO";
+        public override string ALIAS => "去";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

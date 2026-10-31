@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class GiveHorse : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GIVEHORSE";
+        public override string ALIAS => "给坐骑";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

@@ -3,5 +3,6 @@
     class ToggleCompanionLock7 : AbstractToggleCompanion
     {
         public override string VALUE => string.Format(base.VALUE, 7);
+        public override string ALIAS => "开启等级7";
     }
 }

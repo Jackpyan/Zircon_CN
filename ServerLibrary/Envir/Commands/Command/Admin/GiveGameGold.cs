@@ -10,6 +10,7 @@ namespace Server.Envir.Commands.Admin
     class GiveGameGold : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GIVEGAMEGOLD";
+        public override string ALIAS => "给元宝";
         public override int PARAMS_LENGTH => 3;
 
         public override void Action(PlayerObject player, string[] vals)

@@ -6,6 +6,7 @@ namespace Server.Envir.Commands.Command.Player
     class ToggleGroupRecall : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "ALLOWRECALL";
+        public override string ALIAS => "允许召唤";
 
         public override void Action(PlayerObject player)
         {

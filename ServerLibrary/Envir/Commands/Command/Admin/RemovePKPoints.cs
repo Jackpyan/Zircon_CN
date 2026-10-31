@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class RemovePKPoints : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "REMOVEPKPOINTS";
+        public override string ALIAS => "清PK值";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

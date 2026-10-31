@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Server.Models;
 using System.Linq;
 
@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class LevelCrafting : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "LEVELCRAFTING";
+        public override string ALIAS => "打造等级";
 
         public override void Action(PlayerObject player)
         {

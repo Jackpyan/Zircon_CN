@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Player
     class ToggleExtractorLock : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "EXTRACTORLOCK";
+        public override string ALIAS => "锁定提取器";
 
         public override void Action(PlayerObject player)
         {

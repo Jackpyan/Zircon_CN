@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Server.DBModels;
 using Server.Models;
 using S = Library.Network.ServerPackets;
@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ClearBag : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "CLEARBAG";
+        public override string ALIAS => "清背包";
 
         public override void Action(PlayerObject player)
         {

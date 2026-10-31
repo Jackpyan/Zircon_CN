@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Player
     class GroupRecall : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "RECALLGROUP";
+        public override string ALIAS => "队伍召唤";
 
         public override void Action(PlayerObject player)
         {

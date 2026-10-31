@@ -10,6 +10,7 @@ namespace Server.Envir.Commands.Command.Admin
     class CreateGuild : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "CREATEGUILD";
+        public override string ALIAS => "建行会";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

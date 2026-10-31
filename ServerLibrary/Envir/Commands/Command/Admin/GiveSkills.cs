@@ -10,6 +10,7 @@ namespace Server.Envir.Commands.Command.Admin
     class GiveSkills : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GIVESKILLS";
+        public override string ALIAS => "给技能";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

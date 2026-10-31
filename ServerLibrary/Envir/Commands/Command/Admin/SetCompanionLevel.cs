@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class SetCompanionLevel : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "SETCOMPANIONLEVEL";
+        public override string ALIAS => "宠物等级";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

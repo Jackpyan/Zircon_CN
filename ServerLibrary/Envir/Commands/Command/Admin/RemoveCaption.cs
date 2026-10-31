@@ -8,6 +8,8 @@ namespace Server.Envir.Commands.Command.Admin
     {
 
         public override string VALUE => "REMOVECAPTION";
+
+        public override string ALIAS => "清除头衔";
         public override int PARAMS_LENGTH => 1;
 
 

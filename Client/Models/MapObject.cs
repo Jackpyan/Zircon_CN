@@ -6137,7 +6137,9 @@ namespace Client.Models
                     break;
                 case MagicEffect.Developer:
                     {
-                        effects.Add(new MirEffect(3410, 7, TimeSpan.FromMilliseconds(150), LibraryFile.GameInter, 0, 0, Globals.NoneColour)
+                        // 起始图与 A 端保持一致（A 端 MapObject.DeveloperCreate 用的是 3400）。
+                        // B 端资源包来自 A 端，3410 在该包内不是 GM 头顶光环，会显示错误图形。
+                        effects.Add(new MirEffect(3400, 7, TimeSpan.FromMilliseconds(150), LibraryFile.GameInter, 0, 0, Globals.NoneColour)
                         {
                             Blend = true,
                             Target = this,

@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Player
     class BlockWhisper : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "BLOCKWHISPER";
+        public override string ALIAS => "屏蔽私聊";
 
         public override void Action(PlayerObject player)
         {

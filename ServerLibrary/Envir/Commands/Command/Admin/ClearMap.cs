@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Server.Models;
 using Server.Models.Monsters;
 using System.Linq;
@@ -12,6 +12,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ClearMap : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "CLEARMAP";
+        public override string ALIAS => "清地图";
 
         public override void Action(PlayerObject player)
         {

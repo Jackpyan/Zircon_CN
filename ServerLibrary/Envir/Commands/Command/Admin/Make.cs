@@ -11,6 +11,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Make : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "MAKE";
+        public override string ALIAS => "制造";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

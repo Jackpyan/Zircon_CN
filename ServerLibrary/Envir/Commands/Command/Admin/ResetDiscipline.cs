@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ResetDiscipline : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "RESETDISCIPLINE";
+        public override string ALIAS => "重置修为";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

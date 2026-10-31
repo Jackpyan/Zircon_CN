@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class SetCompanionStat : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "SETCOMPANIONSTAT";
+        public override string ALIAS => "宠物属性";
         public override int PARAMS_LENGTH => 2;
 
         public override void Action(PlayerObject player, string[] vals)

@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class AddStat : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "ADDSTAT";
+        public override string ALIAS => "加属性";
         public override int PARAMS_LENGTH => 4;
 
         public override void Action(PlayerObject player, string[] vals)

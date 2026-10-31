@@ -29,9 +29,21 @@ namespace Server.Envir.Commands.Handler
             return false;
         }
 
+        /// <summary>命令是否存在：英文命令名或中文别名都算。</summary>
         public virtual bool CommandExists(string command)
         {
-            return Commands.Exists(userCommand => userCommand.VALUE.Equals(command.ToUpper()));
+            return Commands.Exists(userCommand => IsMatch(userCommand, command));
+        }
+
+        /// <summary>英文名忽略大小写匹配，中文别名精确匹配。</summary>
+        protected static bool IsMatch(ICommand userCommand, string input)
+        {
+            if (userCommand == null || string.IsNullOrEmpty(input)) return false;
+
+            if (string.Equals(userCommand.VALUE, input, StringComparison.OrdinalIgnoreCase)) return true;
+
+            return !string.IsNullOrEmpty(userCommand.ALIAS)
+                   && string.Equals(userCommand.ALIAS, input, StringComparison.Ordinal);
         }
 
         public virtual void Handle(PlayerObject player, string[] input)
@@ -40,7 +52,7 @@ namespace Server.Envir.Commands.Handler
             {
                 string CommandInput = input[0].ToUpper();
 
-                ICommand command = Commands.Find(userCommand => userCommand.VALUE.Equals(CommandInput));
+                ICommand command = Commands.Find(userCommand => IsMatch(userCommand, input[0]));
                 if (command == null)
                     throw new UserCommandException(string.Format("命令 @{0} 不存在。", CommandInput));
 
