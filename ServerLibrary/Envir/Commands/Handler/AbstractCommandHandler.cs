@@ -56,8 +56,11 @@ namespace Server.Envir.Commands.Handler
                 if (command == null)
                     throw new UserCommandException(string.Format("命令 @{0} 不存在。", CommandInput));
 
-                if (command is AbstractParameterizedCommand<CommandType>)
-                    (command as AbstractParameterizedCommand<CommandType>).Action(player, input);
+                if (command is AbstractParameterizedCommand<CommandType> parameterized)
+                {
+                    parameterized.InvokedAs = input[0];
+                    parameterized.Action(player, input);
+                }
                 else if (command is AbstractCommand<CommandType>)
                     (command as AbstractCommand<CommandType>).Action(player);
 

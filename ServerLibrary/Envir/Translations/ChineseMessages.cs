@@ -232,6 +232,7 @@ namespace Server.Envir.Translations
         public override string GuildJoinWelcome { get; set; } = "欢迎加入行会:{0}";
         public override string GuildMemberJoined { get; set; } = "{0}邀请{1}加入行会";
         public override string GuildLeaveFailed { get; set; } = "无法离开行会，你目前是行会会长不能离开";
+        public override string GuildLeaveNoGuild { get; set; } = "没加入任何行会，无需退出行会。";
         public override string GuildLeave { get; set; } = "你已经离开了行会";
         public override string GuildMemberLeave { get; set; } = "{0}已经离开行会";
         public override string GuildWarDeath { get; set; } = "{3}行会的{2}在行会战里击败{1}行会的{0}";

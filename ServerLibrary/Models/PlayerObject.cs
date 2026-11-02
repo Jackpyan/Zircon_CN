@@ -1879,7 +1879,7 @@ namespace Server.Models
                 // 有管理权限 → 切换 GM 模式（不受当前 GM 状态限制，否则永远开不起来）；
                 // 无权限 → 交给命令处理器，输出与普通未知命令完全一致的提示。
                 if ((string.Equals(parts[0], "GAMEMASTER", StringComparison.OrdinalIgnoreCase)
-                     || string.Equals(parts[0], "GM模式", StringComparison.Ordinal))
+                     || string.Equals(parts[0], "GM模式", StringComparison.OrdinalIgnoreCase))
                     && (Character.Account.Admin || Character.Account.TempAdmin))
                 {
                     ToggleGameMasterMode();
@@ -3371,7 +3371,15 @@ namespace Server.Models
                 return;
             }
 
-            var userCurrency = GetCurrency(info.Currency);
+            // 数据里 Currency 未配置时回退到「金币」，避免 First() 抛异常导致领养失败/掉线
+            CurrencyInfo currencyInfo = info.Currency
+                                        ?? SEnvir.CurrencyInfoList.Binding.FirstOrDefault(x => x.Type == CurrencyType.Gold);
+
+            if (currencyInfo == null) return;
+
+            UserCurrency userCurrency = GetCurrency(currencyInfo);
+
+            if (userCurrency == null) return;
 
             if (info.Price > userCurrency.Amount)
             {
@@ -5611,7 +5619,11 @@ namespace Server.Models
 
         public void GuildLeave()
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.Account.GuildMember == null)
+            {
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildLeaveNoGuild, MessageType.System);
+                return;
+            }
 
             GuildMemberInfo info = Character.Account.GuildMember;
 

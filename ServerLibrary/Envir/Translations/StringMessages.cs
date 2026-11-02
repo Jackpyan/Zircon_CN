@@ -234,6 +234,7 @@ namespace Server.Envir
         public abstract string GuildJoinWelcome { get; set; }
         public abstract string GuildMemberJoined { get; set; }
         public abstract string GuildLeaveFailed { get; set; }
+        public abstract string GuildLeaveNoGuild { get; set; }
         public abstract string GuildLeave { get; set; }
         public abstract string GuildMemberLeave { get; set; }
         public abstract string GuildWarDeath { get; set; }

@@ -221,6 +221,7 @@ namespace Server.Envir.Translations
         public override string GuildJoinWelcome { get; set; } = "Welcome to the guild: {0}.";
         public override string GuildMemberJoined { get; set; } = "{0} has invited {1} to the guild.";
         public override string GuildLeaveFailed { get; set; } = "Failed to leave guild, You cannot leave other guild members without a leader.";
+        public override string GuildLeaveNoGuild { get; set; } = "You are not in a guild.";
         public override string GuildLeave { get; set; } = "You have left the guild.";
         public override string GuildMemberLeave { get; set; } = "{0} has left the guild.";
         public override string GuildWarDeath { get; set; } = "{0} from {1} was killed by {2} from the guild {3}.";
