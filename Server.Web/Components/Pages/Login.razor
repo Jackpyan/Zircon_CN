@@ -1,4 +1,4 @@
-@page "/login"
+﻿@page "/login"
 @attribute [AllowAnonymous]
 @layout LoginLayout
 @inject AuthenticationStateProvider AuthenticationStateProvider
@@ -11,21 +11,24 @@
     <section class="login-card">
         <div class="login-kicker">服务器控制台 / 身份验证</div>
         <h1>进入服务器控制平面</h1>
-        <p>使用 Server.ini 中配置的管理员账号与主密码。</p>
 
-        @if (HasError)
+        @if (IsBlocked)
         {
-            <div class="alert danger">账号或密码不正确，或尝试次数过多。</div>
+            <div class="alert danger">登录尝试过多，已被临时封锁。请联系管理员在后台「安全 → 登录黑名单」解除，或 15 分钟后再试。</div>
+        }
+        else if (HasError)
+        {
+            <div class="alert danger">账号或密码不正确。</div>
         }
 
         <form method="post" action="/auth/login" class="login-form">
             <AntiforgeryToken />
             <label>
-                <span>管理员账号</span>
+                <span>账号</span>
                 <input name="username" autocomplete="username" required autofocus />
             </label>
             <label>
-                <span>主密码</span>
+                <span>密码</span>
                 <input name="password" type="password" autocomplete="current-password" required />
             </label>
             <button type="submit" class="primary-action">验证并进入</button>
@@ -42,6 +45,7 @@
     public string? Error { get; set; }
 
     private bool HasError => Error == "1";
+    private bool IsBlocked => Error == "2";
 
     protected override async Task OnInitializedAsync()
     {

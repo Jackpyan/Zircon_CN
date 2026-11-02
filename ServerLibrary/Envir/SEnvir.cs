@@ -68,6 +68,23 @@ namespace Server.Envir
         public static ConcurrentQueue<string> DisplayChatLogs = new ConcurrentQueue<string>();
         public static ConcurrentQueue<string> ChatLogs = new ConcurrentQueue<string>();
         private static readonly ConcurrentQueue<Action> AdminActions = new ConcurrentQueue<Action>();
+        /// <summary>停服阶段直接落盘：此时日志队列线程已退出，普通 Log 会丢失。</summary>
+        public static void LogShutdown(string log)
+        {
+            string line = string.Format("[{0:F}]: [停服] {1}", Time.Now, log);
+
+            try
+            {
+                File.AppendAllText(PlatformPath.Resolve(@".\Logs.txt"), line + Environment.NewLine);
+            }
+            catch
+            {
+                // 停服日志写失败不影响停机
+            }
+
+            try { Console.WriteLine(line); } catch { }
+        }
+
         public static void LogChat(string log)
         {
             log = string.Format("[{0:F}]: {1}", Time.Now, log);
@@ -1788,16 +1805,22 @@ namespace Server.Envir
                 }
             }
 
+            DateTime shutdownStart = Time.Now;
+            LogShutdown("开始停服：关闭 Web 服务与网络");
+
             WebServer.StopWebServer();
             StopNetwork();
+            LogShutdown($"网络已停止，耗时 {(Time.Now - shutdownStart).TotalSeconds:F1}s");
 
             while (Saving) Thread.Sleep(1);
             if (Session != null)
                 Session.BackUpDelay = 0;
             Save();
             while (Saving) Thread.Sleep(1);
+            LogShutdown($"数据库保存完成，累计 {(Time.Now - shutdownStart).TotalSeconds:F1}s");
 
             StopEnvir();
+            LogShutdown($"停服完成，总耗时 {(Time.Now - shutdownStart).TotalSeconds:F1}s");
         }
 
         public static void ProcessGameGold()
@@ -1954,7 +1977,10 @@ namespace Server.Envir
             if (Session == null) return;
 
             Saving = true;
+
+            DateTime saveTime = Time.Now;
             Session.Save(false);
+            LogShutdown($"序列化并写入数据库文件，耗时 {(Time.Now - saveTime).TotalSeconds:F1}s");
 
             WebServer.Save();
 
@@ -1964,7 +1990,10 @@ namespace Server.Envir
         private static void CommitChanges(object data)
         {
             Session session = (Session)data;
+
+            DateTime commitTime = Time.Now;
             session?.Commit();
+            LogShutdown($"Commit（含 gz 备份）耗时 {(Time.Now - commitTime).TotalSeconds:F1}s");
 
             WebServer.CommitChanges(data);
 
@@ -4225,6 +4254,126 @@ namespace Server.Envir
 
             return totalHash;
         }
+        /// <summary>
+        /// Web 后台登录校验：邮箱 + 游戏密码 + WebAdmin 权限。
+        /// 与游戏登录使用同一套 PBKDF2 校验，避免两套密码算法不一致。
+        /// </summary>
+        /// <param name="email">账号邮箱</param>
+        /// <param name="password">账号密码（明文）</param>
+        /// <param name="account">校验通过时的账号对象</param>
+        /// <param name="reason">失败原因（用于审计）</param>
+        public static bool TryValidateWebAccount(string email, string password, out AccountInfo account, out string reason)
+        {
+            account = null;
+            reason = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(password))
+            {
+                reason = "EmptyCredentials";
+                return false;
+            }
+
+            if (AccountInfoList == null)
+            {
+                reason = "ServerNotRunning";
+                return false;
+            }
+
+            if (!Globals.EMailRegex.IsMatch(email))
+            {
+                reason = "BadEmailFormat";
+                return false;
+            }
+
+            AccountInfo match = null;
+
+            foreach (AccountInfo info in AccountInfoList.Binding)
+            {
+                if (!string.Equals(info.EMailAddress, email, StringComparison.OrdinalIgnoreCase)) continue;
+
+                match = info;
+                break;
+            }
+
+            if (match == null)
+            {
+                reason = "AccountNotFound";
+                return false;
+            }
+
+            if (!PasswordMatch(password, match.Password))
+            {
+                reason = "WrongPassword";
+                return false;
+            }
+
+            if (!match.Activated)
+            {
+                reason = "AccountNotActivated";
+                return false;
+            }
+
+            if (match.Banned && match.BanExpiry > Now)
+            {
+                reason = "AccountBanned";
+                return false;
+            }
+
+            if (!match.WebAdmin)
+            {
+                reason = "NoWebPermission";
+                return false;
+            }
+
+            account = match;
+            return true;
+        }
+
+        /// <summary>账号派生凭据指纹：改密码 / 收回 WebAdmin 权限后，旧会话立即失效。</summary>
+        /// <summary>
+        /// 尝试取 Web 账号指纹。
+        /// 返回 false：账号表不可用（游戏服未启动），调用方不应据此判定会话失效；
+        /// 返回 true 且 stamp 为空：账号不存在或已无 WebAdmin 权限（应判定失效）。
+        /// </summary>
+        public static bool TryGetWebAccountStamp(string email, out string stamp)
+        {
+            stamp = string.Empty;
+
+            if (AccountInfoList == null) return false;
+
+            if (string.IsNullOrWhiteSpace(email)) return true;
+
+            foreach (AccountInfo account in AccountInfoList.Binding)
+            {
+                if (!string.Equals(account.EMailAddress, email, StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (!account.WebAdmin) return true;
+
+                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin");
+                stamp = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
+                return true;
+            }
+
+            return true;
+        }
+
+        public static string GetWebAccountStamp(string email)
+        {
+            if (AccountInfoList == null) return string.Empty;
+
+            foreach (AccountInfo account in AccountInfoList.Binding)
+            {
+                if (!string.Equals(account.EMailAddress, email, StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (!account.WebAdmin) return string.Empty;
+
+                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin");
+                return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
+            }
+
+            return string.Empty;
+        }
+
         private static bool PasswordMatch(string password, byte[] totalHash)
         {
             if (totalHash == null || totalHash.Length != SaltSize + hashSize) return false;

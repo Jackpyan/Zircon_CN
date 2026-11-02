@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime;
 using System.Security.Claims;
@@ -28,6 +28,14 @@ GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 System.Net.IPAddress adminAddress = AdminEndpointValidator.ValidateAndResolve();
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+// 停服流程：游戏服停机 + 存库放在 ApplicationStopping 里同步完成（见文件末尾）。
+// 这里的 ShutdownTimeout 只影响「Kestrel 等浏览器长连接关闭」的时间。
+// 实测存库仅 0.3s，而默认 30s 全耗在等 Blazor 的 WebSocket 上 → 收到 3s。
+builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(3);
+});
 builder.WebHost.ConfigureKestrel(options => options.Listen(adminAddress, Config.AdminWebPort));
 
 // 根据 Server.ini 的 AdminWebHost 自动放行对应的 Host 头，避免以内网 IP 访问时被 Host Filtering 返回 400 Bad Request - Invalid Hostname
@@ -64,7 +72,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     {
         options.LoginPath = "/login";
         options.LogoutPath = "/auth/logout";
-        options.AccessDeniedPath = "/login";
+        options.AccessDeniedPath = "/denied";
         options.Cookie.Name = "zircon.admin";
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Strict;
@@ -74,14 +82,25 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.Events.OnValidatePrincipal = context =>
         {
             AdminCredentialService credentials = context.HttpContext.RequestServices.GetRequiredService<AdminCredentialService>();
+
+            string? name = context.Principal?.Identity?.Name;
+            string? role = context.Principal?.FindFirst(ClaimTypes.Role)?.Value;
             string? stamp = context.Principal?.FindFirst("admin_stamp")?.Value;
-            if (!string.Equals(stamp, credentials.GetSecurityStamp(), StringComparison.Ordinal))
+
+            // 必须按角色校验：主密码登录用主密码指纹，账号登录用账号指纹。
+            // 之前一律比对主密码指纹，导致账号登录后每个请求都被 RejectPrincipal → 弹回登录页。
+            if (!credentials.ValidateStamp(name, role, stamp))
                 context.RejectPrincipal();
+
             return Task.CompletedTask;
         };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    // 高危操作只允许主密码登录的 Administrator（账号登录为 WebAdmin，只读/常规运维）
+    options.AddPolicy("Administrator", policy => policy.RequireRole(AdminCredentialService.RoleAdministrator));
+});
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, RevalidatingAdminAuthenticationStateProvider>();
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
@@ -110,6 +129,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 builder.Services.AddSingleton<AdminCredentialService>();
 builder.Services.AddSingleton<AdminAuditService>();
+builder.Services.AddSingleton<LoginThrottleService>();
 builder.Services.AddSingleton<IGameServerController, GameServerController>();
 builder.Services.AddHostedService(provider => (GameServerController)provider.GetRequiredService<IGameServerController>());
 builder.Services.AddSingleton<ServerMetricsService>();
@@ -144,24 +164,46 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
 
-app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials, AdminAuditService audit) =>
+app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials, AdminAuditService audit, LoginThrottleService throttle) =>
 {
     await antiforgery.ValidateRequestAsync(context);
     IFormCollection form = await context.Request.ReadFormAsync(context.RequestAborted);
     string userName = form["username"].ToString();
     string password = form["password"].ToString();
 
-    if (!credentials.Validate(userName, password))
+    string? address = context.Connection.RemoteIpAddress?.ToString();
+    string? userAgent = context.Request.Headers.UserAgent.ToString();
+    bool isIntranet = AdminEndpointValidator.IsIntranet(context.Connection.RemoteIpAddress);
+
+    // 先看是否已被封禁（可在后台「安全 → 登录黑名单」解除）
+    if (throttle.IsBlocked(address, userName, out LoginThrottleEntry? blocked))
     {
-        audit.Record(userName, "LoginFailed", "Invalid administrator credentials", context.Connection.RemoteIpAddress?.ToString());
+        audit.Record(userName, "LoginBlocked", "登录被拦截", address,
+            role: null, result: "Denied", target: "WebConsole",
+            reason: $"BlockedUntil={blocked!.BlockedUntil:yyyy-MM-dd HH:mm:ss}", userAgent: userAgent);
+
+        return Results.Redirect("/login?error=2");
+    }
+
+    AdminLoginResult result = credentials.Validate(userName, password, isIntranet);
+
+    if (!result.Ok)
+    {
+        throttle.RecordFailure(address, userName);
+
+        audit.Record(userName, "LoginFailed", "登录失败", address,
+            role: null, result: "Failed", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+
         return Results.Redirect("/login?error=1");
     }
 
+    throttle.Reset(address, userName);
+
     Claim[] claims =
     [
-        new(ClaimTypes.Name, credentials.UserName),
-        new(ClaimTypes.Role, "Administrator"),
-        new("admin_stamp", credentials.GetSecurityStamp())
+        new(ClaimTypes.Name, result.UserName),
+        new(ClaimTypes.Role, result.Role),
+        new("admin_stamp", credentials.GetStamp(result.UserName, result.Role))
     ];
     ClaimsPrincipal principal = new(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, new AuthenticationProperties
@@ -170,17 +212,66 @@ app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery,
         AllowRefresh = true,
         ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
     });
-    audit.Record(credentials.UserName, "Login", "Administrator signed in", context.Connection.RemoteIpAddress?.ToString());
+    audit.Record(result.UserName, "Login", "登录成功", address,
+        role: result.Role, result: "Success", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+
     return Results.Redirect("/");
-}).RequireRateLimiting("admin-login");
+});
 
 app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery, AdminAuditService audit) =>
 {
     await antiforgery.ValidateRequestAsync(context);
-    audit.Record(context.User.Identity?.Name ?? "unknown", "Logout", "Administrator signed out", context.Connection.RemoteIpAddress?.ToString());
+    audit.Record(context.User.Identity?.Name ?? "unknown", "Logout", "退出登录",
+        context.Connection.RemoteIpAddress?.ToString(),
+        role: context.User.FindFirst(ClaimTypes.Role)?.Value,
+        result: "Success", target: "WebConsole", reason: null,
+        userAgent: context.Request.Headers.UserAgent.ToString());
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 }).RequireAuthorization();
+
+app.MapGet("/audit/export", (AdminAuditService audit) =>
+{
+    System.Text.StringBuilder builder = new();
+    builder.AppendLine("时间,操作者,身份,操作,结果,详情,原因,来源IP");
+
+    static string Escape(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Contains(',') || value.Contains('"') || value.Contains('\n')
+            ? $"\"{value.Replace("\"", "\"\"")}\""
+            : value;
+    }
+
+    foreach (AdminAuditEntry entry in audit.GetEntries().Reverse())
+    {
+        builder.AppendLine(string.Join(',',
+            Escape(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")),
+            Escape(entry.User),
+            Escape(entry.Role),
+            Escape(entry.Action),
+            Escape(entry.Result),
+            Escape(entry.Detail),
+            Escape(entry.Reason),
+            Escape(entry.Address)));
+    }
+
+    byte[] content = System.Text.Encoding.UTF8.GetPreamble()
+        .Concat(System.Text.Encoding.UTF8.GetBytes(builder.ToString()))
+        .ToArray();
+
+    return Results.File(content, "text/csv; charset=utf-8", $"admin-audit-{DateTime.Now:yyyyMMdd}.csv");
+}).RequireAuthorization("Administrator");
+
+app.MapGet("/auth/whoami", (HttpContext context) => Results.Json(new
+{
+    authenticated = context.User.Identity?.IsAuthenticated == true,
+    name = context.User.Identity?.Name,
+    role = context.User.FindFirst(ClaimTypes.Role)?.Value,
+    stamp = context.User.FindFirst("admin_stamp")?.Value,
+    masterLoginAllowed = Config.WebAllowMasterLogin,
+    accountLoaded = SEnvir.AccountInfoList != null
+})).RequireAuthorization();
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live", time = DateTimeOffset.UtcNow }));
 
@@ -249,10 +340,55 @@ app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
 app.Lifetime.ApplicationStopping.Register(() =>
 {
+    ShutdownLog("ApplicationStopping：开始关机");
+
+    // 关键：游戏服停机 + 存库必须在这里同步做完。
+    // 之后的托管服务停止阶段，Kestrel 要等浏览器长连接（Blazor WebSocket）关闭，
+    // 会一直等到 ShutdownTimeout 才放手 —— 若把存库放在那之后，就会被这段等待吞掉。
+    if (SEnvir.EnvirThread != null)
+    {
+        DateTime start = DateTime.Now;
+        try
+        {
+            if (!SEnvir.StopServerAsync().Wait(TimeSpan.FromSeconds(90)))
+                ShutdownLog($"ApplicationStopping：等待游戏服停止超时（90s，已过 {(DateTime.Now - start).TotalSeconds:F1}s）");
+            else
+                ShutdownLog($"ApplicationStopping：游戏服已停止并保存数据库，耗时 {(DateTime.Now - start).TotalSeconds:F1}s");
+        }
+        catch (Exception ex)
+        {
+            ShutdownLog($"ApplicationStopping：停止游戏服异常 {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+    else
+    {
+        ShutdownLog("ApplicationStopping：游戏服未运行，跳过存库");
+    }
+
     try { ConfigReader.Save(configAssembly); }
     catch { /* graceful shutdown must continue */ }
+
+    ShutdownLog("ApplicationStopping：Config 已保存");
 });
 
+app.Lifetime.ApplicationStopped.Register(() => ShutdownLog("ApplicationStopped：进程即将退出"));
+
 app.Run();
+
+/// <summary>关机阶段直接落盘（日志系统可能已停），用于排查停服慢在哪一步。</summary>
+static void ShutdownLog(string message)
+{
+    try
+    {
+        string directory = Path.Combine(AppContext.BaseDirectory, "Audit");
+        Directory.CreateDirectory(directory);
+        File.AppendAllText(Path.Combine(directory, "shutdown.log"),
+            $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}");
+    }
+    catch
+    {
+        // 关机日志失败不影响停机
+    }
+}
 
 public sealed record SaveMapRegionRequest(int Width, int Height, string ETag, IReadOnlyList<MapCellPoint> Points);

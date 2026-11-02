@@ -1,0 +1,18 @@
+@page "/denied"
+@attribute [Authorize]
+
+<PageTitle>无访问权限 · Zircon</PageTitle>
+
+<div class="page-heading compact">
+    <div>
+        <span class="eyebrow">安全 / 权限</span>
+        <h1>无访问权限</h1>
+        <p>当前登录身份没有访问该页面的权限。配置、数据编辑、插件、运行数据等页面仅限管理员（主密码登录）。</p>
+    </div>
+</div>
+
+<div class="alert danger">
+    如需访问，请联系管理员在「运行数据 → 账号」中提升权限，或使用 admin + 主密码（仅限内网）登录。
+</div>
+
+<a class="rz-button rz-button-md rz-variant-filled rz-primary" href="/">返回服务器总览</a>

@@ -1,5 +1,5 @@
-@page "/map-editor"
-@attribute [Authorize]
+﻿@page "/map-editor"
+@attribute [Authorize(Roles = "Administrator")]
 @implements IAsyncDisposable
 @inject GameDataSessionService Catalog
 @inject IJSRuntime JS

@@ -1,3 +1,4 @@
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Server;
 using Server.Web.Services;
@@ -15,9 +16,14 @@ public sealed class RevalidatingAdminAuthenticationStateProvider(
         AuthenticationState authenticationState,
         CancellationToken cancellationToken)
     {
-        string? claimStamp = authenticationState.User.FindFirst("admin_stamp")?.Value;
-        bool isValid = authenticationState.User.Identity?.IsAuthenticated == true &&
-                       string.Equals(claimStamp, credentials.GetSecurityStamp(), StringComparison.Ordinal);
-        return Task.FromResult(isValid);
+        if (authenticationState.User.Identity?.IsAuthenticated != true)
+            return Task.FromResult(false);
+
+        string? name = authenticationState.User.Identity.Name;
+        string? role = authenticationState.User.FindFirst(ClaimTypes.Role)?.Value;
+        string? stamp = authenticationState.User.FindFirst("admin_stamp")?.Value;
+
+        // 主密码改过 / 账号改密码 / 收回 WebAdmin / 关闭主密码登录 → 立即失效
+        return Task.FromResult(credentials.ValidateStamp(name, role, stamp));
     }
 }

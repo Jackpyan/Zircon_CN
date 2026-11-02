@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,7 +19,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             ("EMailAddress", "邮箱"), ("RealName", "真实姓名"), ("BirthDate", "出生日期"), ("Referral", "推荐人"),
             ("CreationIP", "创建 IP"), ("CreationDate", "创建日期"), ("LastIP", "最后 IP"), ("LastLogin", "最后登录"),
             ("Activated", "已激活"), ("Banned", "封禁"), ("ExpiryDate", "到期时间"), ("BanReason", "封禁原因"),
-            ("Admin", "管理员"), ("Observer", "观察者")),
+            ("Admin", "管理员"), ("Observer", "观察者"), ("WebAdmin", "后台权限")),
         View("characters", "角色", nameof(SEnvir.CharacterInfoList), "CharacterView",
             ("Account", "账号"), ("CharacterName", "角色名"), ("Class", "职业"), ("Gender", "性别"),
             ("Level", "等级"), ("HairType", "发型"), ("Deleted", "已删除"), ("Experience", "经验"), ("Caption", "称号")),

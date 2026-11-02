@@ -255,6 +255,37 @@ public static class UiText
     public static string ConfigSection(string section) => ConfigSections.GetValueOrDefault(section, section);
     public static string ConfigField(string field) => ConfigFields.GetValueOrDefault(field, SplitIdentifier(field));
     public static string AuditAction(string action) => AuditActions.GetValueOrDefault(action, LocalizeAuditPrefix(action));
+    public static string AuditRole(string? role) => role switch
+    {
+        "Administrator" => "管理员（主密码）",
+        "WebAdmin" => "账号（WebAdmin）",
+        _ => string.IsNullOrEmpty(role) ? "-" : role
+    };
+
+    public static string AuditResult(string? result) => result switch
+    {
+        "Success" => "成功",
+        "Failed" => "失败",
+        "Denied" => "无权限",
+        _ => string.IsNullOrEmpty(result) ? "-" : result
+    };
+
+    public static string AuditReason(string? reason) => reason switch
+    {
+        "MasterPassword" => "主密码登录",
+        "WebAdmin" => "账号登录",
+        "EmptyCredentials" => "账号或密码为空",
+        "MasterLoginDisabled" => "主密码登录已关闭",
+        "MasterLoginIntranetOnly" => "主密码登录仅限内网",
+        "BadEmailFormat" => "邮箱格式错误",
+        "AccountNotFound" => "账号不存在",
+        "WrongPassword" => "密码错误",
+        "AccountNotActivated" => "账号未激活",
+        "AccountBanned" => "账号被封禁",
+        "NoWebPermission" => "账号无后台权限",
+        "ServerNotRunning" => "游戏服未启动，无法校验账号",
+        _ => string.IsNullOrEmpty(reason) ? "-" : reason
+    };
     public static string AuditDetail(string detail)
     {
         if (detail == "Invalid administrator credentials") return "管理员账号或密码无效";

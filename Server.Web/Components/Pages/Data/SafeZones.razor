@@ -1,3 +1,3 @@
-@page "/data/safe-zones"
-@attribute [Authorize]
+﻿@page "/data/safe-zones"
+@attribute [Authorize(Roles = "Administrator")]
 <GameDataGrid ViewKey="safe-zones" />

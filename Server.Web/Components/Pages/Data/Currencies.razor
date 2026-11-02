@@ -1,3 +1,3 @@
-@page "/data/currencies"
-@attribute [Authorize]
+﻿@page "/data/currencies"
+@attribute [Authorize(Roles = "Administrator")]
 <GameDataGrid ViewKey="currencies" />

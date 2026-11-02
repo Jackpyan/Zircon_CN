@@ -1,0 +1,93 @@
+@page "/security/blocks"
+@attribute [Authorize(Roles = "Administrator")]
+@inject LoginThrottleService Throttle
+@inject AdminAuditService Audit
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>登录黑名单 · Zircon</PageTitle>
+
+<div class="page-heading compact">
+    <div>
+        <span class="eyebrow">安全 / 登录防护</span>
+        <h1>登录黑名单</h1>
+        <p>同一 IP 或账号 15 分钟内失败 5 次会被临时封锁 15 分钟。可在此手动解除（例如自己被锁在门外时）。</p>
+    </div>
+    <div class="control-cluster">
+        <RadzenButton Text="刷新" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Reload" />
+        <RadzenButton Text="全部解除" Icon="lock_open" ButtonStyle="ButtonStyle.Danger" Click="UnblockAll" Disabled="@(Entries.Count == 0)" />
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Message))
+{
+    <div class="alert @(HasError ? "danger" : "success")">@Message</div>
+}
+
+<section class="legacy-grid-shell">
+    <RadzenDataGrid Data="@Entries" TItem="LoginThrottleEntry" AllowPaging="true" PageSize="20"
+                    AllowSorting="true" Density="Density.Compact" Class="legacy-data-grid"
+                    EmptyText="当前没有封锁记录" PagingSummaryFormat="第 {0}–{1} 条，共 {2} 条">
+        <Columns>
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="Kind" Title="类型" Width="90px" />
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="Key" Title="IP / 账号" Width="240px">
+                <Template Context="entry">@DisplayKey(entry)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="Failures" Title="失败次数" Width="100px" />
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="FirstFailure" Title="首次失败" Width="170px">
+                <Template Context="entry">@entry.FirstFailure.ToString("yyyy-MM-dd HH:mm:ss")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="BlockedUntil" Title="解封时间" Width="170px">
+                <Template Context="entry">@entry.BlockedUntil.ToString("yyyy-MM-dd HH:mm:ss")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="RemainingMinutes" Title="剩余(分钟)" Width="100px" />
+            <RadzenDataGridColumn TItem="LoginThrottleEntry" Title="操作" Width="110px">
+                <Template Context="entry">
+                    <RadzenButton Text="解除" Icon="lock_open" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.ExtraSmall"
+                                  Click="@(() => Unblock(entry))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</section>
+
+@code {
+    private IReadOnlyList<LoginThrottleEntry> Entries = [];
+    private string? Message;
+    private bool HasError;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        Entries = Throttle.GetBlocks();
+    }
+
+    private static string DisplayKey(LoginThrottleEntry entry)
+        => entry.Key.StartsWith("ip:", StringComparison.Ordinal) ? entry.Key[3..] : entry.Key[(entry.Key.IndexOf(':') + 1)..];
+
+    private async Task Unblock(LoginThrottleEntry entry)
+    {
+        bool ok = Throttle.Unblock(entry.Key);
+
+        string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+        Audit.Record(user, "LoginBlock.Remove", $"解除 {entry.Kind} {DisplayKey(entry)}", null,
+            role: "Administrator", result: ok ? "Success" : "Failed", target: entry.Key, reason: null, userAgent: null);
+
+        Message = ok ? "已解除该封锁。" : "记录已不存在，请刷新。";
+        HasError = !ok;
+        Reload();
+    }
+
+    private async Task UnblockAll()
+    {
+        int count = Throttle.UnblockAll();
+
+        string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+        Audit.Record(user, "LoginBlock.RemoveAll", $"解除全部封锁（{count} 条）", null,
+            role: "Administrator", result: "Success", target: "LoginBlocks", reason: null, userAgent: null);
+
+        Message = $"已解除 {count} 条封锁记录。";
+        HasError = false;
+        Reload();
+    }
+}

@@ -1,4 +1,4 @@
-@page "/"
+﻿@page "/"
 @attribute [Authorize]
 @implements IAsyncDisposable
 @inject ServerMetricsService Metrics
@@ -14,10 +14,12 @@
         <h1>服务器总览</h1>
         <p>游戏循环与网络状态的只读快照，每秒刷新。</p>
     </div>
-    <div class="control-cluster">
-        <RadzenButton Text="启动服务器" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="Start" Disabled="@(!CanStart)" />
-        <RadzenButton Text="停止服务器" Icon="stop" ButtonStyle="ButtonStyle.Danger" Click="Stop" Disabled="@(!CanStop)" />
-    </div>
+    <AuthorizeView Roles="Administrator">
+        <div class="control-cluster">
+            <RadzenButton Text="启动服务器" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="Start" Disabled="@(!CanStart)" />
+            <RadzenButton Text="停止服务器" Icon="stop" ButtonStyle="ButtonStyle.Danger" Click="Stop" Disabled="@(!CanStop)" />
+        </div>
+    </AuthorizeView>
 </div>
 
 @if (!string.IsNullOrEmpty(Snapshot.LastError))

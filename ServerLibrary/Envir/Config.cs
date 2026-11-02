@@ -170,6 +170,12 @@ namespace Server.Envir
         public static string AdminUserName { get; set; } = "admin";
         public static bool AdminAutoStartGameServer { get; set; } = false;
 
+        /// <summary>
+        /// 是否允许用「AdminUserName + MasterPassword」登录 Web 后台（应急入口，仅限内网）。
+        /// 关闭后只能使用带 WebAdmin 权限的玩家账号登录。
+        /// </summary>
+        public static bool WebAllowMasterLogin { get; set; } = true;
+
         public static void LoadVersion()
         {
             try

@@ -79,8 +79,22 @@ public sealed class GameServerController(ILogger<GameServerController> logger)
 
     async Task IHostedService.StopAsync(CancellationToken cancellationToken)
     {
-        if (SEnvir.EnvirThread is not null)
+        if (SEnvir.EnvirThread is null) return;
+
+        SEnvir.LogShutdown("托管服务停止：等待游戏服线程结束");
+        DateTime start = DateTime.Now;
+
+        try
+        {
             await StopAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            SEnvir.LogShutdown($"等待游戏服线程超时（{(DateTime.Now - start).TotalSeconds:F1}s），主机将强制退出");
+            throw;
+        }
+
+        SEnvir.LogShutdown($"游戏服线程已结束，耗时 {(DateTime.Now - start).TotalSeconds:F1}s");
     }
 
     private static void ValidatePreflight()

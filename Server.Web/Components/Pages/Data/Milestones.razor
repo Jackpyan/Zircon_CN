@@ -1,3 +1,3 @@
-@page "/data/milestones"
-@attribute [Authorize]
+﻿@page "/data/milestones"
+@attribute [Authorize(Roles = "Administrator")]
 <GameDataGrid ViewKey="milestones" />

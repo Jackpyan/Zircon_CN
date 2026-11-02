@@ -1,10 +1,36 @@
-using System.Net;
+﻿using System.Net;
 using Server.Envir;
 
 namespace Server.Web.Services;
 
 public static class AdminEndpointValidator
 {
+    /// <summary>
+    /// 是否来自内网/本机（主密码应急登录只允许内网使用）。
+    /// 认可 127.0.0.0/8、10/8、172.16/12、192.168/16、::1 与 IPv6 链路/站点本地。
+    /// </summary>
+    public static bool IsIntranet(IPAddress? address)
+    {
+        if (address == null) return false;
+
+        if (address.IsIPv4MappedToIPv6)
+            address = address.MapToIPv4();
+
+        if (IPAddress.IsLoopback(address)) return true;
+
+        byte[] bytes = address.GetAddressBytes();
+
+        if (bytes.Length == 4)
+        {
+            return bytes[0] == 10
+                   || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                   || (bytes[0] == 192 && bytes[1] == 168)
+                   || bytes[0] == 127;
+        }
+
+        return address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.Equals(IPAddress.IPv6Loopback);
+    }
+
     public static IPAddress ValidateAndResolve()
     {
         if (!Config.AdminWebEnabled)

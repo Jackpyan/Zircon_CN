@@ -723,6 +723,25 @@ namespace Server.DBModels
             return characters;
         }
 
+        /// <summary>
+        /// 是否允许该账号登录 Web 管理后台（与游戏内 GM 的 Admin 字段相互独立）。
+        /// 注意：DB 属性按声明顺序序列化，新增字段必须加在类的最后一个属性位置。
+        /// </summary>
+        public bool WebAdmin
+        {
+            get { return _WebAdmin; }
+            set
+            {
+                if (_WebAdmin == value) return;
+
+                var oldValue = _WebAdmin;
+                _WebAdmin = value;
+
+                OnChanged(oldValue, value, "WebAdmin");
+            }
+        }
+        private bool _WebAdmin;
+
         public override string ToString()
         {
             return EMailAddress;

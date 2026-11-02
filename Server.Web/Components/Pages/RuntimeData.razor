@@ -1,4 +1,4 @@
-@page "/runtime"
+﻿@page "/runtime"
 @page "/runtime/accounts"
-@attribute [Authorize]
+@attribute [Authorize(Roles = "Administrator")]
 <RuntimeDataGrid CollectionKey="accounts" />

@@ -1,5 +1,5 @@
-@page "/plugins"
-@attribute [Authorize]
+﻿@page "/plugins"
+@attribute [Authorize(Roles = "Administrator")]
 @inject PluginRegistry PluginManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
