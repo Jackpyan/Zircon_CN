@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.UserModels;
@@ -132,6 +132,26 @@ namespace Client.Scenes.Views
             targetY = Math.Max(minY, Math.Min(maxY, targetY));
 
             return new Point(targetX, targetY);
+        }
+
+        /// <summary>
+        /// 三态循环：关闭 → 不透明 → 半透明(0.5) → 关闭（与 A 端一致）。
+        /// </summary>
+        public void ToggleOpen()
+        {
+            if (!Visible)
+            {
+                ToggleOpen(true);
+                return;
+            }
+
+            if (Opacity >= 0.99F)
+            {
+                Opacity = 0.5F;
+                return;
+            }
+
+            ToggleOpen(false);
         }
 
         public void ToggleOpen(bool open)

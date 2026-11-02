@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Extensions;
 using Client.Models;
@@ -439,6 +439,7 @@ namespace Client.Scenes.Views
                     GameScene.Game.NPCCompanionStorageBox.SelectedIndex = 0;
                     GameScene.Game.NPCAdoptCompanionBox.Visible = true;
                     GameScene.Game.NPCAdoptCompanionBox.Location = new Point(0, Size.Height);
+                    GameScene.Game.NPCAdoptCompanionBox.ResetSelection();
                     break;
                 case NPCDialogType.Consignment:
                     GameScene.Game.ConsignmentBox.Visible = true;
@@ -3984,19 +3985,23 @@ namespace Client.Scenes.Views
         {
             CompanionDisplay = null;
 
-            if (SelectedCompanionInfo?.MonsterInfo == null || SelectedCompanionInfo.Currency == null) return;
+            if (SelectedCompanionInfo?.MonsterInfo == null) return;
+
+            // 数据里 Currency 没配时回退到「金币」，避免整个界面空白
+            CurrencyInfo currency = SelectedCompanionInfo.Currency
+                                    ?? Globals.CurrencyInfoList.Binding.FirstOrDefault(x => x.Type == CurrencyType.Gold);
 
             CompanionDisplay = new MonsterObject(SelectedCompanionInfo);
 
             RefreshUnlockButton();
 
             PriceLabel.Text = SelectedCompanionInfo.Price.ToString("#,##0");
-            PriceCurrencyLabel.Text = SelectedCompanionInfo.Currency.Abbreviation;
+            PriceCurrencyLabel.Text = currency?.Abbreviation ?? string.Empty;
             NameLabel.Text = SelectedCompanionInfo.MonsterInfo.MonsterName;
             DescriptionLabel.Text = SelectedCompanionInfo.Description;
             SelectedCompanionInfoChanged?.Invoke(this, EventArgs.Empty);
 
-            switch (SelectedCompanionInfo.Currency.Type)
+            switch (currency?.Type)
             {
                 case CurrencyType.Gold:
                     PriceCurrencyLabel.ForeColour = Color.Goldenrod;
@@ -4030,15 +4035,38 @@ namespace Client.Scenes.Views
         public event EventHandler<EventArgs> SelectedIndexChanged;
         public void OnSelectedIndexChanged(int oValue, int nValue)
         {
-            if (SelectedIndex >= Globals.CompanionInfoList.Count) return;
+            int count = Globals.CompanionInfoList.Count;
+
+            if (count == 0)
+            {
+                // 数据库里没有任何 CompanionInfo 时给出明确提示，避免出现「箭头能点但全空」的界面
+                SelectedCompanionInfo = null;
+                NameLabel.Text = string.Empty;
+                PriceLabel.Text = string.Empty;
+                PriceCurrencyLabel.Text = string.Empty;
+                DescriptionLabel.Text = "暂无可领养宠物";
+                LeftButton.Enabled = false;
+                RightButton.Enabled = false;
+                return;
+            }
+
+            if (SelectedIndex < 0) SelectedIndex = 0;
+            if (SelectedIndex >= count) SelectedIndex = count - 1;
 
             SelectedCompanionInfo = Globals.CompanionInfoList[SelectedIndex];
 
             LeftButton.Enabled = SelectedIndex > 0;
 
-            RightButton.Enabled = SelectedIndex < Globals.CompanionInfoList.Count - 1;
+            RightButton.Enabled = SelectedIndex < count - 1;
 
             SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>打开界面时刷新一次，避免首次进入时 SelectedCompanionInfo 为空导致界面空白。</summary>
+        public void ResetSelection()
+        {
+            _SelectedIndex = 0;
+            OnSelectedIndexChanged(-1, 0);
         }
 
         #endregion

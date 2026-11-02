@@ -648,6 +648,7 @@ namespace Client.Scenes
             BeltBox = new BeltDialog
             {
                 Parent = this,
+                Visible = true,
             };
             NPCBox = new NPCDialog
             {
@@ -869,7 +870,7 @@ namespace Client.Scenes
             MagicBarBox = new MagicBarDialog
             {
                 Parent = this,
-                Visible = false,
+                Visible = true,
             };
 
             FortuneCheckerBox = new FortuneCheckerDialog
@@ -1522,7 +1523,8 @@ namespace Client.Scenes
                         MiniMapBox.Visible = false;
                         break;
                     case KeyBindAction.MapBigWindow:
-                        BigMapBox.ToggleOpen(!BigMapBox.Visible);
+                        // 与 A 端一致的三态：关闭 → 不透明 → 半透明(0.5) → 关闭
+                        BigMapBox.ToggleOpen();
                         break;
                     case KeyBindAction.MailBoxWindow:
                         if (Observer) continue;

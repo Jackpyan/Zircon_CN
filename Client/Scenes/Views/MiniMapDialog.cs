@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Windows.Forms;
 
 namespace Client.Scenes.Views
 {
@@ -22,8 +23,13 @@ namespace Client.Scenes.Views
         public DXImageControl TimeOfDayImage;
         public DXButton SizeButton, TransparencyButton, BigMapButton;
 
-        private static readonly Size DefaultMiniMapSize = new Size(200, 200);
-        private static readonly Size LargeMiniMapSize = new Size(300, 300);
+        private const int CoordLabelHeight = 16;
+
+        private static readonly Size DefaultMiniMapSize = new Size(200, 200 + CoordLabelHeight);
+        private static readonly Size LargeMiniMapSize = new Size(300, 300 + CoordLabelHeight);
+
+        /// <summary>小地图下方居中显示的当前坐标（X / Y）。</summary>
+        public DXLabel CoordLabel;
         private const float TransparentOpacity = 0.5F;
         private bool IsLarge, IsTransparent;
 
@@ -66,6 +72,9 @@ namespace Client.Scenes.Views
             Area = ClientArea;
             Area.Inflate(6, 6);
 
+            // 底部预留一行放坐标，地图区域本身保持原尺寸
+            Area.Height = Math.Max(CoordLabelHeight, Area.Height - CoordLabelHeight);
+
             if (Panel == null) return;
 
             Panel.Location = Area.Location;
@@ -74,6 +83,14 @@ namespace Client.Scenes.Views
             if (Size.Height < HeaderSize)
             {
                 Size = new Size(Size.Width, HeaderSize);
+            }
+
+            if (CoordLabel != null)
+            {
+                // 必须贴在 ClientArea 内：Area 是外扩 6px 的绘制区域，
+                // 用 Area.Bottom 定位会超出窗口底边被裁掉（之前的问题）。
+                CoordLabel.Location = new Point(ClientArea.Left, ClientArea.Bottom - CoordLabelHeight);
+                CoordLabel.Size = new Size(ClientArea.Width, CoordLabelHeight);
             }
 
             UpdateButtonLocations();
@@ -90,7 +107,17 @@ namespace Client.Scenes.Views
 
             base.ApplySettings();
 
-            IsLarge = Size == LargeMiniMapSize;
+            // 兼容旧版窗口设置：200/300 是加坐标行之前的高度，需要补 16 像素，
+            // 否则坐标行会被窗口底边裁掉（300 那种大图尤其明显）。
+            const int legacyDefaultHeight = 200;
+            const int legacyLargeHeight = 300;
+
+            if (Size.Height == legacyDefaultHeight || Size.Height == legacyLargeHeight)
+                Size = new Size(Size.Width, Size.Height + CoordLabelHeight);
+            else if (Size.Height < DefaultMiniMapSize.Height)
+                Size = new Size(Size.Width, DefaultMiniMapSize.Height);
+
+            IsLarge = Size.Height >= LargeMiniMapSize.Height;
             IsTransparent = Settings.Extra == 1;
             Opacity = IsTransparent ? TransparentOpacity : 1F;
             TransparencyButton.Index = IsTransparent ? 131 : 130;
@@ -169,7 +196,18 @@ namespace Client.Scenes.Views
                 HintPosition = HintPosition.TopLeft,
                 Visible = false,
             };
-            BigMapButton.MouseClick += (o, e) => GameScene.Game.BigMapBox.ToggleOpen(!GameScene.Game.BigMapBox.Visible);
+            BigMapButton.MouseClick += (o, e) => GameScene.Game.BigMapBox.ToggleOpen();
+
+            CoordLabel = new DXLabel
+            {
+                Parent = this,
+                AutoSize = false,
+                Size = new Size(Area.Width, CoordLabelHeight),
+                DrawFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter,
+                ForeColour = Color.White,
+                IsControl = false,      // 不拦截鼠标
+                Text = string.Empty,
+            };
 
             UpdateButtonLocations();
 
@@ -183,11 +221,25 @@ namespace Client.Scenes.Views
         {
             base.Process();
 
+            UpdateCoordLabel();
+
             bool visible = IsVisible && DisplayArea.Contains(CEnvir.MouseLocation);
 
             SizeButton.Visible = visible;
             TransparencyButton.Visible = visible;
             BigMapButton.Visible = visible;
+        }
+
+        /// <summary>刷新小地图下方坐标文字（仅变化时赋值，避免每帧重排）。</summary>
+        private void UpdateCoordLabel()
+        {
+            if (CoordLabel == null) return;
+
+            MapObject user = MapObject.User;
+            string text = user == null ? string.Empty : $"X {user.CurrentLocation.X}   Y {user.CurrentLocation.Y}";
+
+            if (CoordLabel.Text != text)
+                CoordLabel.Text = text;
         }
 
         private void ToggleSize()
