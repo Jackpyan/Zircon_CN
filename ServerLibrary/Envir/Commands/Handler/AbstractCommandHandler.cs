@@ -42,8 +42,17 @@ namespace Server.Envir.Commands.Handler
 
             if (string.Equals(userCommand.VALUE, input, StringComparison.OrdinalIgnoreCase)) return true;
 
-            return !string.IsNullOrEmpty(userCommand.ALIAS)
-                   && string.Equals(userCommand.ALIAS, input, StringComparison.Ordinal);
+            if (!string.IsNullOrEmpty(userCommand.ALIAS) &&
+                string.Equals(userCommand.ALIAS, input, StringComparison.Ordinal)) return true;
+
+            if (userCommand.ALIASES == null) return false;
+
+            foreach (string alias in userCommand.ALIASES)
+            {
+                if (!string.IsNullOrEmpty(alias) && string.Equals(alias, input, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
         }
 
         public virtual void Handle(PlayerObject player, string[] input)

@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command
     {
         public abstract string VALUE { get; }
         public virtual string ALIAS => null;
+        public virtual string[] ALIASES => null;
         public abstract int PARAMS_LENGTH { get; }
 
         public abstract void Action(PlayerObject player, string[] vals);

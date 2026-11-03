@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command
     {
         public abstract string VALUE { get; }
         public virtual string ALIAS => null;
+        public virtual string[] ALIASES => null;
         public abstract void Action(PlayerObject player);
     }
 }

@@ -1875,6 +1875,17 @@ namespace Client.Scenes.Views
         }
         private RefineQuality _RefineQuality;
         public event EventHandler<EventArgs> RefineQualityChanged;
+        /// <summary>精炼品质的中文名（枚举本身只有英文，直接 ToString 会在界面上显示英文）。</summary>
+        private static string GetRefineQualityName(RefineQuality quality) => quality switch
+        {
+            RefineQuality.Rush => "急速",
+            RefineQuality.Quick => "快速",
+            RefineQuality.Standard => "标准",
+            RefineQuality.Careful => "谨慎",
+            RefineQuality.Precise => "精准",
+            _ => quality.ToString(),
+        };
+
         public void OnRefineQualityChanged(RefineQuality oValue, RefineQuality nValue)
         {
             switch (nValue)
@@ -2131,7 +2142,7 @@ namespace Client.Scenes.Views
                 new DXListBoxItem
                 {
                     Parent = RefineQualityBox.ListBox,
-                    Label = { Text = $"{pair.Key}" },
+                    Label = { Text = GetRefineQualityName(pair.Key) },
                     Item = pair.Key
                 };
 

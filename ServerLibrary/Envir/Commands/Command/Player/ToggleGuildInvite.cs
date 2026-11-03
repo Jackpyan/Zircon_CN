@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Player
     {
         public override string VALUE => "ALLOWGUILD";
         public override string ALIAS => "允许入会";
+        public override string[] ALIASES => new[] { "允许加入行会", "行会邀请" };
 
         public override void Action(PlayerObject player)
         {
