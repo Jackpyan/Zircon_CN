@@ -880,7 +880,10 @@ namespace Server.Models
         public void ToggleGameMasterMode()
         {
             if (Character?.Account == null) return;
-            if (!Character.Account.Admin && !Character.Account.TempAdmin) return; // 普通用户：无任何反应
+
+            // 身份分级：监督者及以上都能切 GM 模式（含 TempAdmin 主密码登录）
+            if (Character.Account.GetEffectiveIdentity(includeTemp: true) < Server.DBModels.AccountIdentity.Supervisor)
+                return; // 普通玩家：无任何反应
 
             GameMaster = !GameMaster;
 
@@ -1879,9 +1882,10 @@ namespace Server.Models
                 // GM 模式切换命令：@gamemaster
                 // 有管理权限 → 切换 GM 模式（不受当前 GM 状态限制，否则永远开不起来）；
                 // 无权限 → 交给命令处理器，输出与普通未知命令完全一致的提示。
+                // 身份分级（对齐 A 端）：监督者及以上即可切换 GM 模式（TempAdmin 视为 Admin）
                 if ((string.Equals(parts[0], "GAMEMASTER", StringComparison.OrdinalIgnoreCase)
                      || string.Equals(parts[0], "GM模式", StringComparison.OrdinalIgnoreCase))
-                    && (Character.Account.Admin || Character.Account.TempAdmin))
+                    && Character.Account.GetEffectiveIdentity(includeTemp: true) >= Server.DBModels.AccountIdentity.Supervisor)
                 {
                     ToggleGameMasterMode();
                     return;

@@ -1,4 +1,5 @@
-﻿using Server.Envir.Commands.Command;
+﻿using Server.DBModels;
+using Server.Envir.Commands.Command;
 using Server.Envir.Commands.Exceptions;
 using Server.Models;
 using System;
@@ -64,6 +65,23 @@ namespace Server.Envir.Commands.Handler
                 ICommand command = Commands.Find(userCommand => IsMatch(userCommand, input[0]));
                 if (command == null)
                     throw new UserCommandException(string.Format("命令 @{0} 不存在。", CommandInput));
+
+                // ---- 身份分级（对齐 A 端 AccountIdentity）：按命令所需最低身份判定 ----
+                Server.DBModels.AccountIdentity actual = player.Character.Account.GetEffectiveIdentity(includeTemp: true);
+                Server.DBModels.AccountIdentity required = command.MinIdentity;
+
+                if (actual < required)
+                {
+                    SEnvir.Log(string.Format("[GM命令] {0}({1}) 使用 @{2} 被拒：需要 {3} 身份",
+                        player.Name, actual.ToCN(), CommandInput, required.ToCN()));
+
+                    throw new UserCommandException(string.Format("权限不足：@{0} 需要 {1} 身份。",
+                        CommandInput, required.ToCN()));
+                }
+
+                // ---- GM 模式要求（对齐 A 端：查人类命令免 GM 态，造物/改数据类需要）----
+                if (command.RequireGameMaster && !player.GameMaster)
+                    throw new UserCommandException(string.Format("@{0} 需要先开启 GM 模式（@GM模式）。", CommandInput));
 
                 if (command is AbstractParameterizedCommand<CommandType> parameterized)
                 {

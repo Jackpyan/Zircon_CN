@@ -742,6 +742,43 @@ namespace Server.DBModels
         }
         private bool _WebAdmin;
 
+        /// <summary>
+        /// 管理身份等级（对齐 A 端 AccountIdentity，DB 属性按声明顺序序列化，
+        /// 必须保持在类的最后一个属性位置）。判定一律走 <see cref="GetEffectiveIdentity"/>，
+        /// 它包含旧数据（Admin bool）的兼容读。
+        /// </summary>
+        public AccountIdentity Identity
+        {
+            get { return _Identity; }
+            set
+            {
+                if (_Identity == value) return;
+
+                var oldValue = _Identity;
+                _Identity = value;
+
+                OnChanged(oldValue, value, "Identity");
+            }
+        }
+        private AccountIdentity _Identity = AccountIdentity.Normal;
+
+        /// <summary>
+        /// 实际生效的管理身份。
+        /// TempAdmin（主密码登录）视为 Admin（最高档，2026-11-03 决策）；
+        /// Identity 字段未迁移时兼容读旧 Admin bool。
+        /// </summary>
+        public AccountIdentity GetEffectiveIdentity(bool includeTemp = false)
+        {
+            if (includeTemp && TempAdmin) return AccountIdentity.Admin;
+
+            if (Identity != AccountIdentity.Normal) return Identity;
+
+            // 兼容旧数据：Admin bool 已置位但 Identity 尚未迁移
+            if (Admin) return AccountIdentity.Admin;
+
+            return AccountIdentity.Normal;
+        }
+
         public override string ToString()
         {
             return EMailAddress;

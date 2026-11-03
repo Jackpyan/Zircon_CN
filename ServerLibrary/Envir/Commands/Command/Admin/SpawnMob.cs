@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class SpawnMonster : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "MONSTER";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "刷怪";
         public override int PARAMS_LENGTH => 2;
 

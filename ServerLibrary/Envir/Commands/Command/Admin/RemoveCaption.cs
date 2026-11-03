@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     {
 
         public override string VALUE => "REMOVECAPTION";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Supervisor;
 
         public override string ALIAS => "清除头衔";
         public override int PARAMS_LENGTH => 1;

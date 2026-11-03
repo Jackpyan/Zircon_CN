@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class GiveHorse : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "GIVEHORSE";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "给坐骑";
         public override int PARAMS_LENGTH => 2;
 

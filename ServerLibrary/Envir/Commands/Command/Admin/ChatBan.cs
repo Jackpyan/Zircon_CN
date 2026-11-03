@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ChatBan : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "CHATBAN";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "禁言";
         public override int PARAMS_LENGTH => 2;
 

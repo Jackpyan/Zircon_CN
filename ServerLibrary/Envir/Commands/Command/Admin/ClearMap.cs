@@ -12,6 +12,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ClearMap : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "CLEARMAP";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "清地图";
 
         public override void Action(PlayerObject player)

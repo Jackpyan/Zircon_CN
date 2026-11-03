@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class EndConquest : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "ENDCONQUEST";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "结束攻城";
         public override int PARAMS_LENGTH => 2;
 

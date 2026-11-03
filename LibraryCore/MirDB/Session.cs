@@ -566,6 +566,10 @@ namespace MirDB
 
                 if (property.PropertyType.IsSubclassOf(typeof(DBObject)))
                 {
+                    // 只读关联（如 AccountInfo.Gold / GameGold / HuntGold 这类 => Currencies.First(...)）
+                    // 没有 set 访问器，SetValue 会抛 "Property set method not found."，直接跳过。
+                    if (property.SetMethod == null) continue;
+
                     if (link != null && link.Aggregate)
                     {
                         DBObject tempOb = (DBObject)property.GetValue(ob);

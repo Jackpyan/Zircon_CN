@@ -7,6 +7,7 @@ namespace Server.Envir.Commands.Command.Admin
     class SetHermitStat : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "SETHERMITSTAT";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "隐者属性";
         public override int PARAMS_LENGTH => 2;
 

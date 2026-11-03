@@ -86,10 +86,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             string? name = context.Principal?.Identity?.Name;
             string? role = context.Principal?.FindFirst(ClaimTypes.Role)?.Value;
             string? stamp = context.Principal?.FindFirst("admin_stamp")?.Value;
+            string? authMode = context.Principal?.FindFirst("auth_mode")?.Value;
 
-            // 必须按角色校验：主密码登录用主密码指纹，账号登录用账号指纹。
-            // 之前一律比对主密码指纹，导致账号登录后每个请求都被 RejectPrincipal → 弹回登录页。
-            if (!credentials.ValidateStamp(name, role, stamp))
+            // 必须按「登录方式」校验：主密码登录用主密码指纹，账号登录用账号指纹
+            // （账号身份=管理员时角色也是 Administrator，但指纹必须走账号，否则降权不会失效）。
+            if (!credentials.ValidateStamp(name, role, stamp, authMode))
                 context.RejectPrincipal();
 
             return Task.CompletedTask;
@@ -203,7 +204,11 @@ app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery,
     [
         new(ClaimTypes.Name, result.UserName),
         new(ClaimTypes.Role, result.Role),
-        new("admin_stamp", credentials.GetStamp(result.UserName, result.Role))
+        new("admin_stamp", credentials.GetStamp(result.UserName, result.Role, result.Reason)),
+        // 登录方式：MasterPassword / WebAdmin（决定用哪套指纹复检，账号登录升格为 Administrator 也必须走账号指纹）
+        new("auth_mode", result.Reason),
+        // 操作者来源 IP：后台「新建账号」等操作把创建 IP 记成使用者电脑的地址
+        new("client_ip", address ?? "unknown")
     ];
     ClaimsPrincipal principal = new(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, new AuthenticationProperties

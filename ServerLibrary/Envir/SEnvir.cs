@@ -4319,7 +4319,8 @@ namespace Server.Envir
                 return false;
             }
 
-            if (!match.WebAdmin)
+            // 一期权限分级：WebAdmin 布尔或 身份 >= 监督者 均可登录 Web 后台
+            if (!match.WebAdmin && match.GetEffectiveIdentity() < AccountIdentity.Supervisor)
             {
                 reason = "NoWebPermission";
                 return false;
@@ -4347,9 +4348,10 @@ namespace Server.Envir
             {
                 if (!string.Equals(account.EMailAddress, email, StringComparison.OrdinalIgnoreCase)) continue;
 
-                if (!account.WebAdmin) return true;
+                bool webAllowed = account.WebAdmin || account.GetEffectiveIdentity() >= AccountIdentity.Supervisor;
+                if (!webAllowed) return true;
 
-                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin");
+                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin\0{(int)account.GetEffectiveIdentity()}");
                 stamp = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
                 return true;
             }
@@ -4365,9 +4367,10 @@ namespace Server.Envir
             {
                 if (!string.Equals(account.EMailAddress, email, StringComparison.OrdinalIgnoreCase)) continue;
 
-                if (!account.WebAdmin) return string.Empty;
+                bool webAllowed = account.WebAdmin || account.GetEffectiveIdentity() >= AccountIdentity.Supervisor;
+                if (!webAllowed) return string.Empty;
 
-                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin");
+                byte[] raw = System.Text.Encoding.UTF8.GetBytes($"{account.EMailAddress}\0{Convert.ToBase64String(account.Password ?? Array.Empty<byte>())}\0WebAdmin\0{(int)account.GetEffectiveIdentity()}");
                 return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
             }
 

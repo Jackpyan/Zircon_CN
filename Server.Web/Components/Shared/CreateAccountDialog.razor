@@ -1,0 +1,75 @@
+@inject DialogService DialogService
+
+<div class="give-item-dialog">
+    <label>
+        <span>邮箱（登录账号）</span>
+        <input @bind="Email" @bind:event="oninput" placeholder="name@example.com" />
+    </label>
+
+    <label>
+        <span>密码（@Library.Globals.MinPasswordLength~@Library.Globals.MaxPasswordLength 位，不含空格）</span>
+        <input type="password" @bind="Password" @bind:event="oninput" placeholder="输入密码" />
+    </label>
+
+    <label>
+        <span>确认密码</span>
+        <input type="password" @bind="Confirm" @bind:event="oninput" placeholder="再输入一次" />
+    </label>
+
+    <p class="give-item-name" style="margin:6px 0 0;font-size:12px;opacity:.75;">
+        创建 IP 取当前浏览器地址 @ClientIp；创建时间取服务器当前时间；其余字段默认值，账号建好即为「已激活」。
+    </p>
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="alert danger" role="alert">@Error</div>
+    }
+
+    <div class="give-item-actions">
+        <RadzenButton Text="取消" ButtonStyle="ButtonStyle.Light" Click="Cancel" />
+        <RadzenButton Text="创建" ButtonStyle="ButtonStyle.Primary" Disabled="@(!CanSubmit)" Click="Submit" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public string ClientIp { get; set; } = "unknown";
+
+    private string Email { get; set; } = string.Empty;
+    private string Password { get; set; } = string.Empty;
+    private string Confirm { get; set; } = string.Empty;
+    private string? Error { get; set; }
+
+    private bool CanSubmit =>
+        !string.IsNullOrWhiteSpace(Email) &&
+        !string.IsNullOrEmpty(Password) &&
+        !string.IsNullOrEmpty(Confirm);
+
+    private void Submit()
+    {
+        string email = Email.Trim();
+
+        if (!Library.Globals.EMailRegex.IsMatch(email))
+        {
+            Error = "邮箱格式不正确。";
+            return;
+        }
+
+        if (!Library.Globals.PasswordRegex.IsMatch(Password))
+        {
+            Error = $"密码需 {Library.Globals.MinPasswordLength}~{Library.Globals.MaxPasswordLength} 位且不含空格。";
+            return;
+        }
+
+        if (!string.Equals(Password, Confirm, StringComparison.Ordinal))
+        {
+            Error = "两次输入的密码不一致。";
+            return;
+        }
+
+        DialogService.Close(new CreateAccountRequest(email, Password));
+    }
+
+    private void Cancel() => DialogService.Close(null);
+
+    public sealed record CreateAccountRequest(string Email, string Password);
+}

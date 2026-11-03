@@ -22,8 +22,9 @@ public sealed class RevalidatingAdminAuthenticationStateProvider(
         string? name = authenticationState.User.Identity.Name;
         string? role = authenticationState.User.FindFirst(ClaimTypes.Role)?.Value;
         string? stamp = authenticationState.User.FindFirst("admin_stamp")?.Value;
+        string? authMode = authenticationState.User.FindFirst("auth_mode")?.Value;
 
-        // 主密码改过 / 账号改密码 / 收回 WebAdmin / 关闭主密码登录 → 立即失效
-        return Task.FromResult(credentials.ValidateStamp(name, role, stamp));
+        // 主密码改过 / 账号改密码 / 改身份等级 / 收回 WebAdmin / 关闭主密码登录 → 立即失效
+        return Task.FromResult(credentials.ValidateStamp(name, role, stamp, authMode));
     }
 }

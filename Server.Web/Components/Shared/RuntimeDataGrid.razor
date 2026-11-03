@@ -1,7 +1,8 @@
-@attribute [Authorize]
+﻿@attribute [Authorize]
 @inject RuntimeDataService RuntimeDataManager
 @inject IGameServerController GameServer
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject DialogService DialogService
 
 <PageTitle>@Definition.DisplayName · Zircon</PageTitle>
 
@@ -39,6 +40,10 @@ else
                 <HeaderTemplate>
                     <div class="radzen-grid-toolbar">
                         <RadzenButton Text="刷新快照" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Load" />
+                        @if (IsAccountCollection)
+                        {
+                            <RadzenButton Text="新建账号" Icon="add" ButtonStyle="ButtonStyle.Primary" Click="CreateAccount" />
+                        }
                         <div class="runtime-column-filters">
                             @foreach (RuntimeColumnDefinition column in Definition.Columns)
                             {
@@ -76,10 +81,17 @@ else
                             <Template Context="row">@Format(row, column.Field)</Template>
                         </RadzenDataGridColumn>
                     }
-                    <RadzenDataGridColumn TItem="RuntimeDataRow" Title="操作" Width="88px" Filterable="false" Sortable="false">
+                    <RadzenDataGridColumn TItem="RuntimeDataRow" Title="操作" Width="@(IsAccountCollection ? "150px" : "88px")" Filterable="false" Sortable="false">
                         <Template Context="row">
-                            <RadzenButton Text="编辑" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
-                                          Click="@(() => SelectRow(row))" />
+                            <div class="grid-row-actions">
+                                <RadzenButton Text="编辑" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                              Click="@(() => SelectRow(row))" />
+                                @if (IsAccountCollection)
+                                {
+                                    <RadzenButton Text="删除" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
+                                                  Click="@(() => DeleteAccount(row))" />
+                                }
+                            </div>
                         </Template>
                     </RadzenDataGridColumn>
                 </Columns>
@@ -182,6 +194,72 @@ else
             await Load();
             HasError = false;
             Message = "运行时数据已保存。";
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            Message = ex.InnerException?.Message ?? ex.Message;
+        }
+    }
+
+    private bool IsAccountCollection => string.Equals(Definition.Key, "accounts", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>新建账号：邮箱 + 密码必填，创建 IP 取操作者浏览器 IP，时间取服务器当前时间。</summary>
+    private async Task CreateAccount()
+    {
+        try
+        {
+            AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            string user = state.User.Identity?.Name ?? "unknown";
+            string clientIp = state.User.FindFirst("client_ip")?.Value ?? "unknown";
+
+            Dictionary<string, object?> parameters = new() { ["ClientIp"] = clientIp };
+
+            object? result = await DialogService.OpenAsync<CreateAccountDialog>("新建账号",
+                parameters,
+                new DialogOptions { Width = "420px", CloseDialogOnOverlayClick = false });
+
+            if (result is not CreateAccountDialog.CreateAccountRequest request) return;
+
+            await RuntimeDataManager.CreateAccountAsync(request.Email, request.Password, clientIp, user);
+
+            await Load();
+            HasError = false;
+            Message = $"账号已创建：{request.Email}（已激活，可直接登录；创建 IP {clientIp}）。";
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            Message = ex.InnerException?.Message ?? ex.Message;
+        }
+    }
+
+    /// <summary>删除账号：先二次确认，再按依赖顺序级联清理（角色、物品、货币、邮件等）。</summary>
+    private async Task DeleteAccount(RuntimeDataRow row)
+    {
+        string email = row.Values.GetValueOrDefault("EMailAddress")?.ToString() ?? $"#{row.Index}";
+
+        bool? confirmed = await DialogService.Confirm(
+            $"将永久删除账号「{email}」及其名下全部角色、物品、货币、邮件等数据，删除后无法恢复。确定继续吗？",
+            "删除账号",
+            new ConfirmOptions
+            {
+                OkButtonText = "确认删除",
+                CancelButtonText = "取消",
+                CloseDialogOnOverlayClick = false,
+            });
+
+        if (confirmed != true) return;
+
+        try
+        {
+            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+            await RuntimeDataManager.DeleteAccountAsync(row.Index, row.ETag, user);
+
+            await Load();
+            HasError = false;
+            Message = $"账号已删除：{email}";
         }
         catch (Exception ex)
         {

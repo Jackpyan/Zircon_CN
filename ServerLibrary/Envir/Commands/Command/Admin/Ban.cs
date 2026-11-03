@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class Ban : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "BAN";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Supervisor;
         public override string ALIAS => "封号";
         public override int PARAMS_LENGTH => 2;
 

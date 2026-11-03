@@ -39,8 +39,16 @@ public sealed class AdminCredentialService
             return new AdminLoginResult(true, Config.AdminUserName, RoleAdministrator, "MasterPassword");
         }
 
-        if (SEnvir.TryValidateWebAccount(userName, password, out _, out string reason))
-            return new AdminLoginResult(true, userName, RoleWebAdmin, "WebAdmin");
+        if (SEnvir.TryValidateWebAccount(userName, password, out Server.DBModels.AccountInfo account, out string reason))
+        {
+            // 一期权限分级：身份 = 管理员 → Administrator 角色（37 个高危页可用，行为与主密码一致）；
+            // 监督者/运营者 → WebAdmin 角色（Runtime 只读页可用，数据页二期再细化）。
+            string role = account.GetEffectiveIdentity() >= Server.DBModels.AccountIdentity.Admin
+                ? RoleAdministrator
+                : RoleWebAdmin;
+
+            return new AdminLoginResult(true, userName, role, "WebAdmin");
+        }
 
         return AdminLoginResult.Fail(reason);
     }
@@ -52,22 +60,36 @@ public sealed class AdminCredentialService
         return Convert.ToHexString(value);
     }
 
-    /// <summary>按角色取凭据指纹：管理员=主密码派生，WebAdmin=账号+密码哈希+权限派生。</summary>
-    public string GetStamp(string? userName, string? role)
+    /// <summary>登录方式：主密码（admin + MasterPassword）或账号（邮箱 + 游戏密码）。</summary>
+    public const string AuthModeMasterPassword = "MasterPassword";
+    public const string AuthModeWebAccount = "WebAdmin";
+
+    /// <summary>是否为主密码登录。缺省（老会话）时按角色推断。</summary>
+    public static bool IsMasterPasswordMode(string? authMode, string? role) =>
+        string.Equals(authMode, AuthModeMasterPassword, StringComparison.Ordinal) ||
+        (string.IsNullOrEmpty(authMode) && string.Equals(role, RoleAdministrator, StringComparison.Ordinal));
+
+    /// <summary>
+    /// 按登录方式取凭据指纹：
+    /// 主密码登录 = 主密码派生；账号登录 = 账号 + 密码哈希 + 身份等级派生
+    /// （账号即使身份=管理员、角色被映射成 Administrator，也必须用账号指纹，
+    /// 否则改身份/改密码都不会让会话失效）。
+    /// </summary>
+    public string GetStamp(string? userName, string? role, string? authMode = null)
     {
-        if (string.Equals(role, RoleAdministrator, StringComparison.Ordinal))
+        if (IsMasterPasswordMode(authMode, role))
             return GetSecurityStamp();
 
         return string.IsNullOrWhiteSpace(userName) ? string.Empty : SEnvir.GetWebAccountStamp(userName);
     }
 
     /// <summary>会话复检：凭据指纹一致才有效（改密码 / 收回 WebAdmin / 关闭主密码登录都会失效）。</summary>
-    public bool ValidateStamp(string? userName, string? role, string? stamp)
+    public bool ValidateStamp(string? userName, string? role, string? stamp, string? authMode = null)
     {
         if (string.IsNullOrEmpty(stamp)) return false;
 
         // 主密码入口：关闭开关后，已登录的管理员会话也要立刻失效
-        if (string.Equals(role, RoleAdministrator, StringComparison.Ordinal))
+        if (IsMasterPasswordMode(authMode, role))
         {
             if (!Config.WebAllowMasterLogin) return false;
 

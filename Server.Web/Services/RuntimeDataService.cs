@@ -19,7 +19,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             ("EMailAddress", "邮箱"), ("RealName", "真实姓名"), ("BirthDate", "出生日期"), ("Referral", "推荐人"),
             ("CreationIP", "创建 IP"), ("CreationDate", "创建日期"), ("LastIP", "最后 IP"), ("LastLogin", "最后登录"),
             ("Activated", "已激活"), ("Banned", "封禁"), ("ExpiryDate", "到期时间"), ("BanReason", "封禁原因"),
-            ("Admin", "管理员"), ("Observer", "观察者"), ("WebAdmin", "后台权限")),
+            ("Admin", "管理员"), ("Observer", "观察者"), ("WebAdmin", "后台权限"), ("Identity", "身份")),
         View("characters", "角色", nameof(SEnvir.CharacterInfoList), "CharacterView",
             ("Account", "账号"), ("CharacterName", "角色名"), ("Class", "职业"), ("Gender", "性别"),
             ("Level", "等级"), ("HairType", "发型"), ("Deleted", "已删除"), ("Experience", "经验"), ("Caption", "称号")),
@@ -80,6 +80,107 @@ public sealed class RuntimeDataService(AdminAuditService audit)
 
             SEnvir.Session.Save(true);
             audit.Record(user, "RuntimeData.Update", $"{target.GetType().Name} #{target.Index}");
+            return true;
+        }, cancellationToken);
+
+    /// <summary>
+    /// 后台新建账号（账号页「新建账号」按钮用）。
+    /// 只要求邮箱 + 密码：创建 IP 取操作者浏览器 IP，创建时间取服务器当前时间，其余走默认值；
+    /// 直接置为已激活，建好即可登录。
+    /// </summary>
+    public Task<int> CreateAccountAsync(string email, string password, string? creationIp, string user,
+        CancellationToken cancellationToken = default) =>
+        SEnvir.InvokeOnGameThreadAsync(() =>
+        {
+            email = (email ?? string.Empty).Trim();
+
+            if (!Globals.EMailRegex.IsMatch(email))
+                throw new InvalidOperationException("邮箱格式不正确。");
+
+            if (!Globals.PasswordRegex.IsMatch(password ?? string.Empty))
+                throw new InvalidOperationException($"密码需 {Globals.MinPasswordLength}~{Globals.MaxPasswordLength} 位且不含空格。");
+
+            if (SEnvir.AccountInfoList.Binding.Any(x => string.Equals(x.EMailAddress, email, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"账号已存在：{email}");
+
+            Server.DBModels.AccountInfo account = SEnvir.AccountInfoList.CreateNewObject();
+
+            account.EMailAddress = email;
+            account.Password = SEnvir.CreateHash(password!);
+            account.CreationIP = string.IsNullOrWhiteSpace(creationIp) ? "0.0.0.0" : creationIp;
+            account.CreationDate = SEnvir.Now;
+            account.Activated = true;
+
+            SEnvir.Session.Save(true);
+
+            SEnvir.Log($"[后台创建账号] {email}，操作者：{user}，IP：{account.CreationIP}");
+            audit.Record(user, "RuntimeData.CreateAccount", email, account.CreationIP);
+
+            return account.Index;
+        }, cancellationToken);
+
+    /// <summary>
+    /// 删除账号（账号页「删除」按钮用，二次确认在 UI 层）。
+    /// 账号自身的集合没有 Aggregate 级联，必须按依赖顺序逐个删除，否则会留下孤儿行；
+    /// 角色子集合（Items/Magics/Buffs/Quests…）是 Aggregate，删角色即级联清理。
+    /// </summary>
+    public Task<bool> DeleteAccountAsync(int index, string expectedETag, string user,
+        CancellationToken cancellationToken = default) =>
+        SEnvir.InvokeOnGameThreadAsync(() =>
+        {
+            Server.DBModels.AccountInfo account = SEnvir.AccountInfoList.Binding.Single(x => x.Index == index);
+
+            if (!string.Equals(ComputeETag(account), expectedETag, StringComparison.Ordinal))
+                throw new InvalidOperationException("运行时数据已发生变化，请刷新后重试。");
+
+            if (account.Connection != null)
+                throw new InvalidOperationException("该账号正在游戏中，请先踢下线再删除。");
+
+            if (string.Equals(account.EMailAddress, user, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("不能删除当前登录后台的账号。");
+
+            string email = account.EMailAddress;
+            int characterCount = account.Characters.Count;
+
+            // 1) 解除外部引用：以本账号为推荐人的账号、屏蔽本账号的记录、行会成员记录
+            foreach (Server.DBModels.AccountInfo child in account.Referrals.ToList())
+                child.Referral = null;
+
+            foreach (Server.DBModels.BlockInfo block in account.BlockedByList.ToList())
+                block.Delete();
+
+            foreach (Server.DBModels.GuildMemberInfo member in SEnvir.GuildMemberInfoList.Binding
+                         .Where(x => x.Account == account).ToList())
+                member.Delete();
+
+            // 2) 角色（其 Items/Magics/Buffs/Quests 等是 Aggregate，会级联删除）
+            foreach (Server.DBModels.CharacterInfo character in account.Characters.ToList())
+                character.Delete();
+
+            // 3) 账号自有集合（无级联，逐个删）
+            foreach (Server.DBModels.UserCurrency currency in account.Currencies.ToList()) currency.Delete();
+            foreach (Server.DBModels.UserItem item in account.Items.ToList()) item.Delete();
+            foreach (Server.DBModels.BuffInfo buff in account.Buffs.ToList()) buff.Delete();
+            foreach (Server.DBModels.MailInfo mail in account.Mail.ToList()) mail.Delete();
+            foreach (Server.DBModels.AuctionInfo auction in account.Auctions.ToList()) auction.Delete();
+            foreach (Server.DBModels.UserDrop drop in account.UserDrops.ToList()) drop.Delete();
+            foreach (Server.DBModels.UserCompanion companion in account.Companions.ToList()) companion.Delete();
+            foreach (Server.DBModels.UserCompanionUnlock unlock in account.CompanionUnlocks.ToList()) unlock.Delete();
+            foreach (Server.DBModels.BlockInfo block in account.BlockingList.ToList()) block.Delete();
+            foreach (Server.DBModels.GameGoldPayment payment in account.Payments.ToList()) payment.Delete();
+            foreach (Server.DBModels.GameStoreSale sale in account.StoreSales.ToList()) sale.Delete();
+            foreach (Server.DBModels.GameStoreFavourite favourite in account.StoreFavourites.ToList()) favourite.Delete();
+            foreach (Server.DBModels.UserFortuneInfo fortune in account.Fortunes.ToList()) fortune.Delete();
+            foreach (Server.DBModels.UserQuest quest in account.Quests.ToList()) quest.Delete();
+
+            // 4) 最后删账号
+            account.Delete();
+
+            SEnvir.Session.Save(true);
+
+            SEnvir.Log($"[后台删除账号] {email}（角色 {characterCount} 个），操作者：{user}");
+            audit.Record(user, "RuntimeData.DeleteAccount", $"{email}（角色 {characterCount} 个）");
+
             return true;
         }, cancellationToken);
 

@@ -8,6 +8,7 @@ namespace Server.Envir.Commands.Command.Admin
     class ClearBag : AbstractCommand<IAdminCommand>
     {
         public override string VALUE => "CLEARBAG";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Operator;
         public override string ALIAS => "清背包";
 
         public override void Action(PlayerObject player)

@@ -10,6 +10,8 @@ namespace Server.Envir.Commands.Command.Admin
     class MapMove : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "MOVE";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Supervisor;
+        public override bool RequireGameMaster => false;   // 查人/系统维护类，免 GM 态（对齐 A 端）
         public override string ALIAS => "传送";
         public override int PARAMS_LENGTH => 2;
 

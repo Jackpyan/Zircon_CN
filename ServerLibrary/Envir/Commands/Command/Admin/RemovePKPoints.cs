@@ -9,6 +9,7 @@ namespace Server.Envir.Commands.Command.Admin
     class RemovePKPoints : AbstractParameterizedCommand<IAdminCommand>
     {
         public override string VALUE => "REMOVEPKPOINTS";
+        public override Server.DBModels.AccountIdentity MinIdentity => Server.DBModels.AccountIdentity.Supervisor;
         public override string ALIAS => "清PK值";
         public override int PARAMS_LENGTH => 2;
 
