@@ -860,8 +860,11 @@ namespace Client.Envir
         }
         public void Process(S.ObjectMonster p)
         {
-            new MonsterObject(p);
+            MonsterObject monster = new MonsterObject(p);
 
+            // 辅助功能「Boss提示」
+            if (Config.Boss提示)
+                GameScene.Game?.NotifyBossAppeared(monster);
         }
         public void Process(S.ObjectNPC p)
         {
@@ -2807,21 +2810,30 @@ namespace Client.Envir
         {
             if (GameScene.Game == null) return;
 
+            // 只有 Normal 类型的对象说话才带 ObjectID，可据此反查说话者
+            MapObject speaker = null;
+
+            if (p.Type == MessageType.Normal && p.ObjectID > 0)
+            {
+                foreach (MapObject ob in GameScene.Game.MapControl.Objects)
+                {
+                    if (ob.ObjectID != p.ObjectID) continue;
+
+                    speaker = ob;
+                    break;
+                }
+            }
+
+            // 辅助功能「关闭NPC话 / 关闭怪物话」：聊天框与头顶文字一起屏蔽
+            if (speaker is NPCObject && Config.是否关闭NPC话) return;
+            if (speaker is MonsterObject && Config.是否关闭怪物话) return;
+
             if (!p.OverheadOnly)
             {
                 GameScene.Game.ReceiveChat(p.Text, p.Type, p.LinkedItems);
             }
 
-            if (p.Type != MessageType.Normal || p.ObjectID <= 0) return;
-
-            foreach (MapObject ob in GameScene.Game.MapControl.Objects)
-            {
-                if (ob.ObjectID != p.ObjectID) continue;
-
-                ob.Chat(p.Text);
-
-                return;
-            }
+            speaker?.Chat(p.Text);
         }
 
         public void Process(S.NPCResponse p)

@@ -483,6 +483,9 @@ namespace Client.Scenes
         }
         private bool _GroupLootEnabled;
 
+        /// <summary>已提示过的 BOSS（按 ObjectID 去重，换图时清空），用于「Boss提示」辅助开关。</summary>
+        private readonly HashSet<uint> _notifiedBosses = new HashSet<uint>();
+
         public static float ShadowOpacity => Math.Clamp(Config.ShadowOpacity, 0.2F, 0.8F);
 
         public float DayTime
@@ -568,6 +571,9 @@ namespace Client.Scenes
                 Parent = this,
                 Size = Size,
             };
+
+            // 换图后重新允许提示（同一只 BOSS 换图回来仍会提示一次）
+            MapControl.MapInfoChanged += (o, e) => _notifiedBosses.Clear();
             MapControl.MouseWheel += (o, e) =>
             {
                 bool chatScrolled = false;
@@ -1575,6 +1581,9 @@ namespace Client.Scenes
                         break;
                     case KeyBindAction.ItemPickUp:
                         if (Observer) continue;
+
+                        // 辅助功能「Tab捡取」：未勾选时 Tab 不捡取
+                        if (!Config.Tab捡取) continue;
 
                         if (CEnvir.Now > PickUpTime)
                         {
@@ -4610,6 +4619,17 @@ namespace Client.Scenes
         public void AutoTimeChanged()
         {
             BigPatchBox?.OnTimerChanged(User?.AutoTime ?? 0);
+        }
+
+        /// <summary>辅助功能「Boss提示」：视野内出现 BOSS 时提示一次。</summary>
+        public void NotifyBossAppeared(MonsterObject monster)
+        {
+            if (monster?.MonsterInfo == null || !monster.MonsterInfo.IsBoss) return;
+
+            if (!_notifiedBosses.Add(monster.ObjectID)) return;
+
+            // 用 Announcement（蓝字 + 浅底）而不是 Hint（默认米白，看起来跟普通白字没区别）
+            ReceiveChat($"BOSS 出现：{monster.MonsterInfo.MonsterName}", MessageType.Announcement);
         }
 
         public void ReceiveChat(string message, MessageType type, List<ClientUserItem> linkedItems = null)

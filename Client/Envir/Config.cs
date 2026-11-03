@@ -171,7 +171,7 @@ namespace Client.Envir
         public static bool 转生残影 { get; set; } = false;
         public static bool 死亡红屏 { get; set; } = false;
         public static bool 快速自动拾取 { get; set; } = false;
-        public static bool Tab捡取 { get; set; } = false;
+        public static bool Tab捡取 { get; set; } = true;
 
         // 拾取页：不依赖白名单，按物品品质（非白色）自动拾取
         public static bool 拾取非白色物品 { get; set; } = false;
