@@ -51,7 +51,7 @@ namespace Server.Envir.Commands.Command.Admin
         public GuildMemberInfo CreateLeaderRole()
         {
             GuildMemberInfo memberInfo = SEnvir.GuildMemberInfoList.CreateNewObject();
-            memberInfo.Rank = "Guild Leader";
+            memberInfo.Rank = "会长";
             memberInfo.JoinDate = SEnvir.Now;
             memberInfo.Permission = GuildPermission.Leader;
             return memberInfo;

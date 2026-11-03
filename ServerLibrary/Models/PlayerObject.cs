@@ -4839,12 +4839,13 @@ namespace Server.Models
             info.StorageSize = 10 + p.Storage;
             //info.GuildFunds = Globals.GuildCreationCost;
             info.GuildLevel = 1;
+            info.DefaultRank = "成员";   // 新成员入会时的默认职位（原来为空，客户端显示空白）
 
             GuildMemberInfo memberInfo = SEnvir.GuildMemberInfoList.CreateNewObject();
 
             memberInfo.Account = Character.Account;
             memberInfo.Guild = info;
-            memberInfo.Rank = "Guild Leader";
+            memberInfo.Rank = "会长";    // 原为英文 "Guild Leader"，客户端直接显示该字符串
             memberInfo.JoinDate = SEnvir.Now;
             memberInfo.Permission = GuildPermission.Leader;
 
