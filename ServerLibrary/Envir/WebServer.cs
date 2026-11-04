@@ -8,6 +8,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -22,6 +23,9 @@ namespace Server.Envir
         public const string ActivationCommand = "Activation", ResetCommand = "Reset", DeleteCommand = "Delete",
             SystemDBSyncCommand = "SystemDBSync";
         public const string ActivationKey = "ActivationKey", ResetKey = "ResetKey", DeleteKey = "DeleteKey";
+
+        /// <summary>账号结果页（激活/重置/注销 的成功与失败）在程序目录下的可选覆盖目录。</summary>
+        private static readonly string AccountDiskPath = PlatformPath.Resolve(@".\Account\");
 
         public const string Completed = "Completed";
         public const string Currency = "GBP";
@@ -70,6 +74,12 @@ namespace Server.Envir
 
                 WebListener = new HttpListener();
                 WebListener.Prefixes.Add(Config.WebPrefix);
+
+                // 账号结果页走同一个端口（默认 80）的 /account/ 前缀：
+                // 邮件链接跳到 http://<主机>/account/xxx.html，由这里直接输出 HTML。
+                string accountPrefix = GetAccountPrefix();
+                if (!string.IsNullOrEmpty(accountPrefix) && !WebListener.Prefixes.Contains(accountPrefix))
+                    WebListener.Prefixes.Add(accountPrefix);
 
                 WebListener.Start();
                 WebListener.BeginGetContext(WebConnection, null);
@@ -144,6 +154,14 @@ namespace Server.Envir
             {
                 HttpListenerContext context = WebListener.EndGetContext(result);
 
+                // /account/xxx.html：账号结果页（激活 / 重置密码 / 注销）
+                string path = context.Request.Url?.AbsolutePath ?? string.Empty;
+                if (path.StartsWith("/account/", StringComparison.OrdinalIgnoreCase))
+                {
+                    ServeAccountPage(context, path);
+                    return;
+                }
+
                 string command = context.Request.QueryString["Type"];
 
                 switch (command)
@@ -168,6 +186,102 @@ namespace Server.Envir
                 if (WebListener != null && WebListener.IsListening)
                     WebListener.BeginGetContext(WebConnection, null);
             }
+        }
+
+        /// <summary>由 WebPrefix 推导出同端口的 /account/ 前缀；解析失败返回 null。</summary>
+        private static string GetAccountPrefix()
+        {
+            // 不能用 new Uri()：通配前缀 http://*:80/Command/ 里的 * 不是合法主机名，会抛异常。
+            string prefix = Config.WebPrefix;
+
+            if (string.IsNullOrWhiteSpace(prefix)) return null;
+
+            int schemeEnd = prefix.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd < 0) return null;
+
+            int pathStart = prefix.IndexOf('/', schemeEnd + 3);
+            string authority = pathStart < 0 ? prefix : prefix.Substring(0, pathStart);
+
+            return authority.TrimEnd('/') + "/account/";
+        }
+
+        /// <summary>
+        /// 输出账号结果页（激活 / 重置密码 / 注销 的成功与失败）。
+        /// 优先读程序目录下的 Account\&lt;文件名&gt;（运维可直接改文案），
+        /// 没有则用编译进 DLL 的嵌入资源（开箱即用，零部署）。
+        /// </summary>
+        private static void ServeAccountPage(HttpListenerContext context, string path)
+        {
+            try
+            {
+                string name = Path.GetFileName(path);
+
+                if (string.IsNullOrEmpty(name) ||
+                    name.IndexOf("..", StringComparison.Ordinal) >= 0 ||
+                    !name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+                    return;
+                }
+
+                byte[] content = LoadAccountPage(name);
+
+                if (content == null)
+                {
+                    context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+                    return;
+                }
+
+                context.Response.StatusCode = (int)HttpStatusCode.OK;
+                context.Response.ContentType = "text/html; charset=utf-8";
+                context.Response.ContentEncoding = Encoding.UTF8;
+                context.Response.Headers["Cache-Control"] = "no-store";
+                context.Response.ContentLength64 = content.Length;
+                context.Response.OutputStream.Write(content, 0, content.Length);
+            }
+            catch
+            {
+                // 结果页出错不能影响主流程
+            }
+            finally
+            {
+                context.Response.Close();
+            }
+        }
+
+        private static byte[] LoadAccountPage(string fileName)
+        {
+            try
+            {
+                string diskPath = Path.Combine(AccountDiskPath, fileName);
+                if (File.Exists(diskPath)) return File.ReadAllBytes(diskPath);
+            }
+            catch { }
+
+            try
+            {
+                Assembly assembly = typeof(WebServer).Assembly;
+                string suffix = ".Account." + fileName;
+
+                foreach (string resource in assembly.GetManifestResourceNames())
+                {
+                    if (!resource.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    using (Stream stream = assembly.GetManifestResourceStream(resource))
+                    {
+                        if (stream == null) return null;
+
+                        using (MemoryStream memory = new MemoryStream())
+                        {
+                            stream.CopyTo(memory);
+                            return memory.ToArray();
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         private static void SystemDBSync(HttpListenerContext context)

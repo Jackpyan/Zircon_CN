@@ -9,5 +9,11 @@
     <ProjectReference Include="..\LibraryCore\LibraryCore.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 账号结果页（激活 / 重置密码 / 注销 的成功与失败）：内置 Web 服务器在 /account/ 下直接输出，
+         编译进 DLL，随 ServerLibrary.dll 一起走，不需要额外部署文件。 -->
+    <EmbeddedResource Include="Resources\Web\Account\*.html" />
+  </ItemGroup>
+
 
 </Project>
