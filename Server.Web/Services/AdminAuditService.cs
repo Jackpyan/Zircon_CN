@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Threading.Channels;
+using Microsoft.Extensions.Hosting;
 
 namespace Server.Web.Services;
 
 /// <summary>
-/// 单条审计记录。后 6 个字段为增强项，旧记录缺失时反序列化为 null（向后兼容）。
+/// 单条审计记录。后 7 个字段为增强项，旧记录缺失时反序列化为 null（向后兼容）。
+/// <para>Source：来源，null/空 = 后台（Web），"GM" = 游戏内 GM 命令。</para>
 /// </summary>
 public sealed record AdminAuditEntry(
     DateTimeOffset Timestamp,
@@ -16,9 +19,21 @@ public sealed record AdminAuditEntry(
     string? Result = null,
     string? Target = null,
     string? Reason = null,
-    string? UserAgent = null);
+    string? UserAgent = null,
+    string? Source = null);
 
-public sealed class AdminAuditService
+/// <summary>
+/// 后台审计流水：内存环形窗口（2,000 条）+ 按天追加写 <c>Audit/admin-audit-YYYYMMDD.jsonl</c>，保留 90 天。
+/// <para>
+/// 两条写入通道：
+/// <list type="bullet">
+/// <item><see cref="Record"/> —— 后台自身操作，同步落盘（原有行为，保持不变）。</item>
+/// <item><see cref="Enqueue"/> —— 游戏内 GM 命令，走 <see cref="Channel{T}"/> 异步落盘。
+/// 命令执行在游戏主循环线程上，绝不能因为磁盘慢/杀软扫描而卡住主循环。</item>
+/// </list>
+/// </para>
+/// </summary>
+public sealed class AdminAuditService : IHostedService
 {
     private const int MemoryLimit = 2_000;
     private const int RetentionDays = 90;
@@ -27,6 +42,11 @@ public sealed class AdminAuditService
     private readonly object _fileGate = new();
     private readonly string _directory = Path.Combine(AppContext.BaseDirectory, "Audit");
     private string _currentPath = string.Empty;
+
+    private readonly Channel<AdminAuditEntry> _queue =
+        Channel.CreateUnbounded<AdminAuditEntry>(new UnboundedChannelOptions { SingleReader = true });
+
+    private Task? _writerTask;
 
     public AdminAuditService()
     {
@@ -64,6 +84,7 @@ public sealed class AdminAuditService
     public void Record(string user, string action, string detail, string? address = null)
         => Record(user, action, detail, address, role: null, result: null, target: null, reason: null, userAgent: null);
 
+    /// <summary>后台操作：同步落盘（保持原有行为）。</summary>
     public void Record(
         string user,
         string action,
@@ -73,7 +94,8 @@ public sealed class AdminAuditService
         string? result,
         string? target,
         string? reason,
-        string? userAgent)
+        string? userAgent,
+        string? source = null)
     {
         AdminAuditEntry entry = new(
             DateTimeOffset.Now,
@@ -85,21 +107,88 @@ public sealed class AdminAuditService
             result,
             target,
             reason,
-            userAgent);
+            userAgent,
+            source);
 
-        _entries.Enqueue(entry);
-        while (_entries.Count > MemoryLimit) _entries.TryDequeue(out _);
+        EnqueueMemory(entry);
+        WriteEntry(entry);
+    }
 
-        lock (_fileGate)
-        {
-            string path = ResolvePath(entry.Timestamp);
-
-            Directory.CreateDirectory(_directory);
-            File.AppendAllText(path, JsonSerializer.Serialize(entry) + Environment.NewLine);
-        }
+    /// <summary>
+    /// 游戏内 GM 命令：只入队，落盘交给后台线程（不阻塞调用方）。
+    /// 内存窗口立即更新，审计页不用等落盘就能看到。
+    /// </summary>
+    public void Enqueue(AdminAuditEntry entry)
+    {
+        EnqueueMemory(entry);
+        _queue.Writer.TryWrite(entry);
     }
 
     public IReadOnlyList<AdminAuditEntry> GetEntries() => _entries.Reverse().ToArray();
+
+    // ===== IHostedService：后台落盘线程 =====
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _writerTask = Task.Run(FlushLoopAsync, CancellationToken.None);
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _queue.Writer.TryComplete();
+
+        if (_writerTask == null) return;
+
+        // 最多等 3 秒把队列刷完（停机流程本身只有 3 秒预算）
+        await Task.WhenAny(_writerTask, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+    }
+
+    /// <summary>
+    /// 故意不接 CancellationToken：停机时靠 <c>TryComplete()</c> 让循环把队列**排空**后自然退出。
+    /// 若监听 host 的 stopping token，停机瞬间会直接抛 OperationCanceledException，队列里剩下的记录全丢。
+    /// </summary>
+    private async Task FlushLoopAsync()
+    {
+        ChannelReader<AdminAuditEntry> reader = _queue.Reader;
+
+        try
+        {
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
+                while (reader.TryRead(out AdminAuditEntry? entry))
+                    WriteEntry(entry);
+        }
+        catch
+        {
+            // 落盘线程不允许把进程带崩
+        }
+    }
+
+    // ===== 内部 =====
+
+    private void EnqueueMemory(AdminAuditEntry entry)
+    {
+        _entries.Enqueue(entry);
+        while (_entries.Count > MemoryLimit) _entries.TryDequeue(out _);
+    }
+
+    private void WriteEntry(AdminAuditEntry entry)
+    {
+        try
+        {
+            lock (_fileGate)
+            {
+                string path = ResolvePath(entry.Timestamp);
+
+                Directory.CreateDirectory(_directory);
+                File.AppendAllText(path, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // 写盘失败不影响业务（Logs.txt 里还有 GM 命令的兜底记录）
+        }
+    }
 
     private string ResolvePath(DateTimeOffset timestamp)
     {

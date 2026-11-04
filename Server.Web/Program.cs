@@ -192,6 +192,8 @@ builder.Services.AddSingleton<TotpChallengeStore>();
 // 会话策略：空闲超时 + 单点登录（配置页 [AdminWeb] AdminWebIdleTimeoutMinutes / AdminWebSingleSession）
 builder.Services.AddSingleton<AdminSessionRegistry>();
 builder.Services.AddSingleton<AdminAuditService>();
+// 审计异步落盘的后台线程（GM 命令从游戏线程 Enqueue，不能在那里等磁盘）
+builder.Services.AddHostedService(provider => provider.GetRequiredService<AdminAuditService>());
 builder.Services.AddSingleton<LoginThrottleService>();
 builder.Services.AddSingleton<IGameServerController, GameServerController>();
 builder.Services.AddHostedService(provider => (GameServerController)provider.GetRequiredService<IGameServerController>());
@@ -214,6 +216,32 @@ WebApplication app = builder.Build();
 // System.db must be initialized before an administrator can start the game loop.
 // Resolving the singleton here applies the same defaults/migrations that the old SMain load path applied.
 _ = app.Services.GetRequiredService<GameDataSessionService>();
+
+// 游戏内 GM 命令 → 后台审计流水（与 Web 操作同一份文件，靠 Source="GM" 区分）。
+// 走 Enqueue 而不是 Record：命令跑在游戏主循环线程上，落盘交给后台线程，不能阻塞它。
+AdminAuditService auditSink = app.Services.GetRequiredService<AdminAuditService>();
+CommandAudit.Sink = record =>
+{
+    string detail = string.IsNullOrWhiteSpace(record.Arguments)
+        ? record.Command
+        : $"{record.Command} {record.Arguments}";
+
+    if (!string.IsNullOrWhiteSpace(record.Map))
+        detail += $"（{record.Map}）";
+
+    auditSink.Enqueue(new AdminAuditEntry(
+        new DateTimeOffset(record.Time),
+        string.IsNullOrWhiteSpace(record.Account) ? "unknown" : record.Account,
+        "GMCommand",
+        detail,
+        record.Address,
+        Role: record.Identity,
+        Result: record.Result,
+        Target: record.Character,
+        Reason: record.Reason,
+        UserAgent: null,
+        Source: "GM"));
+};
 
 if (!app.Environment.IsDevelopment())
 {
@@ -477,7 +505,7 @@ app.MapPost("/auth/totp/setup", async (HttpContext context, IAntiforgery antifor
 app.MapGet("/audit/export", (AdminAuditService audit) =>
 {
     System.Text.StringBuilder builder = new();
-    builder.AppendLine("时间,操作者,身份,操作,结果,详情,原因,来源IP");
+    builder.AppendLine("时间,操作者,身份,来源,操作,结果,详情,目标,原因,来源IP");
 
     static string Escape(string? value)
     {
@@ -493,9 +521,11 @@ app.MapGet("/audit/export", (AdminAuditService audit) =>
             Escape(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")),
             Escape(entry.User),
             Escape(entry.Role),
+            Escape(string.Equals(entry.Source, "GM", StringComparison.Ordinal) ? "游戏内" : "后台"),
             Escape(entry.Action),
             Escape(entry.Result),
             Escape(entry.Detail),
+            Escape(entry.Target),
             Escape(entry.Reason),
             Escape(entry.Address)));
     }

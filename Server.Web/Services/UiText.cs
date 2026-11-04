@@ -252,7 +252,7 @@ public static class UiText
         ["GameData.Relation.Delete"] = "删除关联数据", ["GameData.InsertAfter"] = "插入游戏数据",
         ["GameData.Import"] = "导入游戏数据", ["MapRegion.Save"] = "保存地图区域", ["Orphan.Scan"] = "扫描孤立数据",
         ["Orphan.Clean"] = "清理孤立数据", ["RuntimeData.Update"] = "修改运行时数据", ["Plugin.Load"] = "加载插件",
-        ["Plugin.SetEnabled"] = "修改插件启用状态"
+        ["Plugin.SetEnabled"] = "修改插件启用状态", ["GMCommand"] = "GM 命令"
     };
 
     public static string GameDataField(string field) => GameDataFields.GetValueOrDefault(field, SplitIdentifier(field));
@@ -273,6 +273,10 @@ public static class UiText
         "Denied" => "无权限",
         _ => string.IsNullOrEmpty(result) ? "-" : result
     };
+
+    /// <summary>审计来源：后台（Web 操作）还是游戏内（GM 命令）。</summary>
+    public static string AuditSource(string? source) =>
+        string.Equals(source, "GM", StringComparison.Ordinal) ? "游戏内" : "后台";
 
     public static string AuditReason(string? reason) => reason switch
     {

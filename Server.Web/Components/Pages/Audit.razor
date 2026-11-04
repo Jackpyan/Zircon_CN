@@ -8,7 +8,7 @@
     <div>
         <span class="eyebrow">安全 / 审计</span>
         <h1>管理操作审计</h1>
-        <p>按天落盘（保留 90 天），页面显示最近 2,000 条；支持按操作者 / 操作 / 结果 / 关键字筛选与导出。</p>
+        <p>后台操作与游戏内 GM 命令同一份流水（按天落盘，保留 90 天），页面显示最近 2,000 条；支持按操作者 / 操作 / 结果 / 来源 / 关键字筛选与导出。</p>
     </div>
     <div class="control-cluster">
         <a class="rz-button rz-button-md rz-variant-filled rz-primary" href="/audit/export" target="_blank">导出 CSV</a>
@@ -34,6 +34,14 @@
         </select>
     </label>
     <label class="config-field">
+        <span>来源</span>
+        <select value="@_sourceFilter" @onchange="e => { _sourceFilter = e.Value?.ToString(); }">
+            <option value="">全部</option>
+            <option value="Web">后台</option>
+            <option value="GM">游戏内 GM 命令</option>
+        </select>
+    </label>
+    <label class="config-field">
         <span>关键字</span>
         <input value="@_keyword" @onchange="e => { _keyword = e.Value?.ToString(); }" placeholder="详情 / 来源 / 原因" />
     </label>
@@ -51,6 +59,9 @@
             <RadzenDataGridColumn TItem="AdminAuditEntry" Property="User" Title="操作者" Width="150px" />
             <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Role" Title="身份" Width="130px">
                 <Template Context="entry">@UiText.AuditRole(entry.Role)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Source" Title="来源" Width="110px">
+                <Template Context="entry">@UiText.AuditSource(entry.Source)</Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Action" Title="操作" Width="200px">
                 <Template Context="entry">@UiText.AuditAction(entry.Action)</Template>
@@ -73,6 +84,7 @@
     private string? _userFilter;
     private string? _actionFilter;
     private string? _resultFilter;
+    private string? _sourceFilter;
     private string? _keyword;
 
     private IReadOnlyList<AdminAuditEntry> FilteredEntries
@@ -80,6 +92,11 @@
         get
         {
             IEnumerable<AdminAuditEntry> entries = AuditService.GetEntries();
+
+            if (!string.IsNullOrWhiteSpace(_sourceFilter))
+                entries = _sourceFilter == "GM"
+                    ? entries.Where(x => string.Equals(x.Source, "GM", StringComparison.Ordinal))
+                    : entries.Where(x => !string.Equals(x.Source, "GM", StringComparison.Ordinal));
 
             if (!string.IsNullOrWhiteSpace(_userFilter))
                 entries = entries.Where(x => x.User.Contains(_userFilter.Trim(), StringComparison.OrdinalIgnoreCase));
