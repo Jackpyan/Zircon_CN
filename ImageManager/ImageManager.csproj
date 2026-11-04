@@ -34,11 +34,9 @@
     <PackageReference Include="System.Data.SqlClient" Version="4.9.0" />
   </ItemGroup>
   <ItemGroup>
-    <Reference Include="ManagedSquish">
-      <HintPath>..\Components\ManagedSquish.dll</HintPath>
-    </Reference>
-    <Reference Include="NativeSquish_x64">
-      <HintPath>..\Components\NativeSquish_x64.dll</HintPath>
-    </Reference>
+    <!-- DXT 编解码改用纯托管 BCnEncoder（ManagedSquish 依赖的 NativeSquish_x64.dll 是
+         .NET Framework 的 C++/CLI 混合模式程序集，.NET 10 加载不了）。 -->
+    <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
+    <Compile Include="..\LibraryEditor\DxtCodec.cs" Link="Imaging\DxtCodec.cs" />
   </ItemGroup>
 </Project>

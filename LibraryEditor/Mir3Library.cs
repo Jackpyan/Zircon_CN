@@ -1,4 +1,4 @@
-﻿using ManagedSquish;
+﻿using Zircon.Imaging;
 using BCnEncoder.Shared;
 using System;
 using System.Collections.Generic;
@@ -2224,7 +2224,7 @@ namespace LibraryEditor
                 {
                     if (reverseRedBlue)
                     {
-                        // Squish expects RGBA input; GDI bitmaps expose BGRA bytes.
+                        // 转成 BGRA 顺序（部分旧编码器按 RGBA 读取）
                         byte b = pixels[i];
                         pixels[i] = pixels[i + 2];
                         pixels[i + 2] = b;
@@ -2611,14 +2611,14 @@ namespace LibraryEditor
                 writer.Write(OverlayFallbackBytes?.Length ?? 0);
             }
 
-            private SquishFlags DxtFlags
+            private DxtFormat DxtFlags
             {
                 get
                 {
                     return ImageCodec switch
                     {
-                        ZlImageCodec.Dxt1 => SquishFlags.Dxt1,
-                        _ => SquishFlags.Dxt5,
+                        ZlImageCodec.Dxt1 => DxtFormat.Dxt1,
+                        _ => DxtFormat.Dxt5,
                     };
                 }
             }
@@ -2753,18 +2753,11 @@ namespace LibraryEditor
                 if (codec == ZlImageCodec.Bc7)
                     return EncodeBc7(source, useBlackKeyTransparency);
 
-                SquishFlags flags = codec == ZlImageCodec.Dxt1 ? SquishFlags.Dxt1 : SquishFlags.Dxt5;
-                byte[] pixels = PreparePixels(source, useBlackKeyTransparency, true);
-                int count = Squish.GetStorageRequirements(source.Width, source.Height, flags);
-                byte[] bytes = new byte[count];
-
-                fixed (byte* dest = bytes)
-                fixed (byte* pixelSource = pixels)
-                {
-                    Squish.CompressImage((IntPtr)pixelSource, source.Width, source.Height, (IntPtr)dest, flags);
-                }
-
-                return bytes;
+                // DXT1/5 改走纯托管 BCnEncoder：ManagedSquish 依赖的 NativeSquish_x64.dll
+                // 是 .NET Framework 的 C++/CLI 混合模式程序集，.NET 10 加载不了。
+                byte[] pixels = PreparePixels(source, useBlackKeyTransparency, false);
+                return DxtCodec.Compress(pixels, source.Width, source.Height,
+                    codec == ZlImageCodec.Dxt1 ? DxtFormat.Dxt1 : DxtFormat.Dxt5);
                 }
                 finally
                 {
@@ -2803,26 +2796,9 @@ namespace LibraryEditor
                     return DecodeBc7(bytes, width, height);
                 }
 
-                SquishFlags flags = codec == ZlImageCodec.Dxt1 ? SquishFlags.Dxt1 : SquishFlags.Dxt5;
-                int expectedSize = Squish.GetStorageRequirements(width, height, flags);
-                if (bytes.Length < expectedSize)
-                {
-                    byte[] padded = new byte[expectedSize];
-                    Buffer.BlockCopy(bytes, 0, padded, 0, bytes.Length);
-                    bytes = padded;
-                }
-
-                fixed (byte* source = bytes)
-                    Squish.DecompressImage(data.Scan0, width, height, (IntPtr)source, flags);
-
-                byte* dest = (byte*)data.Scan0;
-
-                for (int i = 0; i < height * width * 4; i += 4)
-                {
-                    byte b = dest[i];
-                    dest[i] = dest[i + 2];
-                    dest[i + 2] = b;
-                }
+                // DXT1/5：纯托管解码（BCnEncoder），输出已是 BGRA，无需再做 R/B 交换
+                DxtCodec.Decompress(bytes, width, height, data.Scan0, data.Stride,
+                    codec == ZlImageCodec.Dxt1 ? DxtFormat.Dxt1 : DxtFormat.Dxt5);
 
                 bitmap.UnlockBits(data);
                 return bitmap;

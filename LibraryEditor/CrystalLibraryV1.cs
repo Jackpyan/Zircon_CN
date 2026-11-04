@@ -1,4 +1,4 @@
-using ManagedSquish;
+﻿using Zircon.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -306,23 +306,12 @@ namespace LibraryEditor
 
                 for (int i = 0; i < pixels.Length; i += 4)
                 {
-                    //Reverse Red/Blue
-                    byte b = pixels[i];
-                    pixels[i] = pixels[i + 2];
-                    pixels[i + 2] = b;
-
                     if (pixels[i] == 0 && pixels[i + 1] == 0 && pixels[i + 2] == 0)
                         pixels[i + 3] = 0; //Make Transparent
                 }
 
-                int count = Squish.GetStorageRequirements(input.Width, input.Height, SquishFlags.Dxt1);
-
-                output = new byte[count];
-                fixed (byte* dest = output)
-                fixed (byte* source = pixels)
-                {
-                    Squish.CompressImage((IntPtr)source, input.Width, input.Height, (IntPtr)dest, SquishFlags.Dxt1);
-                }
+                // 纯托管 DXT1 压缩（ManagedSquish 的混合模式程序集在 .NET 10 加载不了）
+                output = DxtCodec.Compress(pixels, input.Width, input.Height, DxtFormat.Dxt1);
                 return output;
             }
 
@@ -363,18 +352,7 @@ namespace LibraryEditor
                 BitmapData data = Image.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadWrite,
                                                  PixelFormat.Format32bppArgb);
 
-                fixed (byte* source = FBytes)
-                    Squish.DecompressImage(data.Scan0, w, h, (IntPtr)source, SquishFlags.Dxt1);
-
-                byte* dest = (byte*)data.Scan0;
-
-                for (int i = 0; i < h * w * 4; i += 4)
-                {
-                    //Reverse Red/Blue
-                    byte b = dest[i];
-                    dest[i] = dest[i + 2];
-                    dest[i + 2] = b;
-                }
+                DxtCodec.Decompress(FBytes, w, h, data.Scan0, data.Stride, DxtFormat.Dxt1);
 
                 Image.UnlockBits(data);
 
@@ -392,18 +370,7 @@ namespace LibraryEditor
                     data = MaskImage.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadWrite,
                                                      PixelFormat.Format32bppArgb);
 
-                    fixed (byte* source = MaskFBytes)
-                        Squish.DecompressImage(data.Scan0, w, h, (IntPtr)source, SquishFlags.Dxt1);
-
-                    dest = (byte*)data.Scan0;
-
-                    for (int i = 0; i < h * w * 4; i += 4)
-                    {
-                        //Reverse Red/Blue
-                        byte b = dest[i];
-                        dest[i] = dest[i + 2];
-                        dest[i + 2] = b;
-                    }
+                    DxtCodec.Decompress(MaskFBytes, w, h, data.Scan0, data.Stride, DxtFormat.Dxt1);
 
                     MaskImage.UnlockBits(data);
                 }

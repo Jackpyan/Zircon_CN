@@ -1,4 +1,4 @@
-using ManagedSquish;
+﻿using Zircon.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -463,22 +463,22 @@ namespace LibraryEditor
             int textureWidth = NextPowerOfTwo(AlignToFour(Width));
             int alignedHeight = AlignToFour(Height);
 
-            SquishFlags type;
+            DxtFormat type;
             switch (textureType)
             {
                 case 0:
                 case 1:
                 case 129: //Not a dxt image but need this here to not fall in to the NotImplementedException below
-                    type = SquishFlags.Dxt1;
+                    type = DxtFormat.Dxt1;
                     break;
                 case 3:
-                    type = SquishFlags.Dxt3;
+                    type = DxtFormat.Dxt3;
                     break;
                 case 5:
-                    type = SquishFlags.Dxt5;
+                    type = DxtFormat.Dxt5;
                     break;
                 case 128:
-                    type = SquishFlags.Dxt5;
+                    type = DxtFormat.Dxt5;
                     break;
                 default:
                     throw new NotImplementedException();
@@ -516,17 +516,8 @@ namespace LibraryEditor
                 }
                 else
                 {
-                    fixed (byte* source = decompressedBuffer)
-                        Squish.DecompressImage(data.Scan0, textureWidth, textureHeight, (IntPtr)source, type);
-
-                    byte* dest = (byte*)data.Scan0;
-                    for (int i = 0; i < textureWidth * textureHeight * 4; i += 4)
-                    {
-                        // Reverse red and blue after Squish's RGBA output.
-                        byte b = dest[i];
-                        dest[i] = dest[i + 2];
-                        dest[i + 2] = b;
-                    }
+                    // 纯托管 DXT 解码（ManagedSquish 的混合模式程序集在 .NET 10 加载不了）
+                    DxtCodec.Decompress(decompressedBuffer, textureWidth, textureHeight, data.Scan0, data.Stride, type);
                 }
             }
             finally

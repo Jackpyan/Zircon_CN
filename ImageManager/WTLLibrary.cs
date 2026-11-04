@@ -1,4 +1,4 @@
-﻿using ManagedSquish;
+﻿using Zircon.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -577,24 +577,11 @@ namespace ImageManager
 
             for (int i = 0; i < pixels.Length; i += 4)
             {
-                //Reverse Red/Blue
-                byte b = pixels[i];
-                pixels[i] = pixels[i + 2];
-                pixels[i + 2] = b;
-
                 if (pixels[i] == 0 && pixels[i + 1] == 0 && pixels[i + 2] == 0)
                     pixels[i + 3] = 0; //Make Transparent
-
             }
 
-            int count = Squish.GetStorageRequirements(w, h, SquishFlags.Dxt1);
-
-            byte[] bytes = new byte[count];
-            fixed (byte* dest = bytes)
-            fixed (byte* source = pixels)
-            {
-                Squish.CompressImage((IntPtr)source, w, h, (IntPtr)dest, SquishFlags.Dxt1);
-            }
+            byte[] bytes = DxtCodec.Compress(pixels, w, h, DxtFormat.Dxt1);
 
             temp.Dispose();
 

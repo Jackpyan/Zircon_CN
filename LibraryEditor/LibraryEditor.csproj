@@ -75,14 +75,9 @@
     <PackageReference Include="Ionic.Zlib.Core" Version="1.0.0" />
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.5.0" />
   </ItemGroup>
-  <ItemGroup>
-    <Reference Include="ManagedSquish">
-      <HintPath>..\Components\ManagedSquish.dll</HintPath>
-    </Reference>
-    <Reference Include="NativeSquish_x64">
-      <HintPath>..\Components\NativeSquish_x64.dll</HintPath>
-    </Reference>
-  </ItemGroup>
+  <!-- ManagedSquish / NativeSquish_x64 已移除：那是 .NET Framework 的 C++/CLI 混合模式程序集，
+       .NET 10 无法加载（打开资源库报 "The type initializer for 'ManagedSquish.Squish' threw an exception"）。
+       DXT1/3/5 编解码改走纯托管的 BCnEncoder，见 DxtCodec.cs。 -->
   <ProjectExtensions>
     <VisualStudio AllowExistingFolder="true" />
   </ProjectExtensions>
