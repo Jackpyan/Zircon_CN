@@ -1,3 +1,3 @@
 ﻿@page "/data/fishing"
-@attribute [Authorize(Roles = "Administrator")]
+@attribute [Authorize(Policy = AdminPermissions.PolicyRead)]
 <GameDataGrid ViewKey="fishing" />

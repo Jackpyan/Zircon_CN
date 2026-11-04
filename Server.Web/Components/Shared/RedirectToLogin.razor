@@ -1,9 +1,20 @@
 @inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 @code {
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-            Navigation.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(new Uri(Navigation.Uri).PathAndQuery)}", forceLoad: true);
+        if (!firstRender) return;
+
+        AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+
+        // 已登录但没有该页权限 → 去无权限页（否则会 /login → 回跳 → 再次拦截，形成死循环）
+        if (state.User.Identity?.IsAuthenticated == true)
+        {
+            Navigation.NavigateTo("/denied", forceLoad: true);
+            return;
+        }
+
+        Navigation.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(new Uri(Navigation.Uri).PathAndQuery)}", forceLoad: true);
     }
 }

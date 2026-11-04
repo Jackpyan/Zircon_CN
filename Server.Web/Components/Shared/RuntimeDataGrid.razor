@@ -40,7 +40,7 @@ else
                 <HeaderTemplate>
                     <div class="radzen-grid-toolbar">
                         <RadzenButton Text="刷新快照" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Load" />
-                        @if (IsAccountCollection)
+                        @if (IsAccountCollection && _canManage)
                         {
                             <RadzenButton Text="新建账号" Icon="add" ButtonStyle="ButtonStyle.Primary" Click="CreateAccount" />
                         }
@@ -84,9 +84,12 @@ else
                     <RadzenDataGridColumn TItem="RuntimeDataRow" Title="操作" Width="@(IsAccountCollection ? "150px" : "88px")" Filterable="false" Sortable="false">
                         <Template Context="row">
                             <div class="grid-row-actions">
-                                <RadzenButton Text="编辑" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
-                                              Click="@(() => SelectRow(row))" />
-                                @if (IsAccountCollection)
+                                @if (_canManage)
+                                {
+                                    <RadzenButton Text="编辑" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                                  Click="@(() => SelectRow(row))" />
+                                }
+                                @if (IsAccountCollection && _canOwner)
                                 {
                                     <RadzenButton Text="删除" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
                                                   Click="@(() => DeleteAccount(row))" />
@@ -101,7 +104,10 @@ else
         <aside class="editor-panel runtime-editor">
             @if (SelectedRow is null)
             {
-                <div class="editor-empty"><span>选择一行</span><p>选择一行以查看和编辑允许的字段。</p></div>
+                <div class="editor-empty">
+                    <span>@(_canManage ? "选择一行" : "只读视图")</span>
+                    <p>@(_canManage ? "选择一行以查看和编辑允许的字段。" : "当前身份无修改权限；如需修改请用「管理员」身份登录。")</p>
+                </div>
             }
             else
             {
@@ -156,9 +162,18 @@ else
     private string? Message;
     private bool HasError;
 
+    /// <summary>按钮级权限（二期）：管理员=改数据/新建账号；主密码=删除账号。</summary>
+    private bool _canManage;
+    private bool _canOwner;
+
     protected override async Task OnParametersSetAsync()
     {
         Definition = RuntimeDataManager.Get(CollectionKey);
+
+        AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        _canManage = AdminPermissions.CanManage(state.User);
+        _canOwner = AdminPermissions.CanOwner(state.User);
+
         await Load();
     }
 
@@ -167,12 +182,29 @@ else
     {
         if (row is null) return;
 
+        // 二期：没有「管理员」身份时不给打开编辑面板（否则只读身份也能改数据）
+        if (!_canManage)
+        {
+            SelectedItems = [];
+            EditValues = [];
+            HasError = false;
+            Message = "只读视图：修改运行时数据需要「管理员」身份。";
+            return;
+        }
+
         SelectedItems = [row];
         EditValues = row.Values.ToDictionary(pair => pair.Key, pair => pair.Value?.ToString());
     }
 
     private void SelectionChanged(IList<RuntimeDataRow> selected)
     {
+        if (!_canManage)
+        {
+            SelectedItems = [];
+            EditValues = [];
+            return;
+        }
+
         SelectedItems = selected;
         EditValues = SelectedRow?.Values.ToDictionary(pair => pair.Key, pair => pair.Value?.ToString()) ?? [];
     }
@@ -187,6 +219,9 @@ else
     private async Task Save()
     {
         if (SelectedRow is null) return;
+
+        if (!_canManage) { HasError = true; Message = "权限不足：修改运行时数据需要「管理员」身份。"; return; }
+
         try
         {
             string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
@@ -207,6 +242,8 @@ else
     /// <summary>新建账号：邮箱 + 密码必填，创建 IP 取操作者浏览器 IP，时间取服务器当前时间。</summary>
     private async Task CreateAccount()
     {
+        if (!_canManage) { HasError = true; Message = "权限不足：新建账号需要「管理员」身份。"; return; }
+
         try
         {
             AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
@@ -237,6 +274,8 @@ else
     /// <summary>删除账号：先二次确认，再按依赖顺序级联清理（角色、物品、货币、邮件等）。</summary>
     private async Task DeleteAccount(RuntimeDataRow row)
     {
+        if (!_canOwner) { HasError = true; Message = "权限不足：删除账号仅限主密码登录的管理员。"; return; }
+
         string email = row.Values.GetValueOrDefault("EMailAddress")?.ToString() ?? $"#{row.Index}";
 
         bool? confirmed = await DialogService.Confirm(

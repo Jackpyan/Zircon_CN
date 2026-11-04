@@ -1,4 +1,4 @@
 ﻿@page "/runtime"
 @page "/runtime/accounts"
-@attribute [Authorize(Roles = "Administrator")]
+@attribute [Authorize(Policy = AdminPermissions.PolicyRead)]
 <RuntimeDataGrid CollectionKey="accounts" />

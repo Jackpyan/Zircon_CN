@@ -4,10 +4,10 @@ using Server.Envir;
 
 namespace Server.Web.Services;
 
-/// <summary>Web 后台登录结果。</summary>
-public sealed record AdminLoginResult(bool Ok, string UserName, string Role, string Reason)
+/// <summary>Web 后台登录结果（Identity 供 Cookie 声明使用，用于按钮级权限判定）。</summary>
+public sealed record AdminLoginResult(bool Ok, string UserName, string Role, string Reason, string Identity)
 {
-    public static AdminLoginResult Fail(string reason) => new(false, string.Empty, string.Empty, reason);
+    public static AdminLoginResult Fail(string reason) => new(false, string.Empty, string.Empty, reason, string.Empty);
 }
 
 public sealed class AdminCredentialService
@@ -36,18 +36,21 @@ public sealed class AdminCredentialService
             if (!isIntranet)
                 return AdminLoginResult.Fail("MasterLoginIntranetOnly");
 
-            return new AdminLoginResult(true, Config.AdminUserName, RoleAdministrator, "MasterPassword");
+            return new AdminLoginResult(true, Config.AdminUserName, RoleAdministrator, AuthModeMasterPassword,
+                Server.DBModels.AccountIdentity.Admin.ToString());
         }
 
         if (SEnvir.TryValidateWebAccount(userName, password, out Server.DBModels.AccountInfo account, out string reason))
         {
             // 一期权限分级：身份 = 管理员 → Administrator 角色（37 个高危页可用，行为与主密码一致）；
             // 监督者/运营者 → WebAdmin 角色（Runtime 只读页可用，数据页二期再细化）。
-            string role = account.GetEffectiveIdentity() >= Server.DBModels.AccountIdentity.Admin
+            Server.DBModels.AccountIdentity identity = account.GetEffectiveIdentity();
+
+            string role = identity >= Server.DBModels.AccountIdentity.Admin
                 ? RoleAdministrator
                 : RoleWebAdmin;
 
-            return new AdminLoginResult(true, userName, role, "WebAdmin");
+            return new AdminLoginResult(true, userName, role, AuthModeWebAccount, identity.ToString());
         }
 
         return AdminLoginResult.Fail(reason);

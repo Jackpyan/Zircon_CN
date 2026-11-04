@@ -1,10 +1,34 @@
-<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
-    <Found Context="routeData">
-        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
-            <NotAuthorized>
-                <RedirectToLogin />
-            </NotAuthorized>
-        </AuthorizeRouteView>
-        <FocusOnNavigate RouteData="routeData" Selector="main" />
-    </Found>
-</Router>
+@* 兜底：任何未捕获的组件异常都显示可恢复的错误页，避免「整页点不动、必须重新打开」 *@
+<ErrorBoundary @ref="Boundary">
+    <ChildContent>
+        <Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+            <Found Context="routeData">
+                <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+                    <NotAuthorized>
+                        <RedirectToLogin />
+                    </NotAuthorized>
+                </AuthorizeRouteView>
+                <FocusOnNavigate RouteData="routeData" Selector="main" />
+            </Found>
+        </Router>
+    </ChildContent>
+    <ErrorContent Context="exception">
+        <div class="page-heading compact">
+            <div>
+                <span class="eyebrow">运行 / 异常</span>
+                <h1>页面出错</h1>
+                <p>该操作未能完成，页面已恢复可用。可重试或切换菜单。</p>
+            </div>
+        </div>
+
+        <div class="alert danger" role="alert">@exception.Message</div>
+
+        <RadzenButton Text="重试" Icon="refresh" ButtonStyle="ButtonStyle.Primary" Click="Recover" />
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    private ErrorBoundary? Boundary;
+
+    private void Recover() => Boundary?.Recover();
+}

@@ -99,8 +99,24 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 
 builder.Services.AddAuthorization(options =>
 {
-    // 高危操作只允许主密码登录的 Administrator（账号登录为 WebAdmin，只读/常规运维）
+    // 旧策略：保留兼容（主密码登录或身份≥管理员）
     options.AddPolicy("Administrator", policy => policy.RequireRole(AdminCredentialService.RoleAdministrator));
+
+    // ===== 二期：四档权限（读 / 运营 / 管理 / 主密码）=====
+    // 读：任意登录者（登录本身已要求身份≥监督者）
+    options.AddPolicy(AdminPermissions.PolicyRead, policy => policy.RequireAuthenticatedUser());
+
+    // 运营：发放物品 / 踢人 / 解封 / 改角色运行时数据
+    options.AddPolicy(AdminPermissions.PolicyOperate, policy => policy.RequireAssertion(context =>
+        AdminPermissions.CanOperate(context.User)));
+
+    // 管理：改静态数据（物品/怪物/地图）、保存配置、改账号身份、新建账号
+    options.AddPolicy(AdminPermissions.PolicyManage, policy => policy.RequireAssertion(context =>
+        AdminPermissions.CanManage(context.User)));
+
+    // 主密码：删账号 / 启停服务器 / 插件 / 加密密钥 / 配置同步
+    options.AddPolicy(AdminPermissions.PolicyOwner, policy => policy.RequireAssertion(context =>
+        AdminPermissions.CanOwner(context.User)));
 });
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, RevalidatingAdminAuthenticationStateProvider>();
@@ -129,6 +145,9 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 builder.Services.AddSingleton<AdminCredentialService>();
+// TOTP 二次验证（主密码登录用）：开关在服务器配置页 [AdminWeb] AdminWebRequireTotp
+builder.Services.AddSingleton<TotpService>();
+builder.Services.AddSingleton<TotpChallengeStore>();
 builder.Services.AddSingleton<AdminAuditService>();
 builder.Services.AddSingleton<LoginThrottleService>();
 builder.Services.AddSingleton<IGameServerController, GameServerController>();
@@ -165,7 +184,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
 
-app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials, AdminAuditService audit, LoginThrottleService throttle) =>
+app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials,
+    AdminAuditService audit, LoginThrottleService throttle, TotpService totp, TotpChallengeStore challenges) =>
 {
     await antiforgery.ValidateRequestAsync(context);
     IFormCollection form = await context.Request.ReadFormAsync(context.RequestAborted);
@@ -190,6 +210,16 @@ app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery,
 
     if (!result.Ok)
     {
+        // 游戏服未启动 → 账号库不可用，无法核对权限。这既不是密码错也不该计入登录失败次数，
+        // 单独提示并让管理员去启动服务进程（否则用户会一直以为密码错了）。
+        if (string.Equals(result.Reason, "ServerNotRunning", StringComparison.Ordinal))
+        {
+            audit.Record(userName, "LoginDeferred", "登录未完成：游戏服未启动", address,
+                role: null, result: "Deferred", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+
+            return Results.Redirect("/login?error=3");
+        }
+
         throttle.RecordFailure(address, userName);
 
         audit.Record(userName, "LoginFailed", "登录失败", address,
@@ -200,25 +230,20 @@ app.MapPost("/auth/login", async (HttpContext context, IAntiforgery antiforgery,
 
     throttle.Reset(address, userName);
 
-    Claim[] claims =
-    [
-        new(ClaimTypes.Name, result.UserName),
-        new(ClaimTypes.Role, result.Role),
-        new("admin_stamp", credentials.GetStamp(result.UserName, result.Role, result.Reason)),
-        // 登录方式：MasterPassword / WebAdmin（决定用哪套指纹复检，账号登录升格为 Administrator 也必须走账号指纹）
-        new("auth_mode", result.Reason),
-        // 操作者来源 IP：后台「新建账号」等操作把创建 IP 记成使用者电脑的地址
-        new("client_ip", address ?? "unknown")
-    ];
-    ClaimsPrincipal principal = new(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
-    await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, new AuthenticationProperties
+    // TOTP 二次验证：仅主密码登录；服务器配置页 AdminWebRequireTotp 关闭时整体失效
+    if (TotpService.IsRequired && string.Equals(result.Reason, AdminCredentialService.AuthModeMasterPassword, StringComparison.Ordinal))
     {
-        IsPersistent = false,
-        AllowRefresh = true,
-        ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
-    });
-    audit.Record(result.UserName, "Login", "登录成功", address,
-        role: result.Role, result: "Success", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+        string token = challenges.Create(result);
+
+        audit.Record(result.UserName, "LoginTotpPending", "主密码校验通过，等待 TOTP 验证", address,
+            role: result.Role, result: "Pending", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+
+        return Results.Redirect(totp.IsBound
+            ? $"/totp?token={token}"
+            : $"/totp?token={token}&setup=1");
+    }
+
+    await SignInAdminAsync(context, result, credentials, address, userAgent, audit);
 
     return Results.Redirect("/");
 });
@@ -234,6 +259,100 @@ app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 }).RequireAuthorization();
+
+// ===== TOTP 二次验证（主密码登录）=====
+app.MapPost("/auth/totp/verify", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials,
+    AdminAuditService audit, TotpService totp, TotpChallengeStore challenges) =>
+{
+    await antiforgery.ValidateRequestAsync(context);
+    IFormCollection form = await context.Request.ReadFormAsync(context.RequestAborted);
+
+    string? token = form["token"].ToString();
+    string? code = form["code"].ToString();
+
+    TotpChallenge? challenge = challenges.Take(token);
+
+    if (challenge == null) return Results.Redirect("/login?error=4");
+    if (!TotpService.IsRequired) return Results.Redirect("/login?error=4");
+
+    string? address = context.Connection.RemoteIpAddress?.ToString();
+    string? userAgent = context.Request.Headers.UserAgent.ToString();
+
+    if (!totp.VerifyLogin(code ?? string.Empty))
+    {
+        audit.Record(challenge.UserName, "LoginTotpFailed", "TOTP 验证失败", address,
+            role: challenge.Role, result: "Failed", target: "WebConsole", reason: "BadTotpCode", userAgent: userAgent);
+
+        return Results.Redirect($"/totp?token={token}&bad=1");
+    }
+
+    challenges.Remove(token);
+
+    AdminLoginResult result = new(true, challenge.UserName, challenge.Role, challenge.Reason, challenge.Identity);
+
+    await SignInAdminAsync(context, result, credentials, address, userAgent, audit);
+
+    return Results.Redirect("/");
+});
+
+app.MapPost("/auth/totp/setup", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials,
+    AdminAuditService audit, TotpService totp, TotpChallengeStore challenges) =>
+{
+    await antiforgery.ValidateRequestAsync(context);
+    IFormCollection form = await context.Request.ReadFormAsync(context.RequestAborted);
+
+    string? token = form["token"].ToString();
+    string? code = form["code"].ToString();
+
+    TotpChallenge? challenge = challenges.Take(token);
+
+    if (challenge?.PendingSecret == null) return Results.Redirect("/login?error=4");
+    if (!TotpService.IsRequired) return Results.Redirect("/login?error=4");
+
+    string? address = context.Connection.RemoteIpAddress?.ToString();
+    string? userAgent = context.Request.Headers.UserAgent.ToString();
+
+    IReadOnlyList<string> recoveryCodes;
+
+    try
+    {
+        recoveryCodes = totp.CompleteSetup(challenge.PendingSecret, code ?? string.Empty);
+    }
+    catch (InvalidOperationException ex)
+    {
+        audit.Record(challenge.UserName, "TotpSetupFailed", "TOTP 绑定失败", address,
+            role: challenge.Role, result: "Failed", target: "WebConsole", reason: ex.Message, userAgent: userAgent);
+
+        return Results.Redirect($"/totp?token={token}&setup=1&bad=1");
+    }
+
+    challenges.Remove(token);
+
+    AdminLoginResult result = new(true, challenge.UserName, challenge.Role, challenge.Reason, challenge.Identity);
+
+    await SignInAdminAsync(context, result, credentials, address, userAgent, audit);
+
+    audit.Record(challenge.UserName, "TotpSetup", "TOTP 绑定成功", address,
+        role: challenge.Role, result: "Success", target: "WebConsole", reason: null, userAgent: userAgent);
+
+    // 恢复码只显示这一次
+    string codes = string.Join("", recoveryCodes.Select(c => $"<li><code>{c}</code></li>"));
+    string html = $$"""
+        <!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>TOTP 已绑定</title>
+        <style>body{background:#12151b;color:#e6e6e6;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:40px;line-height:1.7}
+        .card{max-width:640px;margin:0 auto;background:#1a1f27;border:1px solid #2a3240;border-radius:12px;padding:28px}
+        h1{font-size:20px;margin:0 0 12px}code{background:#0d1117;padding:2px 6px;border-radius:4px;font-size:15px}
+        ul{columns:2;list-style:none;padding:0}li{margin:6px 0}.warn{color:#ffb020}.btn{display:inline-block;margin-top:18px;background:#ffb020;color:#12151b;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600}</style>
+        </head><body><div class="card">
+        <h1>TOTP 绑定成功</h1>
+        <p class="warn">以下 8 个恢复码<strong>只显示这一次</strong>，请立即抄下并离线保存。手机丢失时可用它们登录（每个只能用一次）。</p>
+        <ul>{{codes}}</ul>
+        <a class="btn" href="/">我已保存，进入后台</a>
+        </div></body></html>
+        """;
+
+    return Results.Content(html, "text/html; charset=utf-8");
+});
 
 app.MapGet("/audit/export", (AdminAuditService audit) =>
 {
@@ -273,6 +392,11 @@ app.MapGet("/auth/whoami", (HttpContext context) => Results.Json(new
     authenticated = context.User.Identity?.IsAuthenticated == true,
     name = context.User.Identity?.Name,
     role = context.User.FindFirst(ClaimTypes.Role)?.Value,
+    identity = AdminPermissions.GetIdentity(context.User).ToString(),
+    authMode = context.User.FindFirst(AdminPermissions.ClaimAuthMode)?.Value,
+    canOperate = AdminPermissions.CanOperate(context.User),
+    canManage = AdminPermissions.CanManage(context.User),
+    canOwner = AdminPermissions.CanOwner(context.User),
     stamp = context.User.FindFirst("admin_stamp")?.Value,
     masterLoginAllowed = Config.WebAllowMasterLogin,
     accountLoaded = SEnvir.AccountInfoList != null
@@ -377,6 +501,36 @@ app.Lifetime.ApplicationStopping.Register(() =>
 });
 
 app.Lifetime.ApplicationStopped.Register(() => ShutdownLog("ApplicationStopped：进程即将退出"));
+
+/// <summary>签发后台登录 Cookie 并写审计（登录端点与 TOTP 端点共用）。</summary>
+static async Task SignInAdminAsync(HttpContext context, AdminLoginResult result, AdminCredentialService credentials,
+    string? address, string? userAgent, AdminAuditService audit)
+{
+    Claim[] claims =
+    [
+        new(ClaimTypes.Name, result.UserName),
+        new(ClaimTypes.Role, result.Role),
+        new("admin_stamp", credentials.GetStamp(result.UserName, result.Role, result.Reason)),
+        // 登录方式：MasterPassword / WebAdmin（决定用哪套指纹复检）
+        new("auth_mode", result.Reason),
+        // 身份等级：按钮级权限判定用
+        new("identity", result.Identity),
+        // 操作者来源 IP：后台「新建账号」等操作把创建 IP 记成使用者电脑的地址
+        new("client_ip", address ?? "unknown")
+    ];
+
+    ClaimsPrincipal principal = new(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+
+    await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, new AuthenticationProperties
+    {
+        IsPersistent = false,
+        AllowRefresh = true,
+        ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
+    });
+
+    audit.Record(result.UserName, "Login", "登录成功", address,
+        role: result.Role, result: "Success", target: "WebConsole", reason: result.Reason, userAgent: userAgent);
+}
 
 app.Run();
 

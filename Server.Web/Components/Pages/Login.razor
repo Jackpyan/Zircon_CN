@@ -16,6 +16,17 @@
         {
             <div class="alert danger">登录尝试过多，已被临时封锁。请联系管理员在后台「安全 → 登录黑名单」解除，或 15 分钟后再试。</div>
         }
+        else if (IsServerDown)
+        {
+            <div class="alert danger">
+                <strong>服务器未启动，无法核对权限。</strong><br />
+                请用主密码登录后台，在「服务器总览」点「启动服务器」，或让管理员启动服务进程后再登录。
+            </div>
+        }
+        else if (IsTotpExpired)
+        {
+            <div class="alert danger">二次验证已过期或已使用，请重新登录。</div>
+        }
         else if (HasError)
         {
             <div class="alert danger">账号或密码不正确。</div>
@@ -46,6 +57,11 @@
 
     private bool HasError => Error == "1";
     private bool IsBlocked => Error == "2";
+    /// <summary>error=3：游戏服未启动，账号库不可用，无法核对权限。</summary>
+    private bool IsServerDown => Error == "3";
+
+    /// <summary>error=4：TOTP 验证会话过期/已使用，或 TOTP 开关已关闭。</summary>
+    private bool IsTotpExpired => Error == "4";
 
     protected override async Task OnInitializedAsync()
     {

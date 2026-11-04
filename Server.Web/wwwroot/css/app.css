@@ -171,6 +171,18 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     color: #dfe8ea; background: #131b1d; border: 1px solid #2a3a3e; border-radius: 3px;
 }
 .radzen-file-action { min-height: 34px; gap: 7px; color: #c6d0d3; background: #182124; }
+.totp-hint { font-size: 13px; opacity: .8; margin: 10px 0; line-height: 1.6; }
+.totp-qr { margin: 14px 0; padding: 12px; background: #fff; border-radius: 10px; width: fit-content; }
+.totp-qr img { display: block; width: 244px; height: 244px; image-rendering: pixelated; }
+
+.totp-secret { margin: 14px 0; padding: 12px 14px; border: 1px solid #2a3240; border-radius: 8px; background: #0d1117; }
+.totp-secret span { display: block; font-size: 12px; opacity: .6; margin-bottom: 6px; }
+.totp-secret code { font-size: 16px; letter-spacing: 1px; word-break: break-all; }
+.totp-uri { margin: 10px 0 16px; font-size: 12px; opacity: .85; }
+.totp-uri code { display: block; margin-top: 6px; word-break: break-all; font-size: 11px; }
+
+.operator-role { display: block; font-size: 11px; opacity: .65; font-weight: 400; }
+
 .grid-row-actions { display: flex; align-items: center; gap: 2px; }
 .grid-row-actions .rz-button { min-width: 32px; padding-inline: 6px; }
 .hierarchy-detail-panel { padding: 12px; border-left: 3px solid var(--cyan); background: #0a1012; }

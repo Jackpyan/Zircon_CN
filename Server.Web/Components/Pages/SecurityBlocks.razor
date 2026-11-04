@@ -1,5 +1,5 @@
-@page "/security/blocks"
-@attribute [Authorize(Roles = "Administrator")]
+﻿@page "/security/blocks"
+@attribute [Authorize(Policy = AdminPermissions.PolicyRead)]
 @inject LoginThrottleService Throttle
 @inject AdminAuditService Audit
 @inject AuthenticationStateProvider AuthenticationStateProvider
@@ -14,7 +14,10 @@
     </div>
     <div class="control-cluster">
         <RadzenButton Text="刷新" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Reload" />
-        <RadzenButton Text="全部解除" Icon="lock_open" ButtonStyle="ButtonStyle.Danger" Click="UnblockAll" Disabled="@(Entries.Count == 0)" />
+        @if (_canOperate)
+        {
+            <RadzenButton Text="全部解除" Icon="lock_open" ButtonStyle="ButtonStyle.Danger" Click="UnblockAll" Disabled="@(Entries.Count == 0)" />
+        }
     </div>
 </div>
 
@@ -42,8 +45,11 @@
             <RadzenDataGridColumn TItem="LoginThrottleEntry" Property="RemainingMinutes" Title="剩余(分钟)" Width="100px" />
             <RadzenDataGridColumn TItem="LoginThrottleEntry" Title="操作" Width="110px">
                 <Template Context="entry">
-                    <RadzenButton Text="解除" Icon="lock_open" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.ExtraSmall"
-                                  Click="@(() => Unblock(entry))" />
+                    @if (_canOperate)
+                    {
+                        <RadzenButton Text="解除" Icon="lock_open" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.ExtraSmall"
+                                      Click="@(() => Unblock(entry))" />
+                    }
                 </Template>
             </RadzenDataGridColumn>
         </Columns>
@@ -55,7 +61,16 @@
     private string? Message;
     private bool HasError;
 
-    protected override void OnInitialized() => Reload();
+    /// <summary>按钮级权限（二期）：解除封锁 = 运营者及以上。</summary>
+    private bool _canOperate;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        _canOperate = AdminPermissions.CanOperate(state.User);
+
+        Reload();
+    }
 
     private void Reload()
     {
@@ -67,6 +82,8 @@
 
     private async Task Unblock(LoginThrottleEntry entry)
     {
+        if (!_canOperate) { Message = "权限不足：解除封锁需要「运营者」身份。"; HasError = true; return; }
+
         bool ok = Throttle.Unblock(entry.Key);
 
         string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
@@ -80,6 +97,8 @@
 
     private async Task UnblockAll()
     {
+        if (!_canOperate) { Message = "权限不足：解除封锁需要「运营者」身份。"; HasError = true; return; }
+
         int count = Throttle.UnblockAll();
 
         string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";

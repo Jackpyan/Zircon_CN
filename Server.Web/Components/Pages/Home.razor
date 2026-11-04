@@ -14,7 +14,7 @@
         <h1>服务器总览</h1>
         <p>游戏循环与网络状态的只读快照，每秒刷新。</p>
     </div>
-    <AuthorizeView Roles="Administrator">
+    <AuthorizeView Policy="@AdminPermissions.PolicyOwner">
         <div class="control-cluster">
             <RadzenButton Text="启动服务器" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="Start" Disabled="@(!CanStart)" />
             <RadzenButton Text="停止服务器" Icon="stop" ButtonStyle="ButtonStyle.Danger" Click="Stop" Disabled="@(!CanStop)" />
@@ -86,8 +86,22 @@
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>启停服务器 = 主密码管理员专属（二期）。</summary>
+    private async Task<bool> RequireOwnerAsync()
+    {
+        AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+
+        if (AdminPermissions.CanOwner(state.User)) return true;
+
+        OperationMessage = "权限不足：启停服务器仅限主密码登录的管理员。";
+        OperationFailed = true;
+        return false;
+    }
+
     private async Task Start()
     {
+        if (!await RequireOwnerAsync()) return;
+
         try
         {
             string user = await GetUser();
@@ -101,6 +115,8 @@
 
     private async Task Stop()
     {
+        if (!await RequireOwnerAsync()) return;
+
         try
         {
             string user = await GetUser();

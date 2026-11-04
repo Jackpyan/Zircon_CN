@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Reflection;
 using System.Text;
 
@@ -152,7 +152,9 @@ public static class UiText
         ["FishPointSuccessRewardMax"] = "成功奖励最大点数", ["FishPointFailureRewardMin"] = "失败奖励最小点数",
         ["FishPointFailureRewardMax"] = "失败奖励最大点数", ["AdminWebEnabled"] = "启用 Web 管理端",
         ["AdminWebHost"] = "Web 管理端主机", ["AdminWebPort"] = "Web 管理端端口", ["AdminUserName"] = "管理员账号",
-        ["AdminAutoStartGameServer"] = "自动启动游戏服务器"
+        ["AdminAutoStartGameServer"] = "自动启动游戏服务器",
+        ["WebAllowMasterLogin"] = "允许主密码登录（仅内网）",
+        ["AdminWebRequireTotp"] = "主密码登录要求 TOTP 二次验证"
     };
 
     private static readonly IReadOnlyDictionary<string, string> EnumLabels = new Dictionary<string, string>(StringComparer.Ordinal)

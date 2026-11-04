@@ -11,7 +11,10 @@
     <NavLink href="/" Match="NavLinkMatch.All">总览</NavLink>
     <NavLink href="/logs/system">系统日志</NavLink>
     <NavLink href="/logs/chat">聊天日志</NavLink>
-    <NavLink href="/configuration">服务器配置</NavLink>
+    @if (_canManage)
+    {
+        <NavLink href="/configuration">服务器配置</NavLink>
+    }
 
     <div class="nav-label">游戏数据</div>
     <details class="nav-group" open>
@@ -74,9 +77,15 @@
     </details>
 
     <div class="nav-label">工具</div>
-    <NavLink href="/map-editor">地图区域编辑</NavLink>
+    @if (_canManage)
+    {
+        <NavLink href="/map-editor">地图区域编辑</NavLink>
+    }
     <NavLink href="/diagnostics">诊断</NavLink>
-    <NavLink href="/plugins">插件</NavLink>
+    @if (_canOwner)
+    {
+        <NavLink href="/plugins">插件</NavLink>
+    }
     <NavLink href="/audit">审计记录</NavLink>
     <NavLink href="/security/blocks">登录黑名单</NavLink>
     
@@ -85,7 +94,7 @@
 <AuthorizeView>
     <Authorized Context="auth">
         <div class="operator">
-            <span>@auth.User.Identity?.Name</span>
+            <span>@auth.User.Identity?.Name<small class="operator-role">@_identityText</small></span>
             <form method="post" action="/auth/logout">
                 <AntiforgeryToken />
                 <button type="submit" class="text-button">退出</button>
@@ -94,3 +103,23 @@
     </Authorized>
 </AuthorizeView>
 
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private bool _canManage;
+    private bool _canOwner;
+    private string _identityText = string.Empty;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (AuthState == null) return;
+
+        AuthenticationState state = await AuthState;
+
+        _canManage = AdminPermissions.CanManage(state.User);
+        _canOwner = AdminPermissions.CanOwner(state.User);
+        _identityText = state.User.Identity?.IsAuthenticated == true
+            ? AdminPermissions.Describe(state.User)
+            : string.Empty;
+    }
+}

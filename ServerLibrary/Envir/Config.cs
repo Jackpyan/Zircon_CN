@@ -176,6 +176,13 @@ namespace Server.Envir
         /// </summary>
         public static bool WebAllowMasterLogin { get; set; } = true;
 
+        /// <summary>
+        /// 主密码登录是否要求 TOTP 二次验证（默认关闭）。
+        /// 关闭时 TOTP 功能整体失效（已绑定的也不校验），可用于手机丢失时的应急放行；
+        /// 开启后若尚未绑定，登录会强制进入绑定页。
+        /// </summary>
+        public static bool AdminWebRequireTotp { get; set; } = false;
+
         public static void LoadVersion()
         {
             try

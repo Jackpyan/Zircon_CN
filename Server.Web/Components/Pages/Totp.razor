@@ -1,0 +1,159 @@
+@page "/totp"
+@attribute [AllowAnonymous]
+@layout LoginLayout
+@inject TotpService TotpManager
+@inject TotpChallengeStore Challenges
+@inject NavigationManager Navigation
+@using QRCoder
+
+<PageTitle>TOTP 二次验证 · Zircon</PageTitle>
+
+<div class="login-page">
+    <div class="login-grid"></div>
+    <section class="login-card">
+        <div class="login-kicker">服务器控制台 / 二次验证</div>
+
+        @if (_challenge == null)
+        {
+            <h1>验证已失效</h1>
+            <div class="alert danger">验证会话已过期或已使用，请重新登录。</div>
+            <a class="primary-action" href="/login">返回登录</a>
+        }
+        else if (_isSetup)
+        {
+            <h1>绑定身份验证器</h1>
+            <p class="totp-hint">
+                用手机验证器 App（Google Authenticator / Microsoft Authenticator / 1Password 等）
+                添加下面的密钥，然后输入 App 显示的 6 位验证码完成绑定。
+            </p>
+
+            @if (!string.IsNullOrEmpty(_qrDataUri))
+            {
+                <div class="totp-qr">
+                    <img src="@_qrDataUri" width="244" height="244" alt="TOTP 绑定二维码" />
+                </div>
+            }
+
+            <div class="totp-secret">
+                <span>密钥（Base32，扫不了码时手动输入）</span>
+                <code>@FormatSecret(_secret)</code>
+            </div>
+
+            <details class="totp-uri">
+                <summary>手动添加用链接（otpauth）</summary>
+                <code>@TotpManager.BuildUri(_secret)</code>
+            </details>
+
+            @if (BadCode)
+            {
+                <div class="alert danger">验证码不正确，请确认手机时间是否自动同步后重试。</div>
+            }
+
+            <form method="post" action="/auth/totp/setup" class="login-form">
+                <AntiforgeryToken />
+                <input type="hidden" name="token" value="@Token" />
+                <label>
+                    <span>6 位验证码</span>
+                    <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required autofocus />
+                </label>
+                <button type="submit" class="primary-action">验证并完成绑定</button>
+            </form>
+
+            <p class="totp-hint">绑定成功后会显示 <strong>8 个恢复码</strong>（只显示一次），请离线保存。</p>
+        }
+        else
+        {
+            <h1>输入验证码</h1>
+            <p class="totp-hint">请输入身份验证器 App 中的 6 位验证码；手机丢失时可用一个恢复码登录。</p>
+
+            @if (BadCode)
+            {
+                <div class="alert danger">验证码或恢复码不正确。</div>
+            }
+
+            <form method="post" action="/auth/totp/verify" class="login-form">
+                <AntiforgeryToken />
+                <input type="hidden" name="token" value="@Token" />
+                <label>
+                    <span>验证码 / 恢复码</span>
+                    <input name="code" autocomplete="one-time-code" maxlength="12" required autofocus />
+                </label>
+                <button type="submit" class="primary-action">验证并进入</button>
+            </form>
+
+            <p class="totp-hint">剩余恢复码：@TotpManager.RemainingRecoveryCodes 个</p>
+        }
+    </section>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "token")] public string? Token { get; set; }
+    [SupplyParameterFromQuery(Name = "setup")] public string? Setup { get; set; }
+    [SupplyParameterFromQuery(Name = "bad")] public string? Bad { get; set; }
+
+    private TotpChallenge? _challenge;
+    private bool _isSetup;
+    private string _secret = string.Empty;
+    private string _qrDataUri = string.Empty;
+
+    /// <summary>
+    /// 本地生成二维码（QRCoder → PNG → data URI）。
+    /// 不用 SVG：QRCoder 的 SVG 没有 viewBox，被 CSS 缩小尺寸时是**裁切**而不是缩放，
+    /// 扫出来会缺模块（实测谷歌/微软验证器都识别不了）。PNG 按像素缩放，最稳。
+    /// </summary>
+    private static string BuildQrDataUri(string text)
+    {
+        try
+        {
+            using QRCodeGenerator generator = new();
+            using QRCodeData data = generator.CreateQrCode(text, QRCodeGenerator.ECCLevel.Q);
+
+            // 4 像素/模块 → 244×244，与页面显示尺寸 1:1（不缩放，保证清晰）
+            byte[] png = new PngByteQRCode(data).GetGraphic(4);
+
+            return $"data:image/png;base64,{Convert.ToBase64String(png)}";
+        }
+        catch
+        {
+            // 生成失败不影响手输密钥绑定
+            return string.Empty;
+        }
+    }
+
+    private bool BadCode => !string.IsNullOrEmpty(Bad);
+
+    protected override void OnParametersSet()
+    {
+        // 开关关闭 / 令牌无效 → 回登录页（TOTP 整体失效）
+        if (!TotpService.IsRequired)
+        {
+            Navigation.NavigateTo("/login?error=4");
+            return;
+        }
+
+        _challenge = Challenges.Take(Token);
+
+        if (_challenge == null)
+        {
+            Navigation.NavigateTo("/login?error=4");
+            return;
+        }
+
+        _isSetup = !TotpManager.IsBound || !string.IsNullOrEmpty(Setup);
+
+        if (!_isSetup) return;
+
+        // 绑定流程：密钥只存在挑战对象里，不放表单（防篡改）
+        _challenge.PendingSecret ??= TotpManager.CreateSecret();
+        _secret = _challenge.PendingSecret;
+        _qrDataUri = BuildQrDataUri(TotpManager.BuildUri(_secret));
+    }
+
+    private static string FormatSecret(string secret)
+    {
+        if (string.IsNullOrEmpty(secret)) return string.Empty;
+
+        return string.Join(" ", Enumerable.Range(0, (secret.Length + 3) / 4)
+            .Select(i => secret.Substring(i * 4, Math.Min(4, secret.Length - i * 4))));
+    }
+}
