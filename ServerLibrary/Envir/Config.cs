@@ -183,6 +183,17 @@ namespace Server.Envir
         /// </summary>
         public static bool AdminWebRequireTotp { get; set; } = false;
 
+        /// <summary>
+        /// 后台会话空闲超时（分钟）。0 = 不启用空闲超时。
+        /// 浏览器每分钟心跳一次；超过该时长无任何鼠标/键盘操作 → 自动登出并跳登录页。
+        /// </summary>
+        public static int AdminWebIdleTimeoutMinutes { get; set; } = 30;
+
+        /// <summary>
+        /// 后台单点登录：同一账号只保留最新一次登录，后登录的会把先登录的踢下线（默认关闭，避免多设备运维被误踢）。
+        /// </summary>
+        public static bool AdminWebSingleSession { get; set; } = false;
+
         public static void LoadVersion()
         {
             try

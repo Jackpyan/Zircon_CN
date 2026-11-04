@@ -1,4 +1,8 @@
 @inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject AdminSessionRegistry Sessions
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Navigation
 
 <div class="shell">
         <aside class="rail">
@@ -11,3 +15,82 @@
         </main>
     </div>
 <RadzenComponents />
+
+@code {
+    /// <summary>
+    /// 会话看门狗（服务端）：每 15 秒复检一次会话。
+    ///
+    /// 为什么光靠前端心跳不够：
+    /// 1. 心跳是 JS，浏览器太老（IE 没有 fetch）或脚本被拦就完全不跑；
+    /// 2. Blazor 电路复检靠 RevalidatingAuthenticationStateProvider，失败后要靠
+    ///    AuthorizeRouteView 重新渲染才会跳转，某些时序下页面「看着还能点」。
+    /// 这里在电路里直接判定并强制整页跳转，被顶 / 空闲一定在 15 秒内体现出来。
+    /// </summary>
+    private CancellationTokenSource? _cts;
+    private Task? _watch;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _cts = new CancellationTokenSource();
+        _watch = WatchAsync(_cts.Token);
+    }
+
+    private async Task WatchAsync(CancellationToken token)
+    {
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), token);
+
+                AuthenticationState state = await AuthState.GetAuthenticationStateAsync();
+
+                // 已变成匿名：交给 AuthorizeRouteView / RedirectToLogin 处理，这里不抢
+                if (state.User.Identity?.IsAuthenticated != true) continue;
+
+                string? sid = state.User.FindFirst("sid")?.Value;
+                SessionCheck check = Sessions.Validate(sid, state.User.Identity.Name);
+
+                if (check == SessionCheck.Ok)
+                {
+                    // 只校验、不续期：看门狗每 15 秒跑一次，若在这里 Touch
+                    // 就等于「只要标签页开着就永不过期」，空闲超时会彻底失效。
+                    continue;
+                }
+
+                // Unknown = 服务端没见过（重启过），不能踢人
+                if (check == SessionCheck.Unknown) continue;
+
+                string reason = check == SessionCheck.Superseded ? "superseded" : "idle";
+
+                await InvokeAsync(() => Navigation.NavigateTo(
+                    $"/auth/session/expire?reason={reason}", forceLoad: true));
+
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常退出
+        }
+        catch
+        {
+            // 看门狗自身绝不能影响页面
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+
+        if (_watch != null)
+        {
+            try { await _watch; }
+            catch { /* 已在上方吞掉 */ }
+        }
+
+        _cts?.Dispose();
+    }
+}

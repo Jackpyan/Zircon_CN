@@ -154,7 +154,9 @@ public static class UiText
         ["AdminWebHost"] = "Web 管理端主机", ["AdminWebPort"] = "Web 管理端端口", ["AdminUserName"] = "管理员账号",
         ["AdminAutoStartGameServer"] = "自动启动游戏服务器",
         ["WebAllowMasterLogin"] = "允许主密码登录（仅内网）",
-        ["AdminWebRequireTotp"] = "主密码登录要求 TOTP 二次验证"
+        ["AdminWebRequireTotp"] = "主密码登录要求 TOTP 二次验证",
+        ["AdminWebIdleTimeoutMinutes"] = "后台空闲超时（分钟，0=不启用）",
+        ["AdminWebSingleSession"] = "后台单点登录（后登录顶掉先登录）"
     };
 
     private static readonly IReadOnlyDictionary<string, string> EnumLabels = new Dictionary<string, string>(StringComparer.Ordinal)

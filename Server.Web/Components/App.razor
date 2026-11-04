@@ -15,5 +15,74 @@
     <Routes @rendermode="InteractiveServer" />
     <script src="@Assets["_content/Radzen.Blazor/Radzen.Blazor.js"]"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
+    @* 会话守卫：空闲超时 / 单点登录被顶（空闲超时 0 = 只关空闲判定，单点登录仍生效）
+       内联而不放 wwwroot：静态资源靠 manifest 指向源码 wwwroot，部署只换 dll 时会 404；
+       内联脚本随 Server.Web.dll 一起走，不会漏。 *@
+    <script>
+        (function () {
+            var idleMinutes = @Server.Envir.Config.AdminWebIdleTimeoutMinutes;
+
+            // 登录页 / TOTP 页不启用（否则未认证时心跳会把自己反复踢回登录页）
+            var path = window.location.pathname.toLowerCase();
+            if (path === '/login' || path.indexOf('/totp') === 0) return;
+
+            var idleMs = idleMinutes > 0 ? idleMinutes * 60 * 1000 : 0;
+            var lastActivity = Date.now();
+            var leaving = false;
+
+            function bump() { lastActivity = Date.now(); }
+
+            ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'scroll'].forEach(function (evt) {
+                window.addEventListener(evt, bump, { passive: true });
+            });
+
+            function leave(reason) {
+                if (leaving) return;
+                leaving = true;
+                window.location.href = '/auth/session/expire?reason=' + encodeURIComponent(reason);
+            }
+
+            function onFail(reason) {
+                if (reason === 'superseded') { leave('superseded'); return; }
+                if (reason === 'idle') { leave('idle'); return; }
+                // unauthenticated / unknown：Cookie 已失效（过期、被清、凭据指纹变了）
+                leave('gone');
+            }
+
+            function ping() {
+                if (leaving) return;
+
+                if (idleMs > 0 && Date.now() - lastActivity > idleMs) { leave('idle'); return; }
+
+                if (window.fetch) {
+                    fetch('/auth/ping', { credentials: 'same-origin', cache: 'no-store', redirect: 'manual' })
+                        .then(function (response) {
+                            if (response.status !== 401) return null;
+                            return response.json().then(function (data) { onFail(data && data.reason); })
+                                                  .catch(function () { onFail('gone'); });
+                        })
+                        .catch(function () { /* 网络抖动忽略，下一轮再试 */ });
+                    return;
+                }
+
+                // IE / 老浏览器没有 fetch：退回 XHR，否则守卫整个失效（被顶了也不会跳）
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', '/auth/ping?t=' + Date.now(), true);
+                    xhr.withCredentials = true;
+                    xhr.onreadystatechange = function () {
+                        if (xhr.readyState !== 4 || xhr.status !== 401) return;
+                        var reason = 'gone';
+                        try { reason = JSON.parse(xhr.responseText).reason || 'gone'; } catch (e) { }
+                        onFail(reason);
+                    };
+                    xhr.send();
+                } catch (e) { }
+            }
+
+            setInterval(ping, 20000);
+            ping();
+        })();
+    </script>
 </body>
 </html>

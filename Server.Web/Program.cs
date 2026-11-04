@@ -91,8 +91,49 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             // 必须按「登录方式」校验：主密码登录用主密码指纹，账号登录用账号指纹
             // （账号身份=管理员时角色也是 Administrator，但指纹必须走账号，否则降权不会失效）。
             if (!credentials.ValidateStamp(name, role, stamp, authMode))
+            {
                 context.RejectPrincipal();
+                return Task.CompletedTask;
+            }
 
+            // 会话策略：空闲超时 / 单点登录被顶
+            AdminSessionRegistry sessions = context.HttpContext.RequestServices.GetRequiredService<AdminSessionRegistry>();
+            string? sid = context.Principal?.FindFirst("sid")?.Value;
+
+            SessionCheck check = sessions.Validate(sid, name);
+
+            if (check is SessionCheck.Idle or SessionCheck.Superseded)
+            {
+                // 把原因留给本次请求的端点（/auth/ping 靠它回 superseded / idle）。
+                // 只 RejectPrincipal 的话端点只能看到「未登录」，前端就分不清是被顶还是没登录。
+                context.HttpContext.Items[AdminSessionRegistry.ReasonItemKey] = check;
+
+                // 不再 Remove：Superseded 的会话要稳定保持「被顶」状态，
+                // 删掉记录会让它下次变成「sid 不存在」，容易被误收编而复活。
+                context.RejectPrincipal();
+                return Task.CompletedTask;
+            }
+
+            // Unknown（进程重启后内存表丢失）时不做判定，避免把所有人踢下线；
+            // 正常情况由登录重新登记。Ok 时顺手续期。
+            if (check == SessionCheck.Ok) sessions.Touch(sid);
+
+            return Task.CompletedTask;
+        };
+
+        // 整页跳转（非 SPA 内部导航）时也带上失效原因，
+        // 否则用户只看到一张没有提示的登录页，不知道自己是「被顶」还是「超时」。
+        options.Events.OnRedirectToLogin = context =>
+        {
+            if (context.HttpContext.Items.TryGetValue(AdminSessionRegistry.ReasonItemKey, out object? raw) &&
+                raw is SessionCheck check && check is SessionCheck.Idle or SessionCheck.Superseded)
+            {
+                string reason = check == SessionCheck.Superseded ? "superseded" : "idle";
+                context.Response.Redirect($"/auth/session/expire?reason={reason}");
+                return Task.CompletedTask;
+            }
+
+            context.Response.Redirect(context.RedirectUri);
             return Task.CompletedTask;
         };
     });
@@ -148,6 +189,8 @@ builder.Services.AddSingleton<AdminCredentialService>();
 // TOTP 二次验证（主密码登录用）：开关在服务器配置页 [AdminWeb] AdminWebRequireTotp
 builder.Services.AddSingleton<TotpService>();
 builder.Services.AddSingleton<TotpChallengeStore>();
+// 会话策略：空闲超时 + 单点登录（配置页 [AdminWeb] AdminWebIdleTimeoutMinutes / AdminWebSingleSession）
+builder.Services.AddSingleton<AdminSessionRegistry>();
 builder.Services.AddSingleton<AdminAuditService>();
 builder.Services.AddSingleton<LoginThrottleService>();
 builder.Services.AddSingleton<IGameServerController, GameServerController>();
@@ -259,6 +302,83 @@ app.MapPost("/auth/logout", async (HttpContext context, IAntiforgery antiforgery
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 }).RequireAuthorization();
+
+// ===== 会话策略：心跳续期 / 空闲或顶号后跳登录页 =====
+app.MapGet("/auth/ping", (HttpContext context, AdminSessionRegistry sessions) =>
+{
+    if (context.User.Identity?.IsAuthenticated != true)
+    {
+        // OnValidatePrincipal 已把「为什么失效」放进 Items；读不到才是真的没登录。
+        string reason = context.Items.TryGetValue(AdminSessionRegistry.ReasonItemKey, out object? raw) && raw is SessionCheck
+            ? raw switch
+            {
+                SessionCheck.Superseded => "superseded",
+                SessionCheck.Idle => "idle",
+                _ => "unauthenticated"
+            }
+            : "unauthenticated";
+
+        return Results.Json(new { ok = false, reason }, statusCode: 401);
+    }
+
+    string? sid = context.User.FindFirst("sid")?.Value;
+    string? name = context.User.Identity?.Name;
+
+    SessionCheck check = sessions.Validate(sid, name);
+
+    if (check == SessionCheck.Ok)
+    {
+        sessions.Touch(sid);
+        return Results.Ok(new { ok = true, idleMinutes = Config.AdminWebIdleTimeoutMinutes });
+    }
+
+    string reason2 = check switch
+    {
+        SessionCheck.Idle => "idle",
+        SessionCheck.Superseded => "superseded",
+        _ => "unknown"
+    };
+
+    return Results.Json(new { ok = false, reason = reason2 }, statusCode: 401);
+});
+
+// 会话表诊断：单点登录 / 空闲超时排查（管理权限即可，不泄露完整 sid）
+app.MapGet("/auth/sessions", (HttpContext context, AdminSessionRegistry sessions) => Results.Json(new
+{
+    singleSession = AdminSessionRegistry.SingleSessionEnabled,
+    idleTimeoutMinutes = Config.AdminWebIdleTimeoutMinutes,
+    currentSid = sessions.GetCurrentSid(context.User.Identity?.Name) is string current && current.Length >= 8 ? current[..8] : null,
+    sessionCount = sessions.Count,
+    sessions = sessions.Snapshot()
+})).RequireAuthorization("WebManage");
+
+// 前端检测到空闲/被顶后跳这里：清 Cookie 并带原因回登录页
+app.MapGet("/auth/session/expire", async (HttpContext context, AdminSessionRegistry sessions, AdminAuditService audit) =>
+{
+    string reason = context.Request.Query["reason"].ToString();
+    string? sid = context.User.FindFirst("sid")?.Value;
+    string? name = context.User.Identity?.Name;
+
+    sessions.Remove(sid);
+
+    if (!string.IsNullOrEmpty(name))
+        audit.Record(name, "SessionExpired", reason switch
+            {
+                "superseded" => "会话被同账号新登录顶掉",
+                "idle" => "会话空闲超时",
+                _ => "登录状态失效"
+            },
+            context.Connection.RemoteIpAddress?.ToString(),
+            role: context.User.FindFirst(ClaimTypes.Role)?.Value, result: "Expired", target: "WebConsole",
+            reason: reason, userAgent: context.Request.Headers.UserAgent.ToString());
+
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
+    // 5=空闲超时 6=被顶 7=登录状态失效（Cookie 丢失 / 凭据指纹已变）
+    string code = reason switch { "superseded" => "6", "idle" => "5", _ => "7" };
+
+    return Results.Redirect($"/login?error={code}");
+});
 
 // ===== TOTP 二次验证（主密码登录）=====
 app.MapPost("/auth/totp/verify", async (HttpContext context, IAntiforgery antiforgery, AdminCredentialService credentials,
@@ -387,10 +507,18 @@ app.MapGet("/audit/export", (AdminAuditService audit) =>
     return Results.File(content, "text/csv; charset=utf-8", $"admin-audit-{DateTime.Now:yyyyMMdd}.csv");
 }).RequireAuthorization("Administrator");
 
-app.MapGet("/auth/whoami", (HttpContext context) => Results.Json(new
+app.MapGet("/auth/whoami", (HttpContext context, AdminSessionRegistry sessions) => Results.Json(new
 {
     authenticated = context.User.Identity?.IsAuthenticated == true,
     name = context.User.Identity?.Name,
+    // 会话诊断：单点登录/空闲超时排查用
+    sid = context.User.FindFirst("sid")?.Value?[..8],
+    sessionCheck = sessions.Validate(context.User.FindFirst("sid")?.Value, context.User.Identity?.Name).ToString(),
+    // 该账号当前被认定的会话（前 8 位）；与上面的 sid 不同 = 本会话已被顶
+    currentSid = sessions.GetCurrentSid(context.User.Identity?.Name) is string current && current.Length >= 8 ? current[..8] : null,
+    singleSession = AdminSessionRegistry.SingleSessionEnabled,
+    idleTimeoutMinutes = Config.AdminWebIdleTimeoutMinutes,
+    sessionCount = sessions.Count,
     role = context.User.FindFirst(ClaimTypes.Role)?.Value,
     identity = AdminPermissions.GetIdentity(context.User).ToString(),
     authMode = context.User.FindFirst(AdminPermissions.ClaimAuthMode)?.Value,
@@ -506,10 +634,17 @@ app.Lifetime.ApplicationStopped.Register(() => ShutdownLog("ApplicationStopped�
 static async Task SignInAdminAsync(HttpContext context, AdminLoginResult result, AdminCredentialService credentials,
     string? address, string? userAgent, AdminAuditService audit)
 {
+    AdminSessionRegistry sessions = context.RequestServices.GetRequiredService<AdminSessionRegistry>();
+
+    // 登记会话：单点登录开启时会把同账号的旧会话顶掉
+    string sid = sessions.Register(result.UserName);
+
     Claim[] claims =
     [
         new(ClaimTypes.Name, result.UserName),
         new(ClaimTypes.Role, result.Role),
+        // 会话 ID：空闲超时与单点登录都靠它
+        new("sid", sid),
         new("admin_stamp", credentials.GetStamp(result.UserName, result.Role, result.Reason)),
         // 登录方式：MasterPassword / WebAdmin（决定用哪套指纹复检）
         new("auth_mode", result.Reason),

@@ -23,9 +23,21 @@
                 请用主密码登录后台，在「服务器总览」点「启动服务器」，或让管理员启动服务进程后再登录。
             </div>
         }
+        else if (IsIdleExpired)
+        {
+            <div class="alert danger">长时间未操作，已自动退出。请重新登录。</div>
+        }
+        else if (IsSuperseded)
+        {
+            <div class="alert danger">该账号已在其他位置登录，当前会话已失效。</div>
+        }
         else if (IsTotpExpired)
         {
             <div class="alert danger">二次验证已过期或已使用，请重新登录。</div>
+        }
+        else if (Error == "7")
+        {
+            <div class="alert danger">登录状态已失效，请重新登录。</div>
         }
         else if (HasError)
         {
@@ -62,6 +74,12 @@
 
     /// <summary>error=4：TOTP 验证会话过期/已使用，或 TOTP 开关已关闭。</summary>
     private bool IsTotpExpired => Error == "4";
+
+    /// <summary>error=5：空闲超时自动退出。</summary>
+    private bool IsIdleExpired => Error == "5";
+
+    /// <summary>error=6：同账号在其他位置登录（单点登录）。</summary>
+    private bool IsSuperseded => Error == "6";
 
     protected override async Task OnInitializedAsync()
     {
