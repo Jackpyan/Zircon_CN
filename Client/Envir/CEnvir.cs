@@ -1016,17 +1016,21 @@ namespace Client.Envir
         {
             try
             {
-                if (++ErrorCount > 20 || String.Compare(ex, LastError, StringComparison.OrdinalIgnoreCase) == 0) return;
+                // 同一异常只记一次；总数上限放到 200（原来 20 条太容易把真正的崩溃前兆挤掉）
+                if (++ErrorCount > 200 || String.Compare(ex, LastError, StringComparison.OrdinalIgnoreCase) == 0) return;
 
-                const string LogPath = @".\Errors\";
+                // 必须用程序目录的绝对路径：相对路径取决于启动时的 CWD，
+                // 用快捷方式/其他目录启动时会写到别处，看起来就像「没有错误日志」。
+                string logPath = Path.Combine(AppContext.BaseDirectory, "Errors");
 
                 LastError = ex;
                 string state = $"状态 = {Target?.DisplayRectangle}";
 
-                if (!Directory.Exists(LogPath))
-                    Directory.CreateDirectory(LogPath);
+                if (!Directory.Exists(logPath))
+                    Directory.CreateDirectory(logPath);
 
-                File.AppendAllText($"{LogPath}{Now.Year}-{Now.Month}-{Now.Day}.txt", LastError + Environment.NewLine + state + Environment.NewLine);
+                File.AppendAllText(Path.Combine(logPath, $"{DateTime.Now:yyyy-M-d}.txt"),
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}{Environment.NewLine}{state}{Environment.NewLine}{Environment.NewLine}");
             }
             catch
             { }

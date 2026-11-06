@@ -1228,8 +1228,14 @@ namespace Client.Controls
         {
             ProcessAction?.Invoke();
 
-            foreach (DXControl control in Controls)
+            // 子控件可能在自己的 Process 里 Dispose（弹窗超时自动关闭就是这种），
+            // Dispose 会把它从 Controls 移除 → 用 foreach 枚举会抛
+            // "Collection was modified"，UI 线程未处理异常直接终止进程。
+            // 用索引循环 + 实时 Count：移除后本帧可能少处理一个兄弟控件，下一帧补上。
+            for (int i = 0; i < Controls.Count; i++)
             {
+                DXControl control = Controls[i];
+
                 if (!control.IsVisible) continue;
 
                 control.Process();
@@ -1944,8 +1950,11 @@ BorderInformation = new[]
 
         protected void DrawChildControlsUncached()
         {
-            foreach (DXControl control in Controls)
+            // 同 Process：绘制期间子控件可能被移除，foreach 会抛 Collection was modified
+            for (int i = 0; i < Controls.Count; i++)
             {
+                DXControl control = Controls[i];
+
                 if (!control.IsVisible || control.DisplayArea.Width <= 0 || control.DisplayArea.Height <= 0)
                     continue;
 

@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace Client
@@ -21,6 +22,8 @@ namespace Client
         [STAThread]
         static void Main(string[] args)
         {
+            InstallCrashHandlers();
+
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             ConfigReader.Load(Assembly.GetAssembly(typeof(Config)));
 
@@ -38,6 +41,32 @@ namespace Client
 
             // 按角色的辅助功能配置（[CharacterScoped] 的字段不进 Zircon.ini，单独落盘）
             Client.Envir.CharacterConfigStore.Save();
+        }
+
+        /// <summary>
+        /// 全局兜底：之前客户端没有任何未处理异常钩子，网络/渲染线程一抛异常就是
+        /// 「进程直接消失、不留日志、不弹框」。这里把三条通道都挂上，统一写 Errors\。
+        /// UI 线程异常只记录不退出（默认行为是弹 ThreadExceptionDialog 或直接终止）。
+        /// </summary>
+        static void InstallCrashHandlers()
+        {
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+
+            Application.ThreadException += (o, e) =>
+            {
+                CEnvir.SaveError("[UI线程]\r\n" + e.Exception);
+            };
+
+            AppDomain.CurrentDomain.UnhandledException += (o, e) =>
+            {
+                CEnvir.SaveError("[非UI线程]\r\n" + (e.ExceptionObject as Exception)?.ToString() ?? e.ExceptionObject?.ToString());
+            };
+
+            TaskScheduler.UnobservedTaskException += (o, e) =>
+            {
+                CEnvir.SaveError("[任务]\r\n" + e.Exception);
+                e.SetObserved();
+            };
         }
 
         static void Init(string[] args)
