@@ -446,6 +446,12 @@ namespace Library.Network.ClientPackets
         public Library.GroupLootVote Vote { get; set; }
     }
 
+    /// <summary>参与队伍战利品摇点。只表示「我要摇」，点数由服务端生成。</summary>
+    public sealed class GroupLootRoll : Packet
+    {
+        public int ItemIndex { get; set; }
+    }
+
     public sealed class Inspect : Packet
     {
         public int Index { get; set; }

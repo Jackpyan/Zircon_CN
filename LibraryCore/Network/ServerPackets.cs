@@ -779,12 +779,39 @@ namespace Library.Network.ServerPackets
         public bool CanNeed { get; set; }
     }
 
+    /// <summary>摇点阶段开始：只发给候选者（投票投「放弃」的人不收）。</summary>
+    public sealed class GroupLootRollPrompt : Packet
+    {
+        public int ItemIndex { get; set; }
+        public string ItemName { get; set; }
+        public TimeSpan Duration { get; set; }
+        /// <summary>已摇人数（重摇轮次时非 0）。</summary>
+        public int Rolled { get; set; }
+        /// <summary>候选总人数。</summary>
+        public int Total { get; set; }
+    }
+
+    /// <summary>某人摇出的点数，全队广播。</summary>
+    public sealed class GroupLootRollResult : Packet
+    {
+        public int ItemIndex { get; set; }
+        public uint ObjectID { get; set; }
+        public string Name { get; set; }
+        public int Roll { get; set; }
+    }
+
     public sealed class GroupLootResult : Packet
     {
         public int ItemIndex { get; set; }
         public string ItemName { get; set; }
         public string Winner { get; set; }
         public GroupLootVote Vote { get; set; }
+
+        /// <summary>掷骰点数（参与者名 → 点数）。空 = 本次不是掷骰分配。</summary>
+        public Dictionary<string, int> Rolls { get; set; }
+
+        /// <summary>重掷轮数（1 = 一轮定胜负）。</summary>
+        public int Rounds { get; set; }
     }
 
     public sealed class BuffAdd : Packet

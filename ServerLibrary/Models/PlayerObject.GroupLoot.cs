@@ -33,6 +33,16 @@ namespace Server.Models
         public int Position;
         public DateTime VoteExpiry;
         public UserItem CurrentItem => Position < Items.Count ? Items[Position] : null;
+
+        /// <summary>是否处于「摇点」阶段（投票已结束、候选者手动摇点中）。</summary>
+        public bool RollPhase;
+        /// <summary>本轮已摇出的点数（ObjectID → 点数）。</summary>
+        public readonly Dictionary<uint, int> Rolls = new();
+        /// <summary>本轮参与摇点的候选者。</summary>
+        public readonly List<uint> RollCandidates = new();
+        public DateTime RollExpiry;
+        /// <summary>已经重摇了多少轮（0 = 第一轮）。</summary>
+        public int Rounds;
     }
 
     public partial class PlayerObject
@@ -457,6 +467,16 @@ namespace Server.Models
         public void ProcessGroupLoot()
         {
             if (GroupMembers == null || GroupMembers[0] != this || GroupLoot?.Share == null || GroupLoot.Mode != GroupLootMode.NeedGreed) return;
+
+            // 摇点阶段：等候选者手动摇，超时结算（未摇 = 放弃）
+            if (GroupLoot.Share.RollPhase)
+            {
+                if (SEnvir.Now >= GroupLoot.Share.RollExpiry)
+                    ResolveGroupLootRoll();
+
+                return;
+            }
+
             if (SEnvir.Now >= GroupLoot.Share.VoteExpiry)
                 ResolveGroupLootVote();
         }
@@ -476,9 +496,7 @@ namespace Server.Models
                 winningVote = GroupLootVote.Greed;
             }
 
-            if (candidates.Count > 0)
-                AwardGroupLoot(item, candidates[SEnvir.Random.Next(candidates.Count)], winningVote);
-            else
+            if (candidates.Count == 0)
             {
                 int itemIndex = item.Index;
                 string itemName = item.Info.ItemName;
@@ -487,13 +505,156 @@ namespace Server.Models
                     ReturnInstantGroupLoot(item);
 
                 BroadcastGroupLootResult(itemIndex, itemName, null, GroupLootVote.Pass);
+
+                AdvanceGroupLoot();
+                return;
             }
 
+            if (candidates.Count == 1)
+            {
+                // 只有一个候选者，不必摇点
+                AwardGroupLoot(item, candidates[0], winningVote);
+                AdvanceGroupLoot();
+                return;
+            }
+
+            // 两人及以上：进入摇点阶段，由玩家手动摇
+            BeginGroupLootRoll(candidates);
+        }
+
+        /// <summary>推进到下一件物品，并重置本轮摇点状态。</summary>
+        private void AdvanceGroupLoot()
+        {
+            if (GroupLoot?.Share == null) return;
+
             GroupLoot.Share.Position++;
+            GroupLoot.Share.RollPhase = false;
+            GroupLoot.Share.Rolls.Clear();
+            GroupLoot.Share.RollCandidates.Clear();
+            GroupLoot.Share.Rounds = 0;
+
             BeginGroupLootVote();
         }
 
-        private void AwardGroupLoot(UserItem item, PlayerObject winner, GroupLootVote vote)
+        /// <summary>摇点阶段：只给候选者弹骰子窗，30 秒内不摇视为放弃。</summary>
+        private void BeginGroupLootRoll(List<PlayerObject> candidates)
+        {
+            UserItem item = GroupLoot?.Share?.CurrentItem;
+
+            if (item == null) return;
+
+            GroupLoot.Share.RollPhase = true;
+            GroupLoot.Share.Rolls.Clear();
+            GroupLoot.Share.RollCandidates.Clear();
+            GroupLoot.Share.RollCandidates.AddRange(candidates.Select(x => x.ObjectID));
+            GroupLoot.Share.RollExpiry = SEnvir.Now.AddSeconds(30);
+
+            foreach (PlayerObject member in candidates)
+                member.Enqueue(new S.GroupLootRollPrompt
+                {
+                    ItemIndex = item.Index,
+                    ItemName = item.Info.ItemName,
+                    Duration = TimeSpan.FromSeconds(30),
+                    Rolled = 0,
+                    Total = candidates.Count,
+                });
+        }
+
+        /// <summary>玩家点击「摇骰子」：点数由服务端生成，客户端只发「我要摇」。</summary>
+        public void SubmitGroupLootRoll(int itemIndex)
+        {
+            if (!Config.EnableGroupLoot || GroupMembers == null || GroupLoot?.Share == null) return;
+            if (!GroupLoot.Share.RollPhase || GroupLoot.Share.CurrentItem?.Index != itemIndex) return;
+            if (!GroupLoot.Share.RollCandidates.Contains(ObjectID) || GroupLoot.Share.Rolls.ContainsKey(ObjectID)) return;
+
+            int roll = SEnvir.Random.Next(1, 7);
+
+            GroupLoot.Share.Rolls[ObjectID] = roll;
+
+            foreach (PlayerObject member in GroupMembers)
+                member.Enqueue(new S.GroupLootRollResult
+                {
+                    ItemIndex = itemIndex,
+                    ObjectID = ObjectID,
+                    Name = Name,
+                    Roll = roll,
+                });
+
+            // 全员摇完立即结算；否则等超时
+            if (GroupLoot.Share.RollCandidates.All(x => GroupLoot.Share.Rolls.ContainsKey(x)))
+                GroupMembers[0].ResolveGroupLootRoll();
+        }
+
+        /// <summary>摇点结算：最高点得；并列者再摇一轮；无人摇按无人获得处理。</summary>
+        private void ResolveGroupLootRoll()
+        {
+            UserItem item = GroupLoot?.Share?.CurrentItem;
+
+            if (item == null) return;
+
+            if (GroupLoot.Share.Rolls.Count == 0)
+            {
+                int itemIndex = item.Index;
+                string itemName = item.Info.ItemName;
+
+                if (GroupLoot.Share.Instant)
+                    ReturnInstantGroupLoot(item);
+
+                BroadcastGroupLootResult(itemIndex, itemName, null, GroupLootVote.Pass);
+
+                AdvanceGroupLoot();
+                return;
+            }
+
+            int best = GroupLoot.Share.Rolls.Values.Max();
+            List<uint> leaders = GroupLoot.Share.Rolls.Where(x => x.Value == best).Select(x => x.Key).ToList();
+            List<PlayerObject> members = GetShareMembers();
+
+            if (leaders.Count > 1)
+            {
+                List<PlayerObject> tied = members.Where(x => leaders.Contains(x.ObjectID)).ToList();
+
+                if (tied.Count > 1)
+                {
+                    GroupLoot.Share.Rounds++;
+                    BeginGroupLootRoll(tied);
+                    return;
+                }
+
+                // 并列者中途退队/掉线 → tied 可能为空，此时直接跳过，避免越界
+                if (tied.Count == 0)
+                {
+                    AdvanceGroupLoot();
+                    return;
+                }
+
+                leaders = new List<uint> { tied[0].ObjectID };
+            }
+
+            PlayerObject winner = members.FirstOrDefault(x => x.ObjectID == leaders[0]);
+
+            if (winner == null)
+            {
+                AdvanceGroupLoot();
+                return;
+            }
+
+            GroupLootVote vote = GroupLoot.Share.Votes.TryGetValue(winner.ObjectID, out GroupLootVote value) ? value : GroupLootVote.Need;
+
+            Dictionary<string, int> rolls = new Dictionary<string, int>();
+            foreach (PlayerObject member in members)
+            {
+                if (GroupLoot.Share.Rolls.TryGetValue(member.ObjectID, out int roll))
+                    rolls[member.Name] = roll;
+            }
+
+            AwardGroupLoot(item, winner, vote, rolls, GroupLoot.Share.Rounds + 1);
+
+            AdvanceGroupLoot();
+        }
+
+        private void AwardGroupLoot(UserItem item, PlayerObject winner, GroupLootVote vote,
+            Dictionary<string, int> rolls = null, int rounds = 0)
         {
             if (!GroupLoot.Share.Instant && !GroupLoot.Items.Remove(item)) return;
 
@@ -502,13 +663,22 @@ namespace Server.Models
             string winnerName = winner.Name;
             GroupLoot.Share.AwardedWeight[winner.ObjectID] += item.Weight;
             winner.GainItem(item);
-            BroadcastGroupLootResult(itemIndex, itemName, winnerName, vote);
+            BroadcastGroupLootResult(itemIndex, itemName, winnerName, vote, rolls, rounds);
         }
 
-        private void BroadcastGroupLootResult(int itemIndex, string itemName, string winnerName, GroupLootVote vote)
+        private void BroadcastGroupLootResult(int itemIndex, string itemName, string winnerName, GroupLootVote vote,
+            Dictionary<string, int> rolls = null, int rounds = 0)
         {
             foreach (PlayerObject member in GroupMembers)
-                member.Enqueue(new S.GroupLootResult { ItemIndex = itemIndex, ItemName = itemName, Winner = winnerName, Vote = vote });
+                member.Enqueue(new S.GroupLootResult
+                {
+                    ItemIndex = itemIndex,
+                    ItemName = itemName,
+                    Winner = winnerName,
+                    Vote = vote,
+                    Rolls = rolls ?? new Dictionary<string, int>(),
+                    Rounds = rounds,
+                });
 
             BroadcastGroupLootUpdate();
         }

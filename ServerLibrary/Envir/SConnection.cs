@@ -832,6 +832,13 @@ namespace Server.Envir
             Player.SubmitGroupLootVote(p.ItemIndex, p.Vote);
         }
 
+        public void Process(C.GroupLootRoll p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.SubmitGroupLootRoll(p.ItemIndex);
+        }
+
         public void Process(C.Inspect p)
         {
             if (Stage == GameStage.Game)

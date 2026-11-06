@@ -574,6 +574,13 @@ namespace Client.Envir.Translations
         public override string GroupLootVoteTime { get; set; } = "Choose for {0} ({1}s)";
         public override string GroupLootWon { get; set; } = "{0} received {1}.";
         public override string GroupLootNoWinner { get; set; } = "No one received {0}.";
+        public override string GroupLootWonWithRolls { get; set; } = "Roll: {0}{1} -> {2} wins {3}.";
+        public override string GroupLootReroll { get; set; } = " (rerolled {0}x)";
+        public override string GroupLootRollTitle { get; set; } = "Group Loot";
+        public override string GroupLootRollButton { get; set; } = "Roll";
+        public override string GroupLootRollTime { get; set; } = "{0}s left";
+        public override string GroupLootRollProgress { get; set; } = "Rolled {0} / {1}";
+        public override string GroupLootRolled { get; set; } = "{0} rolled {1}";
         public override string GroupLootModeFreeForAll { get; set; } = "Free For All";
         public override string GroupLootModeRandom { get; set; } = "Random";
         public override string GroupLootModeNeedGreed { get; set; } = "Need / Greed";

@@ -3528,26 +3528,90 @@ namespace Client.Envir
                 GameScene.Game.GroupLootVoteBox.CancelWithoutVote();
                 GameScene.Game.GroupLootVoteBox = null;
             }
+
+            if (!p.Loot.Sharing && GameScene.Game.GroupLootRollBox != null)
+            {
+                GameScene.Game.GroupLootRollBox.CancelWithoutRoll();
+                GameScene.Game.GroupLootRollBox = null;
+            }
         }
 
         public void Process(S.GroupLootVotePrompt p)
         {
+            if (GameScene.Game == null) return;
+
+            // 新一件物品进入投票 = 上一件的摇点已经结束。摇点窗必须立刻关掉，
+            // 否则会残留一个「摇骰子按钮已灰、倒计时还在走」的旧窗口，
+            // 看起来就像「投了放弃的人还在弹摇骰子窗」。
+            if (GameScene.Game.GroupLootRollBox != null && !GameScene.Game.GroupLootRollBox.IsDisposed)
+            {
+                GameScene.Game.GroupLootRollBox.CancelWithoutRoll();
+                GameScene.Game.GroupLootRollBox = null;
+            }
+
             if (GameScene.Game.GroupLootVoteBox != null)
                 GameScene.Game.GroupLootVoteBox.CancelWithoutVote();
 
             GameScene.Game.GroupLootVoteBox = new GroupLootVoteDialog(p.Item, p.Duration, p.CanNeed);
         }
 
+        public void Process(S.GroupLootRollPrompt p)
+        {
+            if (GameScene.Game == null) return;
+
+            if (GameScene.Game.GroupLootRollBox != null && !GameScene.Game.GroupLootRollBox.IsDisposed)
+                GameScene.Game.GroupLootRollBox.CancelWithoutRoll();
+
+            GameScene.Game.GroupLootRollBox = new GroupLootRollDialog(p.ItemIndex, p.ItemName, p.Duration, p.Rolled, p.Total);
+        }
+
+        public void Process(S.GroupLootRollResult p)
+        {
+            if (GameScene.Game == null) return;
+
+            GroupLootRollDialog box = GameScene.Game.GroupLootRollBox;
+
+            if (box != null && !box.IsDisposed && box.ItemIndex == p.ItemIndex)
+                box.OnRollResult(p.ObjectID, p.Roll);
+
+            GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GroupLootRolled, p.Name, p.Roll), MessageType.Group);
+        }
+
         public void Process(S.GroupLootResult p)
         {
+            if (GameScene.Game == null) return;
+
             string itemName = p.ItemName;
             if (string.IsNullOrEmpty(itemName))
-                itemName = GameScene.Game.GroupBagBox.Info.Items.FirstOrDefault(x => x.Index == p.ItemIndex)?.Info?.ItemName ?? p.ItemIndex.ToString();
+                itemName = GameScene.Game.GroupBagBox?.Info?.Items?.FirstOrDefault(x => x.Index == p.ItemIndex)?.Info?.ItemName ?? p.ItemIndex.ToString();
 
-            string message = string.IsNullOrEmpty(p.Winner)
-                ? string.Format(CEnvir.Language.GroupLootNoWinner, itemName)
-                : string.Format(CEnvir.Language.GroupLootWon, p.Winner, itemName);
+            string message;
+
+            if (p.Rolls != null && p.Rolls.Count > 0 && !string.IsNullOrEmpty(p.Winner))
+            {
+                // 需求/贪婪已改为掷骰比点数：把每个人的点数一并播报，避免「暗箱」争议
+                string detail = string.Join(" / ", p.Rolls.Select(x => $"{x.Key} {x.Value}"));
+                string reroll = p.Rounds > 1 ? string.Format(CEnvir.Language.GroupLootReroll, p.Rounds) : string.Empty;
+
+                message = string.Format(CEnvir.Language.GroupLootWonWithRolls, detail, reroll, p.Winner, itemName);
+            }
+            else
+            {
+                message = string.IsNullOrEmpty(p.Winner)
+                    ? string.Format(CEnvir.Language.GroupLootNoWinner, itemName)
+                    : string.Format(CEnvir.Language.GroupLootWon, p.Winner, itemName);
+            }
+
             GameScene.Game.ReceiveChat(message, MessageType.Group);
+
+            // 归属已定 → 本件的摇点窗立刻关闭（不能等它自己 30 秒超时，
+            // 否则会和下一件的投票窗重叠，看起来像「投了放弃还在弹摇骰子」）
+            if (GameScene.Game.GroupLootRollBox != null && !GameScene.Game.GroupLootRollBox.IsDisposed &&
+                GameScene.Game.GroupLootRollBox.ItemIndex == p.ItemIndex)
+            {
+                GameScene.Game.GroupLootRollBox.CancelWithoutRoll();
+                GameScene.Game.GroupLootRollBox = null;
+            }
 
             if (GameScene.Game.GroupLootVoteBox?.ItemArray?[0]?.Index == p.ItemIndex)
             {

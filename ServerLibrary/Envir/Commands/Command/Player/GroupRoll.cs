@@ -6,7 +6,9 @@ namespace Server.Envir.Commands.Command.Player
     class GroupRoll : AbstractCommand<IPlayerCommand>
     {
         public override string VALUE => "ROLL";
-        public override string ALIAS => "掷骰";
+        public override string ALIAS => "摇骰子";
+        // 兼容旧名
+        public override string[] ALIASES => new[] { "掷骰" };
 
         public override void Action(PlayerObject player)
         {

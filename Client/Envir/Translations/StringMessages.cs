@@ -573,6 +573,13 @@ namespace Client.Envir.Translations
         public abstract string GroupLootVoteTime { get; set; }
         public abstract string GroupLootWon { get; set; }
         public abstract string GroupLootNoWinner { get; set; }
+        public abstract string GroupLootWonWithRolls { get; set; }
+        public abstract string GroupLootReroll { get; set; }
+        public abstract string GroupLootRollTitle { get; set; }
+        public abstract string GroupLootRollButton { get; set; }
+        public abstract string GroupLootRollTime { get; set; }
+        public abstract string GroupLootRollProgress { get; set; }
+        public abstract string GroupLootRolled { get; set; }
         public abstract string GroupLootModeFreeForAll { get; set; }
         public abstract string GroupLootModeRandom { get; set; }
         public abstract string GroupLootModeNeedGreed { get; set; }

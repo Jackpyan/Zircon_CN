@@ -573,6 +573,13 @@ namespace Client.Envir.Translations
         public override string GroupLootVoteTime { get; set; } = "选择 {0}（{1}秒）";
         public override string GroupLootWon { get; set; } = "{0}获得了{1}。";
         public override string GroupLootNoWinner { get; set; } = "无人获得{0}。";
+        public override string GroupLootWonWithRolls { get; set; } = "掷骰：{0}{1} → {2} 获得 {3}。";
+        public override string GroupLootReroll { get; set; } = "（重掷 {0} 轮）";
+        public override string GroupLootRollTitle { get; set; } = "队伍战利品";
+        public override string GroupLootRollButton { get; set; } = "摇骰子";
+        public override string GroupLootRollTime { get; set; } = "剩余 {0} 秒";
+        public override string GroupLootRollProgress { get; set; } = "已摇 {0} / {1}";
+        public override string GroupLootRolled { get; set; } = "{0} 摇出 {1} 点";
         public override string GroupLootModeFreeForAll { get; set; } = "自由拾取";
         public override string GroupLootModeRandom { get; set; } = "随机分配";
         public override string GroupLootModeNeedGreed { get; set; } = "需求 / 贪婪";

@@ -277,6 +277,7 @@ namespace Client.Scenes
         public GroupDialog GroupBox;
         public GroupBagDialog GroupBagBox;
         public GroupLootVoteDialog GroupLootVoteBox;
+        public GroupLootRollDialog GroupLootRollBox;
         public GroupHealthDialog GroupHealthBox;
         public BuffDialog BuffBox;
         public StorageDialog StorageBox;
@@ -5423,6 +5424,14 @@ namespace Client.Scenes
                         GroupLootVoteBox.CancelWithoutVote();
 
                     GroupLootVoteBox = null;
+                }
+
+                if (GroupLootRollBox != null)
+                {
+                    if (!GroupLootRollBox.IsDisposed)
+                        GroupLootRollBox.CancelWithoutRoll();
+
+                    GroupLootRollBox = null;
                 }
 
                 if (GroupHealthBox != null)

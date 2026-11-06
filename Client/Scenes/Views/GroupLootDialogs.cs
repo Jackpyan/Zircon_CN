@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.UserModels;
 using Library;
@@ -819,4 +819,225 @@ namespace Client.Scenes.Views
             }
         }
     }
+
+    /// <summary>
+    /// 队伍战利品摇点窗：中央骰子 + 「摇骰子」按钮 + 倒计时。
+    /// 点击后按钮置灰、骰子滚动 1 秒；收到服务端点数后停在对应骰面。
+    /// 点数由服务端生成，客户端只负责表现。
+    /// </summary>
+    public sealed class GroupLootRollDialog : DXWindow
+    {
+        public DXImageControl DiceImage;
+        public DXAnimatedControl DiceAnimation;
+        public DXButton RollButton;
+        public DXLabel TimeLabel, ProgressLabel;
+
+        public DateTime Expiry;
+        public int ItemIndex;
+        public int Rolled, Total;
+
+        private bool _submitted;
+        private bool _rolling;
+        private DateTime _rollStopAt;
+        private int _pendingRoll;
+
+        public override WindowType Type => WindowType.None;
+        public override bool CustomSize => false;
+        public override bool AutomaticVisibility => false;
+
+        public GroupLootRollDialog(int itemIndex, string itemName, TimeSpan duration, int rolled, int total)
+        {
+            Modal = false;
+            HasFooter = false;
+            Parent = ActiveScene;
+            DropShadow = true;
+            MessageBoxList.Add(this);
+            TitleLabel.Text = CEnvir.Language.GroupLootRollTitle;
+            SetClientSize(new Size(300, 152));
+
+            ItemIndex = itemIndex;
+            Expiry = CEnvir.Now + duration;
+            Rolled = rolled;
+            Total = total;
+
+            int diceX = (ClientArea.Width - 64) / 2;
+            int diceY = ClientArea.Y + 6;
+
+            DiceImage = new DXImageControl
+            {
+                Parent = this,
+                LibraryFile = LibraryFile.MiniGames,
+                Index = 12,
+                Location = new Point(diceX, diceY),
+                IsControl = false,
+            };
+
+            DiceAnimation = new DXAnimatedControl
+            {
+                Parent = this,
+                LibraryFile = LibraryFile.MiniGames,
+                BaseIndex = 20,
+                FrameCount = 4,
+                AnimationDelay = TimeSpan.FromMilliseconds(400),
+                Loop = true,
+                Location = new Point(diceX, diceY),
+                Visible = false,
+                IsControl = false,
+            };
+
+            RollButton = new DXButton
+            {
+                Parent = this,
+                Size = new Size(110, DefaultHeight),
+                Location = new Point((ClientArea.Width - 110) / 2, ClientArea.Y + 80),
+                LabelStyle = ButtonLabelStyle.Gold,
+                Label = { Text = CEnvir.Language.GroupLootRollButton },
+            };
+            RollButton.MouseClick += (o, e) => Roll();
+
+            TimeLabel = new DXLabel
+            {
+                Parent = this,
+                AutoSize = false,
+                Size = new Size(ClientArea.Width, 18),
+                Location = new Point(0, ClientArea.Y + 108),
+                DrawFormat = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
+                ForeColour = Color.White,
+            };
+
+            ProgressLabel = new DXLabel
+            {
+                Parent = this,
+                AutoSize = false,
+                Size = new Size(ClientArea.Width, 18),
+                Location = new Point(0, ClientArea.Y + 126),
+                DrawFormat = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
+                ForeColour = Color.Gold,
+            };
+
+            Location = new Point((SceneLayoutSize.Width - Size.Width) / 2, (SceneLayoutSize.Height - Size.Height) / 2);
+        }
+
+        private void Roll()
+        {
+            if (_submitted) return;
+
+            _submitted = true;
+            RollButton.Enabled = false;
+
+            _rolling = true;
+            _rollStopAt = CEnvir.Now.AddSeconds(1);
+
+            DiceImage.Visible = false;
+            DiceAnimation.Visible = true;
+            DiceAnimation.Animated = true;
+            DiceAnimation.AnimationStart = DateTime.MinValue;
+
+            DXSoundManager.Play(SoundIndex.RollDice);
+
+            CEnvir.Enqueue(new C.GroupLootRoll { ItemIndex = ItemIndex });
+        }
+
+        /// <summary>收到某人点数：自己的点数用来停动画，所有人的点数都推进「已摇」计数。</summary>
+        public void OnRollResult(uint objectID, int roll)
+        {
+            Rolled = Math.Min(Total, Rolled + 1);
+
+            if (objectID != GameScene.Game.User?.ObjectID) return;
+
+            _pendingRoll = roll;
+
+            if (!_rolling)
+                ShowFace(roll);
+        }
+
+        private void ShowFace(int roll)
+        {
+            _rolling = false;
+
+            if (DiceAnimation != null && !DiceAnimation.IsDisposed)
+            {
+                DiceAnimation.Animated = false;
+                DiceAnimation.Visible = false;
+            }
+
+            if (DiceImage != null && !DiceImage.IsDisposed)
+            {
+                DiceImage.Index = 11 + Math.Clamp(roll, 1, 6);
+                DiceImage.Visible = true;
+            }
+        }
+
+        public override void Process()
+        {
+            base.Process();
+
+            // 已经 Dispose 的窗（或子控件被提前释放）不能再碰，否则 UI 线程 NRE 会直接结束进程
+            if (IsDisposed || TimeLabel == null || ProgressLabel == null) return;
+
+            int seconds = Math.Max(0, (int)Math.Ceiling((Expiry - CEnvir.Now).TotalSeconds));
+
+            TimeLabel.Text = string.Format(CEnvir.Language.GroupLootRollTime, seconds);
+            ProgressLabel.Text = string.Format(CEnvir.Language.GroupLootRollProgress, Rolled, Total);
+
+            if (_rolling)
+            {
+                if (_pendingRoll > 0 && CEnvir.Now >= _rollStopAt)
+                    ShowFace(_pendingRoll);
+                else if (CEnvir.Now >= _rollStopAt.AddSeconds(3))
+                    ShowFace(_pendingRoll > 0 ? _pendingRoll : 1); // 网络异常兜底，最多滚 4 秒
+            }
+
+            if (seconds == 0 && !_rolling)
+                Dispose();
+        }
+
+        public void CancelWithoutRoll()
+        {
+            _submitted = true;
+            Dispose();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (!disposing) return;
+
+            MessageBoxList.Remove(this);
+
+            if (GameScene.Game?.GroupLootRollBox == this)
+                GameScene.Game.GroupLootRollBox = null;
+
+            if (DiceImage != null)
+            {
+                if (!DiceImage.IsDisposed) DiceImage.Dispose();
+                DiceImage = null;
+            }
+
+            if (DiceAnimation != null)
+            {
+                if (!DiceAnimation.IsDisposed) DiceAnimation.Dispose();
+                DiceAnimation = null;
+            }
+
+            if (RollButton != null)
+            {
+                if (!RollButton.IsDisposed) RollButton.Dispose();
+                RollButton = null;
+            }
+
+            if (TimeLabel != null)
+            {
+                if (!TimeLabel.IsDisposed) TimeLabel.Dispose();
+                TimeLabel = null;
+            }
+
+            if (ProgressLabel != null)
+            {
+                if (!ProgressLabel.IsDisposed) ProgressLabel.Dispose();
+                ProgressLabel = null;
+            }
+        }
+    }
+
 }
