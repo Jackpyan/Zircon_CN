@@ -1480,6 +1480,12 @@ namespace Library.Network.ServerPackets
         public List<MirClass> FilterClass { get; set; }
         public List<Rarity> FilterRarity { get; set; }
         public List<ItemType> FilterItemType { get; set; }
+
+        /// <summary>宠物拾取白名单（物品 Index）。<c>null</c> = 本次未提供。</summary>
+        public List<int> PickupItems { get; set; }
+
+        /// <summary>宠物拾取是否放行非白色物品。</summary>
+        public bool PickupNonWhite { get; set; }
     }
 
     public sealed class FriendUpdate : Packet

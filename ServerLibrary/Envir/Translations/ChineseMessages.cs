@@ -128,7 +128,7 @@ namespace Server.Envir.Translations
         public override string CompanionAppearanceLocked { get; set; } = "新宠物{0}目前尚未解锁，你无法购买";
         public override string CompanionNeedCurrency { get; set; } = "当前金币不足无法购买宠物";
         public override string CompanionBadName { get; set; } = "该名称不符合宠物命名的规则";
-        public override string CompanionFiltersUpdated { get; set; } = "Companion filters have been updated";
+        public override string CompanionFiltersUpdated { get; set; } = "宠物过滤设置已更新";
         public override string CompanionRetrieveFailed { get; set; } = "无法获得{0}宠物，该宠物当前跟随{1}";
         public override string CompanionReleaseFailed { get; set; } = "Unable to release {0} because it is currently with {1}.";
         public override string QuestSelectReward { get; set; } = "你必须选择任务奖励";

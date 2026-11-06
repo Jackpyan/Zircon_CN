@@ -843,6 +843,16 @@ namespace Library.Network.ClientPackets
         public List<MirClass> FilterClass { get; set; }
         public List<Rarity> FilterRarity { get; set; }
         public List<ItemType> FilterItemType { get; set; }
+
+        /// <summary>
+        /// 宠物拾取白名单（物品 Index）。<c>null</c> = 本次不更新，
+        /// 用于区分「宠物对话框改三组过滤」与「拾取页改白名单」，避免互相覆盖。
+        /// 非 null 但为空列表 = 什么都不捡。
+        /// </summary>
+        public List<int> PickupItems { get; set; }
+
+        /// <summary>宠物拾取是否放行非白色物品（碎片 / 带附加属性 / 非普通品质）。仅 <see cref="PickupItems"/> 非 null 时生效。</summary>
+        public bool PickupNonWhite { get; set; }
     }
     public sealed class ChangeOnlineState : Packet
     {

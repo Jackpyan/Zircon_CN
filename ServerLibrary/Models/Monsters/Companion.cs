@@ -601,8 +601,20 @@ namespace Server.Models.Monsters
 
         public bool FilterCompanionPicks(ItemCheck check)
         {
-            if (SEnvir.IsCurrencyItem(check.Info)) return true;
+            if (check?.Info == null) return false;
 
+            // ---- 1. 拾取白名单（主判据）：勾选的才捡，未勾选一律不捡（含货币） ----
+            // 白名单为空 = 什么都不捡，对应拾取页「未勾选就不拾取」。
+            int pickupIndex = check.Info.Index;
+
+            // 碎片：地面物品用附加属性里的 ItemIndex 指代具体碎片
+            if (check.Info.ItemEffect == ItemEffect.ItemPart && check.Item != null && check.Item.Stats[Stat.ItemIndex] > 0)
+                pickupIndex = check.Item.Stats[Stat.ItemIndex];
+
+            if (!IsPickupWhitelisted(pickupIndex) && !IsPickupNonWhiteAllowed(check))
+                return false;
+
+            // ---- 2. 宠物对话框的附加过滤（三组，配了才生效） ----
             ItemType itemType;
             Rarity itemRarity;
             RequiredClass itemClass;
@@ -660,6 +672,35 @@ namespace Server.Models.Monsters
             }
 
             return hasFilterType && hasRarity && hasClass;
+        }
+
+        /// <summary>物品是否在宠物拾取白名单里（逗号分隔的 Index 串）。</summary>
+        private bool IsPickupWhitelisted(int index)
+        {
+            string raw = CompanionOwner.FiltersPickupItems;
+
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            foreach (string part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (int.TryParse(part.Trim(), out int value) && value == index) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 是否因「宠物拾取非白色物品」而放行。
+        /// 与客户端 IsWhiteItem 同口径：碎片、带附加属性、非普通品质都不算白色。
+        /// </summary>
+        private bool IsPickupNonWhiteAllowed(ItemCheck check)
+        {
+            if (!CompanionOwner.FiltersPickupNonWhite) return false;
+
+            if (check.Info.ItemEffect == ItemEffect.ItemPart) return true;
+            if (check.Item?.AddedStats != null && check.Item.AddedStats.Count > 0) return true;
+
+            return check.Info.Rarity != Rarity.Common;
         }
 
         public bool CanGainItems(bool checkWeight, params ItemCheck[] checks)

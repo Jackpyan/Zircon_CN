@@ -197,6 +197,11 @@ namespace Server.Models
         public string FiltersRarity;
         public string FiltersItemType;
 
+        /// <summary>宠物拾取白名单（物品 Index，逗号分隔）。空 = 什么都不捡。</summary>
+        public string FiltersPickupItems;
+        /// <summary>宠物拾取是否放行非白色物品。</summary>
+        public bool FiltersPickupNonWhite;
+
         public bool Fishing = false, FishFound = false;
         public int FishThrowQuality = 0, FishPointsCurrent = 0, FishAttempts = 0, FishFails = 0;
 
@@ -274,6 +279,8 @@ namespace Server.Models
             FiltersClass = Character.FiltersClass ?? "";
             FiltersItemType = Character.FiltersItemType ?? "";
             FiltersRarity = Character.FiltersRarity ?? "";
+            FiltersPickupItems = Character.FiltersPickupItems ?? "";
+            FiltersPickupNonWhite = Character.FiltersPickupNonWhite;
 
             AddDefaultCurrencies();
 
@@ -3416,16 +3423,43 @@ namespace Server.Models
 
         public void SetFilters(C.SendCompanionFilters p)
         {
-            Character.FiltersClass = String.Join(",", p.FilterClass);
-            Character.FiltersRarity = String.Join(",", p.FilterRarity);
-            Character.FiltersItemType = String.Join(",", p.FilterItemType);
+            bool companionFiltersChanged = false;
 
-            FiltersClass = Character.FiltersClass;
-            FiltersItemType = Character.FiltersItemType;
-            FiltersRarity = Character.FiltersRarity;
+            // 三组过滤：只有全部提供时才更新（宠物对话框保存时发）
+            if (p.FilterClass != null && p.FilterRarity != null && p.FilterItemType != null)
+            {
+                Character.FiltersClass = String.Join(",", p.FilterClass);
+                Character.FiltersRarity = String.Join(",", p.FilterRarity);
+                Character.FiltersItemType = String.Join(",", p.FilterItemType);
 
-            Enqueue(new S.SendCompanionFilters { FilterClass = p.FilterClass, FilterRarity = p.FilterRarity, FilterItemType = p.FilterItemType });
-            Connection.ReceiveChat(Connection.Language.CompanionFiltersUpdated, MessageType.System);
+                FiltersClass = Character.FiltersClass;
+                FiltersItemType = Character.FiltersItemType;
+                FiltersRarity = Character.FiltersRarity;
+
+                companionFiltersChanged = true;
+            }
+
+            // 拾取白名单：null = 本次不更新。拾取页每次勾选都会下发，但不弹系统提示
+            if (p.PickupItems != null)
+            {
+                Character.FiltersPickupItems = String.Join(",", p.PickupItems);
+                Character.FiltersPickupNonWhite = p.PickupNonWhite;
+
+                FiltersPickupItems = Character.FiltersPickupItems;
+                FiltersPickupNonWhite = Character.FiltersPickupNonWhite;
+            }
+
+            Enqueue(new S.SendCompanionFilters
+            {
+                FilterClass = p.FilterClass ?? new List<MirClass>(),
+                FilterRarity = p.FilterRarity ?? new List<Rarity>(),
+                FilterItemType = p.FilterItemType ?? new List<ItemType>(),
+                PickupItems = p.PickupItems ?? new List<int>(),
+                PickupNonWhite = Character.FiltersPickupNonWhite,
+            });
+
+            if (companionFiltersChanged)
+                Connection.ReceiveChat(Connection.Language.CompanionFiltersUpdated, MessageType.System);
         }
 
         public void CompanionRetrieve(int index)

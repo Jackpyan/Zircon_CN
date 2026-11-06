@@ -907,6 +907,41 @@ namespace Server.DBModels
         }
         private string _FiltersItemType = "";
 
+        /// <summary>
+        /// 宠物拾取白名单（物品 Index，逗号分隔）。
+        /// 空字符串 = 什么都不捡（与拾取页「未勾选就不拾取」一致）。
+        /// </summary>
+        public string FiltersPickupItems
+        {
+            get { return _FiltersPickupItems; }
+            set
+            {
+                if (_FiltersPickupItems == value) return;
+
+                var oldValue = _FiltersPickupItems;
+                _FiltersPickupItems = value;
+
+                OnChanged(oldValue, value, "FiltersPickupItems");
+            }
+        }
+        private string _FiltersPickupItems = "";
+
+        /// <summary>宠物拾取是否放行非白色物品（碎片 / 带附加属性 / 非普通品质）。</summary>
+        public bool FiltersPickupNonWhite
+        {
+            get { return _FiltersPickupNonWhite; }
+            set
+            {
+                if (_FiltersPickupNonWhite == value) return;
+
+                var oldValue = _FiltersPickupNonWhite;
+                _FiltersPickupNonWhite = value;
+
+                OnChanged(oldValue, value, "FiltersPickupNonWhite");
+            }
+        }
+        private bool _FiltersPickupNonWhite;
+
         public Dictionary<RequiredClass, int> CurrentRank = new();
         public Dictionary<RequiredClass, int> RankChange = new();
 

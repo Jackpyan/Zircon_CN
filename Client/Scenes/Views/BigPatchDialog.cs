@@ -223,6 +223,10 @@ namespace Client.Scenes.Views
             PickFilter.Initialize(fileName);
 
             AutoPick.BindFilter(PickFilter);
+
+            // 角色数据就绪后把本地白名单推一次，保证服务端宠物 AI 与界面一致
+            AutoPick.ChkPetNonWhite?.SetSilentState(PickFilter.PetNonWhite);
+            AutoPick.SendPickupFilters();
         }
 
         /// <summary>该物品是否在白名单里（角色拾取或宠物拾取任一勾选）。</summary>
@@ -3334,6 +3338,9 @@ namespace Client.Scenes.Views
             public bool Inited;
             public string FileName;
 
+            /// <summary>宠物拾取是否放行非白色物品（按角色存盘，写在 ini 首行注释里）。</summary>
+            public bool PetNonWhite { get; set; }
+
             public List<CItemFilterSet> Items { get; } = new List<CItemFilterSet>();
             public Dictionary<int, CItemFilterSet> dictItems { get; } = new Dictionary<int, CItemFilterSet>();
 
@@ -3384,7 +3391,17 @@ namespace Client.Scenes.Views
 
                     foreach (string line in File.ReadAllLines(FileName))
                     {
-                        if (string.IsNullOrEmpty(line) || line[0] == ';') continue;
+                        if (string.IsNullOrEmpty(line)) continue;
+
+                        if (line.StartsWith(";pet-nonwhite=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (bool.TryParse(line.Substring(";pet-nonwhite=".Length).Trim(), out bool nonWhite))
+                                PetNonWhite = nonWhite;
+
+                            continue;
+                        }
+
+                        if (line[0] == ';') continue;
 
                         string[] parts = line.Split(',');
                         if (parts.Length < 6) continue;
@@ -3412,13 +3429,13 @@ namespace Client.Scenes.Views
 
                 try
                 {
-                    string[] contents = new string[Items.Count];
-
-                    for (int i = 0; i < Items.Count; i++)
+                    List<string> contents = new List<string>(Items.Count + 1)
                     {
-                        CItemFilterSet set = Items[i];
-                        contents[i] = $"{set.idx}, {set.name}, {set.hint}, {set.pick}, {set.picks}, {set.show}";
-                    }
+                        $";pet-nonwhite={PetNonWhite}",
+                    };
+
+                    foreach (CItemFilterSet set in Items)
+                        contents.Add($"{set.idx}, {set.name}, {set.hint}, {set.pick}, {set.picks}, {set.show}");
 
                     File.WriteAllLines(FileName, contents);
                 }
@@ -3450,6 +3467,8 @@ namespace Client.Scenes.Views
             public DXListView ItemView;
             public DXCheckBox ChkNonWhite;
             public DXButton BtnSelectNonWhite;
+            public DXCheckBox ChkPetNonWhite;
+            public DXButton BtnSelectNonWhitePet;
 
             public CItemFilter ItemFilter { get; private set; }
 
@@ -3482,6 +3501,9 @@ namespace Client.Scenes.Views
 
                 foreach (ItemType itemType in Enum.GetValues(typeof(ItemType)))
                 {
+                    // Nothing 表示「无类型」，无实际物品；已有「全部」项，跳过避免出现英文 Nothing
+                    if (itemType == ItemType.Nothing) continue;
+
                     DescriptionAttribute attr = itemTypeEnum.GetMember(itemType.ToString())[0].GetCustomAttribute<DescriptionAttribute>();
 
                     DXListBoxItem row = new DXListBoxItem
@@ -3545,7 +3567,7 @@ namespace Client.Scenes.Views
                     Label = { Text = "拾取非白色物品" },
                     Checked = Config.拾取非白色物品,
                     Size = new Size(120, 18),
-                    Location = new Point(10, 30),
+                    Location = new Point(10, 28),
                 };
                 ChkNonWhite.CheckedChanged += (o, e) => Config.拾取非白色物品 = ChkNonWhite.Checked;
 
@@ -3555,15 +3577,41 @@ namespace Client.Scenes.Views
                     Size = new Size(80, 18),
                     Label = { Text = "勾选非白" },
                     ButtonType = ButtonType.SmallButton,
-                    Location = new Point(150, 30),
+                    Location = new Point(150, 28),
                 };
                 BtnSelectNonWhite.MouseClick += (o, e) => SelectNonWhite();
+
+                // 宠物列独立开关与一键勾选：与角色列互不影响
+                ChkPetNonWhite = new DXCheckBox
+                {
+                    Parent = this,
+                    Label = { Text = "宠物拾取非白色物品" },
+                    Size = new Size(140, 18),
+                    Location = new Point(10, 48),
+                };
+                ChkPetNonWhite.CheckedChanged += (o, e) =>
+                {
+                    if (ItemFilter == null) return;
+
+                    ItemFilter.PetNonWhite = ChkPetNonWhite.Checked;
+                    SendPickupFilters();
+                };
+
+                BtnSelectNonWhitePet = new DXButton
+                {
+                    Parent = this,
+                    Size = new Size(80, 18),
+                    Label = { Text = "勾选非白(宠物)" },
+                    ButtonType = ButtonType.SmallButton,
+                    Location = new Point(150, 48),
+                };
+                BtnSelectNonWhitePet.MouseClick += (o, e) => SelectNonWhitePet();
 
                 ItemView = new DXListView
                 {
                     Parent = this,
-                    Location = new Point(5, 55),
-                    Size = new Size(410, 340),
+                    Location = new Point(5, 72),
+                    Size = new Size(410, 323),
                     ItemBorder = false,
                 };
 
@@ -3643,7 +3691,10 @@ namespace Client.Scenes.Views
                     {
                         case 0: set.hint = source.Checked; break;
                         case 1: set.pick = source.Checked; break;
-                        case 2: set.picks = source.Checked; break;
+                        case 2:
+                            set.picks = source.Checked;
+                            SendPickupFilters();
+                            break;
                         case 3: set.show = source.Checked; break;
                     }
                 };
@@ -3709,6 +3760,40 @@ namespace Client.Scenes.Views
                 }
 
                 RefreshItems(CombTypeBox.SelectedItem as ItemType?);
+                SendPickupFilters();
+            }
+
+            /// <summary>把宠物拾取白名单下发给服务端（宠物 AI 判定用）。</summary>
+            public void SendPickupFilters()
+            {
+                if (ItemFilter == null) return;
+
+                // 立即落盘：只在窗口 Dispose 保存的话，重登 / 回角色选择会丢配置
+                ItemFilter.Save();
+
+                List<int> items = ItemFilter.Items.Where(x => x.picks).Select(x => x.idx).ToList();
+
+                CEnvir.Enqueue(new C.SendCompanionFilters
+                {
+                    PickupItems = items,
+                    PickupNonWhite = ItemFilter.PetNonWhite,
+                });
+            }
+
+            /// <summary>勾选所有非普通品质物品的宠物拾取列（与角色列「勾选非白」同口径）。</summary>
+            private void SelectNonWhitePet()
+            {
+                if (ItemFilter == null) return;
+
+                foreach (CItemFilterSet set in ItemFilter.Items)
+                {
+                    if (set.rarity == Rarity.Common) continue;
+
+                    set.picks = true;
+                }
+
+                RefreshItems(CombTypeBox.SelectedItem as ItemType?);
+                SendPickupFilters();
             }
 
             private void SelectNonWhite()
@@ -3760,8 +3845,9 @@ namespace Client.Scenes.Views
 
                 if (ItemView == null) return;
 
-                ItemView.Location = new Point(5, 55);
-                ItemView.Size = new Size(Math.Max(Size.Width - 10, 100), Math.Max(Size.Height - 60, 100));
+                // 72 = 两行开关/按钮（28 与 48 各 18 高）之后，避免压住第二行
+                ItemView.Location = new Point(5, 72);
+                ItemView.Size = new Size(Math.Max(Size.Width - 10, 100), Math.Max(Size.Height - 77, 100));
             }
         }
 
