@@ -474,6 +474,9 @@ namespace Client.Controls
 
             foreach (DXControl control in Controls)
             {
+                // 不可见控件的位置/裁剪区没有意义，跳过可避免大列表拖动时整帧卡顿
+                if (!control.IsVisible) continue;
+
                 control.UpdateDisplayArea();
                 control.UpdateClipAreaTree();
             }
@@ -1056,6 +1059,13 @@ namespace Client.Controls
                 if (MouseControl == this)
                     MouseControl = null;
             }
+            else
+            {
+                // 不可见期间 UpdateDisplayArea / UpdateClipAreaTree 被跳过（大列表性能优化），
+                // 变可见时补齐，避免滚动出来的行位置或裁剪区过期。
+                UpdateDisplayArea();
+                UpdateClipAreaTree();
+            }
 
             List<DXControl> checks = new List<DXControl>(Controls);
 
@@ -1275,6 +1285,10 @@ BorderInformation = new[]
         protected internal void UpdateClipAreaTree()
         {
             UpdateClipArea();
+
+            // 不可见子树不需要维护裁剪区。拾取页有 1600+ 行 × 6 控件，
+            // 拖动窗口时每帧递归全树会让整帧卡死（松开鼠标才恢复）。
+            if (!IsVisible) return;
 
             foreach (DXControl control in Controls)
                 control.UpdateClipAreaTree();

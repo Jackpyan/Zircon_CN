@@ -171,8 +171,13 @@ namespace Client.Controls
 
         protected override void DrawChildControls()
         {
-            foreach (DXControl control in Items.Controls)
-                control.Draw();
+            // 只画当前可见区间：拾取页有 1600+ 行 × 6 控件，全量遍历会让拖动窗口明显卡顿
+            int count = Items.Controls.Count;
+            int first = Math.Max(_First, 0);
+            int last = Math.Min(_Last, count - 1);
+
+            for (int i = first; i <= last; i++)
+                Items.Controls[i].Draw();
 
             foreach (DXControl control in Headers.Controls)
                 control.Draw();
