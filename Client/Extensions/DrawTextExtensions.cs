@@ -67,7 +67,29 @@ namespace Client.Extensions
             List<CharacterRange> ranges = new List<CharacterRange>();
 
             foreach (Match match in matches)
-                ranges.Add(new CharacterRange(match.Index, match.Length));
+            {
+                int wordStart = match.Index;
+                int wordEnd = match.Index + match.Length;
+
+                // 按钮文字落在「词」内部时把该词拆开。
+                // 中文没有空格，整句（如「如果想购买这匹马，请在此签字」）是一个 \S+ 词，
+                // 不拆的话 range.First < index 会被整体跳过，按钮永远拿不到区域 ——
+                // 马匹契约页的「在此签字」就是这样不显示的（无法购买马匹）。
+                if (index > wordStart && index < wordEnd)
+                {
+                    ranges.Add(new CharacterRange(wordStart, index - wordStart));
+
+                    int buttonEnd = Math.Min(index + length, wordEnd);
+                    ranges.Add(new CharacterRange(index, buttonEnd - index));
+
+                    if (buttonEnd < wordEnd)
+                        ranges.Add(new CharacterRange(buttonEnd, wordEnd - buttonEnd));
+                }
+                else
+                {
+                    ranges.Add(new CharacterRange(wordStart, match.Length));
+                }
+            }
 
             ButtonInfo currentInfo = null;
 

@@ -521,26 +521,31 @@ namespace Client.Scenes.Views
 
             matchList = matchList.OrderBy(x => x.Groups["Text"].Index).ToList();
 
-            int offset = 1;
+            // 在「已替换掉方括号/花括号」的文本里重新定位按钮文字。
+            // 原实现用「累计去掉的字符数」推算位置，比实际多减 1 个字符；
+            // 按钮正好落在换行处时 GetWordRegionsNew 会返回空区域 → 按钮不显示
+            // （马匹契约页的「在此签字」就是这样丢的，导致无法购买马匹）。
+            int searchStart = 0;
             foreach (Match match in matchList)
             {
+                string buttonText = match.Groups["Text"].Value;
+                int start = PageText.Text.IndexOf(buttonText, searchStart, StringComparison.Ordinal);
+
+                if (start < 0) continue;
+
+                searchStart = start + buttonText.Length;
+
                 DXButtonIndex index = new()
                 {
-                    Range = new CharacterRange(match.Groups["Text"].Index - offset, match.Groups["Text"].Length)
+                    Range = new CharacterRange(start, buttonText.Length)
                 };
 
                 buttonRanges.Add(index);
 
                 if (!string.IsNullOrEmpty(match.Groups["ID"].Value))
-                {
                     index.Type = DXButtonType.Button;
-                    offset += 3 + match.Groups["ID"].Length;
-                }
                 else if (!string.IsNullOrEmpty(match.Groups["Colour"].Value))
-                {
                     index.Type = DXButtonType.Label;
-                    offset += 3 + match.Groups["Colour"].Length;
-                }
             }
 
             // Do not draw white copies underneath coloured/link runs: their independently
