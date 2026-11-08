@@ -63,6 +63,7 @@ namespace Server.Envir.Commands.Command.Admin
                 UserItem userItem = SEnvir.CreateDropItem(item, 0);
                 userItem.Count = count;
                 userItem.Flags = UserItemFlags.GameMaster;
+                userItem.SetGmSource();
 
                 value -= count;
                 player.GainItem(userItem);

@@ -227,6 +227,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
                     Server.DBModels.UserItem userItem = SEnvir.CreateDropItem(item, 0);
                     userItem.Count = stack;
                     userItem.Flags = UserItemFlags.GameMaster;
+                    userItem.SetGmSource();
 
                     remaining -= stack;
                     player.GainItem(userItem);

@@ -161,6 +161,66 @@ namespace Server.DBModels
         }
         private DateTime _ResetCoolDown;
 
+        public int SourceMapIndex
+        {
+            get { return _SourceMapIndex; }
+            set
+            {
+                if (_SourceMapIndex == value) return;
+
+                var oldValue = _SourceMapIndex;
+                _SourceMapIndex = value;
+
+                OnChanged(oldValue, value, "SourceMapIndex");
+            }
+        }
+        private int _SourceMapIndex;
+
+        public int SourceMonsterIndex
+        {
+            get { return _SourceMonsterIndex; }
+            set
+            {
+                if (_SourceMonsterIndex == value) return;
+
+                var oldValue = _SourceMonsterIndex;
+                _SourceMonsterIndex = value;
+
+                OnChanged(oldValue, value, "SourceMonsterIndex");
+            }
+        }
+        private int _SourceMonsterIndex;
+
+        public DateTime SourceTime
+        {
+            get { return _SourceTime; }
+            set
+            {
+                if (_SourceTime == value) return;
+
+                var oldValue = _SourceTime;
+                _SourceTime = value;
+
+                OnChanged(oldValue, value, "SourceTime");
+            }
+        }
+        private DateTime _SourceTime;
+
+        public int SourceKillCount
+        {
+            get { return _SourceKillCount; }
+            set
+            {
+                if (_SourceKillCount == value) return;
+
+                var oldValue = _SourceKillCount;
+                _SourceKillCount = value;
+
+                OnChanged(oldValue, value, "SourceKillCount");
+            }
+        }
+        private int _SourceKillCount;
+
 
 
         public UserQuestTask UserTask;
@@ -538,6 +598,32 @@ namespace Server.DBModels
             newStat.Item = this;
         }
 
+        /// <summary>
+        /// 记录「怪物掉落」来源。堆叠物品不记录（合并后来源必然混淆）。
+        /// </summary>
+        public void SetMonsterSource(MapInfo map, MonsterInfo monster, int killCount)
+        {
+            if (Info == null || Info.StackSize > 1) return;
+
+            SourceMapIndex = map?.Index ?? 0;
+            SourceMonsterIndex = monster?.Index ?? 0;
+            SourceKillCount = killCount;
+            SourceTime = SEnvir.Now;
+        }
+
+        /// <summary>
+        /// 记录「GM 制造 / 网页后台发放」来源。怪物行由客户端凭 Flags 显示为 GM制造。
+        /// </summary>
+        public void SetGmSource()
+        {
+            if (Info == null || Info.StackSize > 1) return;
+
+            SourceMapIndex = 0;
+            SourceMonsterIndex = 0;
+            SourceKillCount = 0;
+            SourceTime = SEnvir.Now;
+        }
+
         public ClientUserItem ToClientInfo()
         {
             return new ClientUserItem
@@ -566,6 +652,11 @@ namespace Server.DBModels
                 Flags = Flags,
 
                 ExpireTime = ExpireTime,
+
+                SourceMapIndex = SourceMapIndex,
+                SourceMonsterIndex = SourceMonsterIndex,
+                SourceTime = SourceTime,
+                SourceKillCount = SourceKillCount,
 
                 Sockets = Sockets.OrderBy(x => x.Slot).Select(x => new ClientUserItemSocket
                 {

@@ -519,6 +519,11 @@ namespace Library
         public UserItemFlags Flags { get; set; }
         public TimeSpan ExpireTime { get; set; }
 
+        public int SourceMapIndex { get; set; }
+        public int SourceMonsterIndex { get; set; }
+        public DateTime SourceTime { get; set; }
+        public int SourceKillCount { get; set; }
+
 
         [IgnorePropertyPacket]
         public int Weight
@@ -585,6 +590,11 @@ namespace Library
 
             Flags = item.Flags;
             ExpireTime = item.ExpireTime;
+
+            SourceMapIndex = item.SourceMapIndex;
+            SourceMonsterIndex = item.SourceMonsterIndex;
+            SourceTime = item.SourceTime;
+            SourceKillCount = item.SourceKillCount;
 
             New = item.New;
             NextSpecialRepair = item.NextSpecialRepair;

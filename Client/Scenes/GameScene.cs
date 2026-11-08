@@ -2021,9 +2021,51 @@ namespace Client.Scenes
                 builder.AddIconLine("已锁定：防止意外出售或丢弃\n[中键] 或 [Scroll Lock] 解锁.", Color.FromArgb(150, 135, 105), LibraryFile.GameInter, 370);
             }
 
+            AddItemLabelSource(builder, MouseItem);
+
             builder.Complete();
             ItemLabel = builder.Label;
             UpdateItemLabelLocation();
+        }
+
+        /// <summary>
+        /// 提示框底部「[物品来源]」：地图 / 怪物（GM 物品显示为 GM制造）/ 击杀 / 时间。
+        /// </summary>
+        private static void AddItemLabelSource(ItemLabelBuilder builder, ClientUserItem item)
+        {
+            bool isGm = (item.Flags & UserItemFlags.GameMaster) == UserItemFlags.GameMaster;
+
+            //升级前产生的老物品：四字段全空且非 GM → 整段不渲染
+            if (!isGm && item.SourceMapIndex == 0 && item.SourceMonsterIndex == 0 && item.SourceKillCount == 0 && item.SourceTime == default(DateTime))
+                return;
+
+            Color keyColour = Color.FromArgb(150, 135, 105);
+            Color valueColour = Color.White;
+
+            builder.StartSection();
+            builder.AddLine("[物品来源]", Color.FromArgb(215, 190, 120));
+
+            if (!isGm && item.SourceMapIndex > 0)
+            {
+                MapInfo map = Globals.MapInfoList.Binding.FirstOrDefault(x => x.Index == item.SourceMapIndex);
+                builder.AddKeyValueLine("地图：", keyColour, map?.PlayerDescription ?? "未知", valueColour);
+            }
+
+            if (isGm)
+            {
+                builder.AddKeyValueLine("怪物：", keyColour, "GM制造", Color.LightSeaGreen);
+            }
+            else if (item.SourceMonsterIndex > 0)
+            {
+                MonsterInfo monster = Globals.MonsterInfoList.Binding.FirstOrDefault(x => x.Index == item.SourceMonsterIndex);
+                builder.AddKeyValueLine("怪物：", keyColour, monster?.MonsterName ?? "未知", valueColour);
+            }
+
+            if (item.SourceKillCount > 0)
+                builder.AddKeyValueLine("击杀：", keyColour, item.SourceKillCount.ToString("#,##0"), valueColour);
+
+            if (item.SourceTime != default(DateTime))
+                builder.AddKeyValueLine("时间：", keyColour, item.SourceTime.ToString("yyyy-MM-dd HH:mm:ss"), valueColour);
         }
 
         private void UpdateItemLabelLocation()
@@ -2374,6 +2416,24 @@ namespace Client.Scenes
                 IncludeLabel(label);
 
                 return label;
+            }
+
+            /// <summary>
+            /// 同一行内「键 + 值」双色文本，值紧接键右侧。
+            /// </summary>
+            public void AddKeyValueLine(string key, Color keyColour, string value, Color valueColour)
+            {
+                DXLabel keyLabel = AddLine(key, keyColour);
+
+                DXLabel valueLabel = new DXLabel
+                {
+                    ForeColour = valueColour == Color.Gray ? MutedUnavailableColour : valueColour,
+                    Location = new Point(keyLabel.Location.X + keyLabel.Size.Width, keyLabel.Location.Y),
+                    Parent = _currentSection,
+                    Text = value,
+                };
+
+                IncludeLabel(valueLabel);
             }
 
             public DXLabel AddIconLine(string text, Color colour, LibraryFile iconLibrary, int iconIndex, int indent = 0, float iconScale = 1F, int iconAreaWidth = 0)

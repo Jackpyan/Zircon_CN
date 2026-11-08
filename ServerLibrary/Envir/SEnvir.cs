@@ -4777,6 +4777,41 @@ namespace Server.Envir
             return index;
         }
 
+        /// <summary>
+        /// 只读查询某角色的里程碑累计数量（用于物品来源等展示场景），查不到返回 0。
+        /// </summary>
+        public static long GetMilestoneCount(CharacterInfo character, MilestoneType type, CharacterInfo player = null, ItemInfo item = null, MonsterInfo monster = null, CurrencyInfo currency = null, MapRegion region = null, InstanceInfo instance = null, QuestInfo quest = null, MagicInfo magic = null)
+        {
+            if (character == null) return 0;
+
+            int secondaryId = GetSecondaryId(type, player, item, monster, currency, region, instance, quest, magic);
+
+            if (MilestoneLogCache.TryGetValue(character, out Dictionary<(MilestoneType, int), UserMilestoneLog> cache) &&
+                cache.TryGetValue((type, secondaryId), out UserMilestoneLog cached))
+                return cached.Count;
+
+            if (character.MilestoneLogs == null) return 0;
+
+            foreach (UserMilestoneLog log in character.MilestoneLogs)
+            {
+                if (log.Type != type) continue;
+
+                if (GetSecondaryId(log.Type, log.Player, log.Item, log.Monster, log.Currency, log.Region, log.Instance, log.Quest, log.Magic) != secondaryId) continue;
+
+                if (cache == null)
+                {
+                    cache = [];
+                    MilestoneLogCache[character] = cache;
+                }
+
+                cache[(type, secondaryId)] = log;
+
+                return log.Count;
+            }
+
+            return 0;
+        }
+
         public static void LogMilestone(CharacterInfo character, MilestoneType type, long amount = 1, bool setAmount = false, CharacterInfo player = null, ItemInfo item = null, MonsterInfo monster = null, CurrencyInfo currency = null, MapRegion region = null, InstanceInfo instance = null, QuestInfo quest = null, MagicInfo magic = null)
         {
             if (!MilestoneLogCache.TryGetValue(character, out Dictionary<(MilestoneType, int), UserMilestoneLog> cache))

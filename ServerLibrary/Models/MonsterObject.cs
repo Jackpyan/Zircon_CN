@@ -2861,6 +2861,11 @@ namespace Server.Models
         {
             if (!CanDropRewards) return;
 
+            //物品来源：掉落归属者击杀该怪的累计数量（来自里程碑），整次掉落只查一次
+            int killCount = 0;
+            if (MonsterInfo != null && owner?.Character != null)
+                killCount = (int)Math.Min(int.MaxValue, SEnvir.GetMilestoneCount(owner.Character, MilestoneType.MonsterKill, monster: MonsterInfo));
+
             rate *= 1M + owner.Stats[Stat.DropRate] / 100M;
 
             rate *= 1M + owner.Stats[Stat.BaseDropRate] / 100M;
@@ -2958,6 +2963,7 @@ namespace Server.Models
                     item.AddStat(Stat.ItemIndex, drop.Item.Index, StatSource.Added);
                     item.StatsChanged();
 
+                    item.SetMonsterSource(CurrentMap?.Info, MonsterInfo, killCount);
                     item.SetTemporary(true);
 
                     if (NeedHarvest)
@@ -3005,6 +3011,7 @@ namespace Server.Models
 
                     amount -= item.Count;
 
+                    item.SetMonsterSource(CurrentMap?.Info, MonsterInfo, killCount);
                     item.SetTemporary(true); //REMOVE ON Gain
 
                     if (NeedHarvest)
