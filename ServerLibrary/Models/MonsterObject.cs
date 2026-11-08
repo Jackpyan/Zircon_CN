@@ -2916,13 +2916,13 @@ namespace Server.Models
                     chance = (long)Math.Min(int.MaxValue, boostedChance);
                 }
 
-                UserDrop userDrop = owner.Character.Account.UserDrops.FirstOrDefault(x => x.Item == drop.Item);
+                UserDrop userDrop = owner.Character.UserDrops.FirstOrDefault(x => x.Item == drop.Item);
 
                 if (userDrop == null)
                 {
                     userDrop = SEnvir.UserDropList.CreateNewObject();
                     userDrop.Item = drop.Item;
-                    userDrop.Account = owner.Character.Account;
+                    userDrop.Character = owner.Character;
                 }
 
                 if (Config.EnableFortune)

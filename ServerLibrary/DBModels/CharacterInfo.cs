@@ -741,6 +741,12 @@ namespace Server.DBModels
         [Association("Milestones", true)]
         public DBBindingList<UserMilestone> Milestones { get; set; }
 
+        [Association("UserDrops", true)]
+        public DBBindingList<UserDrop> UserDrops { get; set; }
+
+        [Association("Fortunes", true)]
+        public DBBindingList<UserFortuneInfo> Fortunes { get; set; }
+
         public OnlineState OnlineState
         {
             get { return _OnlineState; }

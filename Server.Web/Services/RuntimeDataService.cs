@@ -24,7 +24,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             ("Account", "账号"), ("CharacterName", "角色名"), ("Class", "职业"), ("Gender", "性别"),
             ("Level", "等级"), ("HairType", "发型"), ("Deleted", "已删除"), ("Experience", "经验"), ("Caption", "称号")),
         View("drops", "用户掉落", nameof(SEnvir.UserDropList), "UserDropView",
-            ("Account", "账号"), ("Item", "物品"), ("Progress", "进度"), ("DropCount", "掉落次数")),
+            ("Character", "角色"), ("Item", "物品"), ("Progress", "进度"), ("DropCount", "掉落次数")),
         View("payments", "支付", nameof(SEnvir.GameGoldPaymentList), "GameGoldPaymentView",
             ("CharacterName", "角色名"), ("Name", "名称"), ("PaymentDate", "支付日期"), ("Account", "账号"),
             ("TransactionID", "交易号"), ("TransactionType", "交易类型"), ("Status", "状态"), ("GameGoldAmount", "元宝数量"),
@@ -163,14 +163,13 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             foreach (Server.DBModels.BuffInfo buff in account.Buffs.ToList()) buff.Delete();
             foreach (Server.DBModels.MailInfo mail in account.Mail.ToList()) mail.Delete();
             foreach (Server.DBModels.AuctionInfo auction in account.Auctions.ToList()) auction.Delete();
-            foreach (Server.DBModels.UserDrop drop in account.UserDrops.ToList()) drop.Delete();
+            // 保底账本（UserDrop / UserFortuneInfo）挂在角色上，删角色时已随之级联清理
             foreach (Server.DBModels.UserCompanion companion in account.Companions.ToList()) companion.Delete();
             foreach (Server.DBModels.UserCompanionUnlock unlock in account.CompanionUnlocks.ToList()) unlock.Delete();
             foreach (Server.DBModels.BlockInfo block in account.BlockingList.ToList()) block.Delete();
             foreach (Server.DBModels.GameGoldPayment payment in account.Payments.ToList()) payment.Delete();
             foreach (Server.DBModels.GameStoreSale sale in account.StoreSales.ToList()) sale.Delete();
             foreach (Server.DBModels.GameStoreFavourite favourite in account.StoreFavourites.ToList()) favourite.Delete();
-            foreach (Server.DBModels.UserFortuneInfo fortune in account.Fortunes.ToList()) fortune.Delete();
             foreach (Server.DBModels.UserQuest quest in account.Quests.ToList()) quest.Delete();
 
             // 4) 最后删账号

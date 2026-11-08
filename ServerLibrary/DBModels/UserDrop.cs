@@ -1,5 +1,6 @@
 ﻿using Library.SystemModels;
 using MirDB;
+using System.Text.Json.Serialization;
 
 namespace Server.DBModels
 {
@@ -7,20 +8,20 @@ namespace Server.DBModels
     public sealed class UserDrop : DBObject
     {
         [Association("UserDrops")]
-        public AccountInfo Account
+        public CharacterInfo Character
         {
-            get { return _Account; }
+            get { return _Character; }
             set
             {
-                if (_Account == value) return;
+                if (_Character == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _Character;
+                _Character = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "Character");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Character;
 
         public ItemInfo Item
         {
@@ -67,9 +68,34 @@ namespace Server.DBModels
         }
         private long _DropCount;
 
+        /// <summary>
+        /// 旧库遗留的账号索引（当年保底进度挂在账号上）。这一列不参与新结构，
+        /// 只在首次加载旧库时被 MirDB 读进来，由 <see cref="LegacyDropMigration"/> 换算成角色。
+        /// </summary>
+        [JsonIgnore]
+        [MigrationProperty("Account")]
+        public int LegacyAccountIndex
+        {
+            get { return _LegacyAccountIndex; }
+            set { _LegacyAccountIndex = value; }
+        }
+        private int _LegacyAccountIndex;
+
+        /// <summary>
+        /// 迁移必须在这里做：Session 完成加载后、按新结构重存前（重存会丢掉旧列）。
+        /// </summary>
+        protected override void OnLoaded()
+        {
+            base.OnLoaded();
+
+            if (Character != null || LegacyAccountIndex == 0) return;
+
+            Character = LegacyDropMigration.ResolveCharacter(Session, LegacyAccountIndex);
+        }
+
         protected override void OnDeleted()
         {
-            Account = null;
+            Character = null;
             Item = null;
 
             base.OnDeleted();

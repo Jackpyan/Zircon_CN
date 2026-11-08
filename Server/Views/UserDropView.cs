@@ -11,7 +11,7 @@ namespace Server.Views
 
             UserDropGridControl.DataSource = SEnvir.UserDropList?.Binding;
 
-            AccountLookUpEdit.DataSource = SEnvir.AccountInfoList?.Binding;
+            CharacterLookUpEdit.DataSource = SEnvir.CharacterInfoList?.Binding;
             ItemLookUpEdit.DataSource = SEnvir.ItemInfoList?.Binding;
 
             UserDropGridView.OptionsSelection.MultiSelect = true;

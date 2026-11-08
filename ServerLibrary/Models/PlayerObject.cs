@@ -1318,7 +1318,7 @@ namespace Server.Models
                 Enqueue(new S.GuildConquestStarted { Index = conquest.Castle.Index });
 
 
-            Enqueue(new S.FortuneUpdate { Fortunes = Character.Account.Fortunes.Select(x => x.ToClientInfo()).ToList() });
+            Enqueue(new S.FortuneUpdate { Fortunes = Character.Fortunes.Select(x => x.ToClientInfo()).ToList() });
         }
 
         #endregion
@@ -1439,7 +1439,7 @@ namespace Server.Models
             foreach (ConquestWar conquest in SEnvir.ConquestWars)
                 Enqueue(new S.GuildConquestStarted { Index = conquest.Castle.Index });
 
-            con.Enqueue(new S.FortuneUpdate { Fortunes = Character.Account.Fortunes.Select(x => x.ToClientInfo()).ToList() });
+            con.Enqueue(new S.FortuneUpdate { Fortunes = Character.Fortunes.Select(x => x.ToClientInfo()).ToList() });
         }
 
         public void ObservableSwitch(bool allow)
@@ -9600,7 +9600,7 @@ namespace Server.Models
 
             UserFortuneInfo savedFortune = null;
 
-            foreach (UserFortuneInfo fortune in Character.Account.Fortunes)
+            foreach (UserFortuneInfo fortune in Character.Fortunes)
             {
                 if (fortune.Item != info) continue;
 
@@ -9613,11 +9613,11 @@ namespace Server.Models
             if (savedFortune == null)
             {
                 savedFortune = SEnvir.UserFortuneInfoList.CreateNewObject();
-                savedFortune.Account = Character.Account;
+                savedFortune.Character = Character;
                 savedFortune.Item = info;
             }
 
-            UserDrop drop = Character.Account.UserDrops.FirstOrDefault(x => x.Item == info);
+            UserDrop drop = Character.UserDrops.FirstOrDefault(x => x.Item == info);
 
             savedFortune.CheckTime = SEnvir.Now;
 

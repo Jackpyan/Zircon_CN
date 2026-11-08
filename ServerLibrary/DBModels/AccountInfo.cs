@@ -573,9 +573,6 @@ namespace Server.DBModels
         [Association("Mail")]
         public DBBindingList<MailInfo> Mail { get; set; }
 
-        [Association("UserDrops")]
-        public DBBindingList<UserDrop> UserDrops { get; set; }
-
         [Association("Companions")]
         public DBBindingList<UserCompanion> Companions { get; set; }
 
@@ -596,9 +593,6 @@ namespace Server.DBModels
 
         [Association("StoreFavourites")]
         public DBBindingList<GameStoreFavourite> StoreFavourites { get; set; }
-
-        [Association("Fortunes")]
-        public DBBindingList<UserFortuneInfo> Fortunes { get; set; }
 
         [Association("Quests")]
         public DBBindingList<UserQuest> Quests { get; set; }

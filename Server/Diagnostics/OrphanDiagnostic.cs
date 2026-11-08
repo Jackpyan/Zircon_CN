@@ -203,12 +203,12 @@ namespace Server.Diagnostics
             AddOwnership<UserCurrency, AccountInfo>(result, collections, nameof(UserCurrency.Account), nameof(AccountInfo.Currencies));
             AddOwnership<AuctionInfo, AccountInfo>(result, collections, nameof(AuctionInfo.Account), nameof(AccountInfo.Auctions));
             AddOwnership<MailInfo, AccountInfo>(result, collections, nameof(MailInfo.Account), nameof(AccountInfo.Mail));
-            AddOwnership<UserDrop, AccountInfo>(result, collections, nameof(UserDrop.Account), nameof(AccountInfo.UserDrops));
+            AddOwnership<UserDrop, CharacterInfo>(result, collections, nameof(UserDrop.Character), nameof(CharacterInfo.UserDrops));
             AddOwnership<UserCompanion, AccountInfo>(result, collections, nameof(UserCompanion.Account), nameof(AccountInfo.Companions));
             AddOwnership<UserCompanionUnlock, AccountInfo>(result, collections, nameof(UserCompanionUnlock.Account), nameof(AccountInfo.CompanionUnlocks));
             AddOwnership<BlockInfo, AccountInfo>(result, collections, nameof(BlockInfo.Account), nameof(AccountInfo.BlockingList));
             AddOwnership<BlockInfo, AccountInfo>(result, collections, nameof(BlockInfo.BlockedAccount), nameof(AccountInfo.BlockedByList));
-            AddOwnership<UserFortuneInfo, AccountInfo>(result, collections, nameof(UserFortuneInfo.Account), nameof(AccountInfo.Fortunes));
+            AddOwnership<UserFortuneInfo, CharacterInfo>(result, collections, nameof(UserFortuneInfo.Character), nameof(CharacterInfo.Fortunes));
 
             AddOwnership<CharacterBeltLink, CharacterInfo>(result, collections, nameof(CharacterBeltLink.Character), nameof(CharacterInfo.BeltLinks));
             AddOwnership<AutoPotionLink, CharacterInfo>(result, collections, nameof(AutoPotionLink.Character), nameof(CharacterInfo.AutoPotionLinks));

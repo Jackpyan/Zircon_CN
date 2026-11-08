@@ -31,14 +31,14 @@
             this.UserDropGridControl = new DevExpress.XtraGrid.GridControl();
             this.UserDropGridView = new DevExpress.XtraGrid.Views.Grid.GridView();
             this.gridColumn1 = new DevExpress.XtraGrid.Columns.GridColumn();
-            this.AccountLookUpEdit = new DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit();
+            this.CharacterLookUpEdit = new DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit();
             this.gridColumn2 = new DevExpress.XtraGrid.Columns.GridColumn();
             this.ItemLookUpEdit = new DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit();
             this.gridColumn3 = new DevExpress.XtraGrid.Columns.GridColumn();
             this.gridColumn4 = new DevExpress.XtraGrid.Columns.GridColumn();
             ((System.ComponentModel.ISupportInitialize)(this.UserDropGridControl)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.UserDropGridView)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.AccountLookUpEdit)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.CharacterLookUpEdit)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.ItemLookUpEdit)).BeginInit();
             this.SuspendLayout();
             // 
@@ -49,7 +49,7 @@
             this.UserDropGridControl.MainView = this.UserDropGridView;
             this.UserDropGridControl.Name = "UserDropGridControl";
             this.UserDropGridControl.RepositoryItems.AddRange(new DevExpress.XtraEditors.Repository.RepositoryItem[] {
-            this.AccountLookUpEdit,
+            this.CharacterLookUpEdit,
             this.ItemLookUpEdit});
             this.UserDropGridControl.Size = new System.Drawing.Size(693, 408);
             this.UserDropGridControl.TabIndex = 0;
@@ -71,26 +71,26 @@
             // 
             // gridColumn1
             // 
-            this.gridColumn1.ColumnEdit = this.AccountLookUpEdit;
-            this.gridColumn1.Caption = "账号";
-            this.gridColumn1.FieldName = "Account";
+            this.gridColumn1.ColumnEdit = this.CharacterLookUpEdit;
+            this.gridColumn1.Caption = "角色";
+            this.gridColumn1.FieldName = "Character";
             this.gridColumn1.Name = "gridColumn1";
             this.gridColumn1.OptionsColumn.AllowSort = DevExpress.Utils.DefaultBoolean.True;
             this.gridColumn1.SortMode = DevExpress.XtraGrid.ColumnSortMode.DisplayText;
             this.gridColumn1.Visible = true;
             this.gridColumn1.VisibleIndex = 0;
             // 
-            // AccountLookUpEdit
+            // CharacterLookUpEdit
             // 
-            this.AccountLookUpEdit.AutoHeight = false;
-            this.AccountLookUpEdit.BestFitMode = DevExpress.XtraEditors.Controls.BestFitMode.BestFitResizePopup;
-            this.AccountLookUpEdit.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {
+            this.CharacterLookUpEdit.AutoHeight = false;
+            this.CharacterLookUpEdit.BestFitMode = DevExpress.XtraEditors.Controls.BestFitMode.BestFitResizePopup;
+            this.CharacterLookUpEdit.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {
             new DevExpress.XtraEditors.Controls.EditorButton(DevExpress.XtraEditors.Controls.ButtonPredefines.Combo)});
-            this.AccountLookUpEdit.Columns.AddRange(new DevExpress.XtraEditors.Controls.LookUpColumnInfo[] {
-            new DevExpress.XtraEditors.Controls.LookUpColumnInfo("EMailAddress", "电子邮箱地址")});
-            this.AccountLookUpEdit.DisplayMember = "EMailAddress";
-            this.AccountLookUpEdit.Name = "AccountLookUpEdit";
-            this.AccountLookUpEdit.NullText = "[账号为空]";
+            this.CharacterLookUpEdit.Columns.AddRange(new DevExpress.XtraEditors.Controls.LookUpColumnInfo[] {
+            new DevExpress.XtraEditors.Controls.LookUpColumnInfo("CharacterName", "角色名")});
+            this.CharacterLookUpEdit.DisplayMember = "CharacterName";
+            this.CharacterLookUpEdit.Name = "CharacterLookUpEdit";
+            this.CharacterLookUpEdit.NullText = "[角色为空]";
             // 
             // gridColumn2
             // 
@@ -147,7 +147,7 @@
             this.Text = "用户掉落";
             ((System.ComponentModel.ISupportInitialize)(this.UserDropGridControl)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.UserDropGridView)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.AccountLookUpEdit)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.CharacterLookUpEdit)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.ItemLookUpEdit)).EndInit();
             this.ResumeLayout(false);
 
@@ -161,7 +161,7 @@
         private DevExpress.XtraGrid.Columns.GridColumn gridColumn2;
         private DevExpress.XtraGrid.Columns.GridColumn gridColumn3;
         private DevExpress.XtraGrid.Columns.GridColumn gridColumn4;
-        private DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit AccountLookUpEdit;
+        private DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit CharacterLookUpEdit;
         private DevExpress.XtraEditors.Repository.RepositoryItemLookUpEdit ItemLookUpEdit;
     }
 }
