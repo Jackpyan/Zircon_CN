@@ -30,23 +30,85 @@
     </div>
 }
 
-
-
 <section class="legacy-grid-shell">
+    <div class="game-data-bar">
+        @* 工具条放在网格外面：表格横向 / 纵向滚动时按钮不会被卷走，筛选面板也不受表格宽度限制 *@
+        <div class="radzen-grid-toolbar game-data-toolbar">
+            <div class="grid-toolbar-actions">
+                @if (_canManage)
+                {
+                    <RadzenButton Size="ButtonSize.Small" Text="新增" Icon="add" ButtonStyle="ButtonStyle.Primary" Click="AddRow"/>
+                }
+                <RadzenButton Size="ButtonSize.Small" Text="刷新" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Reload"/>
+                @if (_canManage)
+                {
+                    <RadzenButton Size="ButtonSize.Small" Text="保存数据库" Icon="save" ButtonStyle="ButtonStyle.Light" Click="SaveDatabase"/>
+                    <RadzenButton Size="ButtonSize.Small" Text="在选中行后插入" Icon="playlist_add" ButtonStyle="ButtonStyle.Light" Click="InsertAfter"
+                                  Disabled="@(SelectedItems.Count != 1 || GameServer.State != GameServerState.Stopped)"/>
+                }
+                <RadzenButton Size="ButtonSize.Small" Text="导出选中" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportSelected" Disabled="@(SelectedItems.Count == 0)"/>
+                <RadzenButton Size="ButtonSize.Small" Text="导出全部" Icon="file_download" ButtonStyle="ButtonStyle.Light" Click="ExportAll"/>
+                <label class="file-action radzen-file-action">
+                    <RadzenIcon Icon="upload_file"/>
+                    导入 JSON
+                    <InputFile OnChange="Import" accept="application/json,.json"/>
+                </label>
+            </div>
+            <div class="grid-toolbar-search">
+                <input class="grid-search" type="search" placeholder="搜索全部列…"
+                       aria-label="搜索全部列" value="@QuickSearch"
+                       @oninput="args => SetQuickSearch(args.Value?.ToString())"/>
+                <RadzenButton Size="ButtonSize.Small" ButtonStyle="@(ShowFilters ? ButtonStyle.Primary : ButtonStyle.Light)"
+                              Icon="filter_alt" Text="@FilterButtonText" Click="ToggleFilters"/>
+                @if (HasFilters)
+                {
+                    <RadzenButton Size="ButtonSize.Small" Text="清除筛选" Icon="filter_alt_off" ButtonStyle="ButtonStyle.Light" Click="ClearFilters"/>
+                    <span class="grid-filter-count">筛出 @VisibleRows.Count / @Rows.Count</span>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(Message))
+            {
+                <span class="alert @(HasError ? "danger" : "success")" role="status">@Message</span>
+            }
+        </div>
+        @if (ShowFilters)
+        {
+            <div class="grid-filter-panel">
+                @foreach (GameDataColumnDefinition column in Table.Columns)
+                {
+                    <label class="grid-filter-field">
+                        <span>@column.Title</span>
+                        @if (IsChoiceColumn(column.Field))
+                        {
+                            <select value="@GetFilter(column.Field)" aria-label="@($"{column.Title} 筛选")"
+                                    @onchange="args => SetFilter(column.Field, args.Value?.ToString())">
+                                <option value="">全部</option>
+                                @foreach (string option in DistinctChoices(column.Field))
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input value="@GetFilter(column.Field)" placeholder="@column.Title"
+                                   aria-label="@($"{column.Title} 筛选")"
+                                   @oninput="args => SetFilter(column.Field, args.Value?.ToString())"/>
+                        }
+                    </label>
+                }
+            </div>
+        }
+    </div>
 
 
-    <RadzenDataGrid @key="Table.Key" @ref="Grid" TItem="object" Data="@Rows" AllowPaging="true" PageSize="30"
-                    AllowSorting="true" AllowFiltering="true" FilterMode="FilterMode.Advanced"
-                    AllowColumnResize="true" AllowColumnReorder="true" 
+    <RadzenDataGrid @key="Table.Key" @ref="Grid" TItem="object" Data="@VisibleRows" AllowPaging="true" PageSize="30"
+                    AllowSorting="true" AllowFiltering="false"
+                    AllowColumnResize="true" AllowColumnReorder="true"
                     EditMode="DataGridEditMode.Single" RowCreate="CreateRow" RowUpdate="UpdateRow"
                     RowRender="RenderRow"
-                    Density="Density.Compact" EmptyText="暂无数据" SelectionMode="DataGridSelectionMode.Multiple"
+                    Density="Density.Compact" Class="game-data-grid" EmptyText="暂无数据" SelectionMode="DataGridSelectionMode.Multiple"
                     ShowPagingSummary="true" PagingSummaryFormat="第 {0}–{1} 条，共 {2} 条"
-                    FilterText="筛选" ApplyFilterText="应用" ClearFilterText="清除" AndOperatorText="并且" OrOperatorText="或者"
-                    EqualsText="等于" NotEqualsText="不等于" LessThanText="小于" LessThanOrEqualsText="小于或等于"
-                    GreaterThanText="大于" GreaterThanOrEqualsText="大于或等于" ContainsText="包含"
-                    DoesNotContainText="不包含" StartsWithText="开头是" EndsWithText="结尾是"
-                    IsNullText="为空" IsNotNullText="不为空" IsEmptyText="空字符串" IsNotEmptyText="非空字符串"
                     FirstPageTitle="首页" FirstPageAriaLabel="转到首页" PrevPageTitle="上一页" PrevPageAriaLabel="转到上一页"
                     NextPageTitle="下一页" NextPageAriaLabel="转到下一页" LastPageTitle="末页" LastPageAriaLabel="转到末页"
                     PageTitleFormat="第 {0} 页" PageAriaLabelFormat="转到第 {0} 页"
@@ -74,45 +136,19 @@
                 </div>
             }
         </Template>
-        <HeaderTemplate>
-            <div class="radzen-grid-toolbar">
-                @if (_canManage)
-                {
-                    <RadzenButton Size="ButtonSize.Small" Text="新增" Icon="add" ButtonStyle="ButtonStyle.Primary" Click="AddRow"/>
-                }
-                <RadzenButton Size="ButtonSize.Small" Text="刷新" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="Reload"/>
-                @if (_canManage)
-                {
-                    <RadzenButton Size="ButtonSize.Small" Text="保存数据库" Icon="save" ButtonStyle="ButtonStyle.Light" Click="SaveDatabase"/>
-                    <RadzenButton Size="ButtonSize.Small" Text="在选中行后插入" Icon="playlist_add" ButtonStyle="ButtonStyle.Light" Click="InsertAfter"
-                              Disabled="@(SelectedItems.Count != 1 || GameServer.State != GameServerState.Stopped)"/>
-                }
-                <RadzenButton Size="ButtonSize.Small" Text="导出选中" Icon="download" ButtonStyle="ButtonStyle.Light" Click="ExportSelected" Disabled="@(SelectedItems.Count == 0)"/>
-                <RadzenButton Size="ButtonSize.Small" Text="导出全部" Icon="file_download" ButtonStyle="ButtonStyle.Light" Click="ExportAll"/>
-                <label class="file-action radzen-file-action">
-                    <RadzenIcon Icon="upload_file"/>
-                    导入 JSON
-                    <InputFile OnChange="Import" accept="application/json,.json"/>
-                </label>
-                @if (!string.IsNullOrWhiteSpace(Message))
-                {
-                    <span class="alert @(HasError ? "danger" : "success")" role="status">@Message</span>
-                }
-            </div>
-        </HeaderTemplate>
         <Columns>
             <RadzenDataGridColumn TItem="object" Width="40px" Reorderable="false" Filterable="false" Sortable="false" Frozen="true">
                 <HeaderTemplate>
                     <RadzenCheckBox TabIndex="-1" TriState="false" TValue="bool?" InputAttributes="@(new Dictionary<string,object>(){ { "aria-label", "选择全部记录" }})"
-                                    Value="@(SelectedItems.Any() != true ? false : !Rows.All(i => SelectedItems.Contains(i)) ? null : Rows.Any(i => SelectedItems.Contains(i)))"
-                                    Change="@(args => SelectedItems = args == true ? Rows.ToList() : [])" />
+                                    Value="@(SelectedItems.Any() != true ? false : !VisibleRows.All(i => SelectedItems.Contains(i)) ? null : VisibleRows.Any(i => SelectedItems.Contains(i)))"
+                                    Change="@(args => SelectedItems = args == true ? VisibleRows.ToList() : [])" />
                 </HeaderTemplate>
                 <Template Context="item">
                     <RadzenCheckBox TValue="bool" Value="@SelectedItems.Contains(item)" Change="@(_ => ToggleSelection(item))"
                                     Class="grid-selection-checkbox" @onclick:stopPropagation="true"/>
                 </Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn TItem="object" Property="Index" Type="typeof(int)" Title="序号" Width="50px" Reorderable="false" Filterable="false" Sortable="false" Frozen="true"/>
+            <RadzenDataGridColumn TItem="object" Property="Index" Type="typeof(int)" Title="序号" Width="64px" Reorderable="false" Filterable="false" Sortable="false" Frozen="true"/>
             @foreach (GameDataColumnDefinition column in Table.Columns)
             {
                 Type fieldType = GetFieldType(column.Field);
@@ -123,7 +159,7 @@
                     <RadzenDataGridColumn TItem="object" Property="@column.Field" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)"
                                           SortComparer="@GameDataReferenceComparer.Instance" Filterable="false">
                         <Template Context="cell">
-                            @FormatReference(cell, column.Field)
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
                         </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
@@ -140,8 +176,11 @@
                 else if (isEnum)
                 {
                     Type enumType = Nullable.GetUnderlyingType(fieldType) ?? fieldType;
-                    <RadzenDataGridColumn TItem="object" Property="@column.Field" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)" Filterable="false">
-                        <Template Context="cell">@GetDisplayValue(cell, column.Field)</Template>
+                    <RadzenDataGridColumn TItem="object" Property="@column.Field" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)"
+                                          SortComparer="@GameDataReferenceComparer.Instance" Filterable="false">
+                        <Template Context="cell">
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
+                        </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
                             {
@@ -156,8 +195,11 @@
                 }
                 else
                 {
-                    <RadzenDataGridColumn TItem="object" Property="@column.Field" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)">
-                        <Template Context="cell">@GetDisplayValue(cell, column.Field)</Template>
+                    <RadzenDataGridColumn TItem="object" Property="@column.Field" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)"
+                                          Filterable="false">
+                        <Template Context="cell">
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
+                        </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
                             {
@@ -220,6 +262,134 @@
     private IJSObjectReference? DownloadModule;
     private string LegacyViewName => View.Title;
 
+    // ── 筛选（自己实现，不用 Radzen 自带筛选）─────────────────────────────
+    // 原因：TItem 是 object，Radzen 内置筛选（高级模式）按字段名 + 原始值比较，
+    // 引用列 / 枚举列只能关掉筛选，剩下能筛的列还得手输数字（枚举要输整数、布尔要输 True），
+    // 基本没法用。这里改成按「显示文本」筛选，与界面上看到的完全一致。
+    private string QuickSearch = string.Empty;
+    private bool ShowFilters;
+    private readonly Dictionary<string, string?> ColumnFilters = [];
+
+    /// <summary>每行各列的显示文本缓存（按对象引用），避免每次按键都反射取一遍 20 多列。</summary>
+    private readonly Dictionary<object, string[]> RowTextCache = [];
+    private readonly Dictionary<string, string[]> ChoiceCache = [];
+
+    private bool HasColumnFilters => ColumnFilters.Values.Any(value => !string.IsNullOrWhiteSpace(value));
+    private bool HasFilters => HasColumnFilters || !string.IsNullOrWhiteSpace(QuickSearch);
+
+    private string FilterButtonText => ShowFilters ? "收起筛选" : "列筛选";
+
+    private IReadOnlyList<object>? _visibleRowsCache;
+
+    /// <summary>筛选结果按渲染周期缓存一次，避免一次渲染里被多次求值（大表 1 万行时很关键）。</summary>
+    private IReadOnlyList<object> VisibleRows => _visibleRowsCache ??= BuildVisibleRows();
+
+    private IReadOnlyList<object> BuildVisibleRows()
+    {
+        if (!HasFilters) return Rows;
+
+        List<object> result = new(Rows.Count);
+        foreach (object row in Rows)
+        {
+            if (RowMatches(row)) result.Add(row);
+        }
+        return result;
+    }
+
+    /// <summary>任何影响筛选结果的动作后都要调用，下一帧重新算。</summary>
+    private void InvalidateFilters() => _visibleRowsCache = null;
+
+    private bool RowMatches(object row)
+    {
+        string[] texts = GetRowTexts(row);
+
+        for (int index = 0; index < texts.Length; index++)
+        {
+            GameDataColumnDefinition column = Table.Columns[index];
+            if (!ColumnFilters.TryGetValue(column.Field, out string? filter) || string.IsNullOrWhiteSpace(filter)) continue;
+
+            bool matched = IsChoiceColumn(column.Field)
+                ? string.Equals(texts[index], filter, StringComparison.OrdinalIgnoreCase)
+                : texts[index].Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+            if (!matched) return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(QuickSearch)) return true;
+
+        foreach (string text in texts)
+        {
+            if (text.Contains(QuickSearch, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    private string[] GetRowTexts(object row)
+    {
+        if (RowTextCache.TryGetValue(row, out string[]? cached)) return cached;
+
+        string[] texts = new string[Table.Columns.Count];
+        for (int index = 0; index < texts.Length; index++)
+        {
+            texts[index] = CellText(row, Table.Columns[index].Field);
+        }
+
+        RowTextCache[row] = texts;
+        return texts;
+    }
+
+    /// <summary>布尔与枚举列用下拉框（值域固定），其余列用文本包含。</summary>
+    private bool IsChoiceColumn(string field)
+    {
+        Type type = Nullable.GetUnderlyingType(GetFieldType(field)) ?? GetFieldType(field);
+        return type == typeof(bool) || type.IsEnum;
+    }
+
+    private string? GetFilter(string field) => ColumnFilters.GetValueOrDefault(field);
+
+    private void SetFilter(string field, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) ColumnFilters.Remove(field);
+        else ColumnFilters[field] = value;
+
+        InvalidateFilters();
+        SelectedItems = [];
+        SelectedRelations.Clear();
+    }
+
+    private void SetQuickSearch(string? value)
+    {
+        QuickSearch = value ?? string.Empty;
+        InvalidateFilters();
+        SelectedItems = [];
+        SelectedRelations.Clear();
+    }
+
+    private void ToggleFilters() => ShowFilters = !ShowFilters;
+
+    private void ClearFilters()
+    {
+        ColumnFilters.Clear();
+        QuickSearch = string.Empty;
+        InvalidateFilters();
+        SelectedItems = [];
+        SelectedRelations.Clear();
+    }
+
+    private IReadOnlyList<string> DistinctChoices(string field)
+    {
+        if (ChoiceCache.TryGetValue(field, out string[]? cached)) return cached;
+
+        string[] values = Rows.Select(row => CellText(row, field))
+            .Where(value => !string.IsNullOrWhiteSpace(value) && value != "—")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.CurrentCulture)
+            .ToArray();
+
+        ChoiceCache[field] = values;
+        return values;
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         View = ViewCatalog.Get(ViewKey);
@@ -262,6 +432,9 @@
     {
         Table = table;
         SelectedItems = [];
+        ColumnFilters.Clear();
+        QuickSearch = string.Empty;
+        _visibleRowsCache = null;
         await LoadRows();
     }
 
@@ -383,7 +556,10 @@
     }
 
     private Task ExportSelected() => Export(SelectedItems.OfType<MirDB.DBObject>().Select(item => item.Index).ToArray());
-    private Task ExportAll() => Export(null);
+
+    /// <summary>导出全部：有筛选时导出筛选结果（所见即所得），避免把看不见的行一起导出去。</summary>
+    private Task ExportAll() =>
+        Export(HasFilters ? VisibleRows.OfType<MirDB.DBObject>().Select(item => item.Index).ToArray() : null);
 
     private async Task Export(IReadOnlyCollection<int>? indices)
     {
@@ -391,9 +567,10 @@
         {
             string json = await DataSession.ExportJsonAsync(Table, indices);
             DownloadModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/downloads.js");
-            string fileName = $"{Table.ModelType.Name} - {(indices?.Count ?? Rows.Count)} - {DateTime.UtcNow:yyyy-MM-dd HH-mm-ss}.json";
+            int count = indices?.Count ?? Rows.Count;
+            string fileName = $"{Table.ModelType.Name} - {count} - {DateTime.UtcNow:yyyy-MM-dd HH-mm-ss}.json";
             await DownloadModule.InvokeVoidAsync("downloadText", fileName, json);
-            Message = $"已导出 {indices?.Count ?? Rows.Count} 行数据。";
+            Message = HasFilters ? $"已导出筛选结果 {count} 行。" : $"已导出 {count} 行数据。";
         });
     }
 
@@ -415,6 +592,9 @@
         Rows = await DataSession.ReadAsync(Table);
         SelectedItems = [];
         SelectedRelations.Clear();
+        RowTextCache.Clear();
+        ChoiceCache.Clear();
+        _visibleRowsCache = null;
     }
 
     private async Task Run(Func<string, Task> operation)
@@ -445,8 +625,9 @@
     }
 
     /// <summary>
-    /// 列宽：配置里显式指定的优先；否则按字段类型给一个「够显示内容」的固定宽度。
-    /// 不设宽度会被 Radzen 平均挤压成一排「金…」「全…」，所以必须显式给宽度；
+    /// 列宽：配置里显式指定优先；否则取「类型最小宽度」与「表头文字所需宽度」的较大值。
+    /// 只用类型定宽会让「允许随机传送」「在副本查找器中显示」这类 6~9 个汉字的标题被省略号截断，
+    /// 所以必须把表头也算进去（Radzen 表头：左右各 8px 内边距 + 20px 排序图标，中文约 14px/字）。
     /// 总宽超出容器时由底部横向滚动条拖动查看。
     /// </summary>
     private static string ColumnWidth(GameDataColumnDefinition column, Type type)
@@ -455,14 +636,37 @@
 
         Type underlying = Nullable.GetUnderlyingType(type) ?? type;
 
-        if (typeof(MirDB.DBObject).IsAssignableFrom(underlying)) return "180px";
-        if (underlying == typeof(string)) return "190px";
-        if (underlying == typeof(bool)) return "80px";
-        if (underlying.IsEnum) return "110px";
-        if (underlying == typeof(long) || underlying == typeof(int) || underlying == typeof(short) ||
-            underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal)) return "100px";
+        int minimum =
+            typeof(MirDB.DBObject).IsAssignableFrom(underlying) ? 200 :
+            underlying == typeof(string) ? 180 :
+            underlying == typeof(bool) ? 96 :
+            underlying.IsEnum ? 130 : 96;
 
-        return "130px";
+        int header = TextWidth(column.Title) + 40;
+        int width = Math.Max(minimum, header);
+
+        return $"{Math.Min(width, 280)}px";
+    }
+
+    /// <summary>粗略估算文字像素宽：中日韩字符按 14px，其余按 8px（表头字号 0.875rem）。</summary>
+    private static int TextWidth(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+
+        int width = 0;
+        foreach (char character in text)
+        {
+            width += character >= 0x2E80 ? 15 : 9;
+        }
+        return width;
+    }
+
+    /// <summary>单元格显示文本（引用列带序号，枚举/布尔走中文），筛选与渲染共用同一份结果。</summary>
+    private static string CellText(object item, string field)
+    {
+        object? value = item.GetType().GetProperty(field)?.GetValue(item);
+
+        return value is MirDB.DBObject reference ? $"{reference.Index}: {reference}" : UiText.Value(value);
     }
 
     private static string FormatReference(object item, string field)

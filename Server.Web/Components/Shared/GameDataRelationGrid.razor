@@ -55,7 +55,7 @@
             </div>
         </HeaderTemplate>
         <Columns>
-            <RadzenDataGridColumn TItem="object" Property="Index" Type="typeof(int)" Title="序号" Width="50px"
+            <RadzenDataGridColumn TItem="object" Property="Index" Type="typeof(int)" Title="序号" Width="64px"
                                   Reorderable="false" Filterable="false" Sortable="false" Frozen="true" />
             @foreach (GameDataColumnDefinition column in Relation.Columns)
             {
@@ -64,9 +64,11 @@
                 bool isEnum = (Nullable.GetUnderlyingType(fieldType) ?? fieldType).IsEnum;
                 @if (isReference)
                 {
-                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="220px" Sortable="false"
+                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)" Sortable="false"
                                           SortComparer="@GameDataReferenceComparer.Instance" Filterable="false">
-                        <Template Context="cell">@FormatReference(cell, column.Field)</Template>
+                        <Template Context="cell">
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
+                        </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
                             {
@@ -83,8 +85,11 @@
                 else if (isEnum)
                 {
                     Type enumType = Nullable.GetUnderlyingType(fieldType) ?? fieldType;
-                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="150px" Sortable="false" Filterable="false">
-                        <Template Context="cell">@GetDisplayValue(cell, column.Field)</Template>
+                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)" Sortable="false"
+                                          SortComparer="@GameDataReferenceComparer.Instance" Filterable="false">
+                        <Template Context="cell">
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
+                        </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
                             {
@@ -99,8 +104,10 @@
                 }
                 else
                 {
-                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="150px" Sortable="false">
-                        <Template Context="cell">@GetDisplayValue(cell, column.Field)</Template>
+                    <RadzenDataGridColumn TItem="object" Type="@fieldType" Title="@column.Title" Width="@ColumnWidth(column, fieldType)" Sortable="false">
+                        <Template Context="cell">
+                            <span class="grid-cell-text" title="@CellText(cell, column.Field)">@CellText(cell, column.Field)</span>
+                        </Template>
                         <EditTemplate Context="editItem">
                             @if (column.Editable && IsEditable(column.Field, fieldType))
                             {
@@ -240,4 +247,40 @@
         return value is null ? "—" : $"{value.Index}: {value}";
     }
     private static string GetDisplayValue(object item, string field) => UiText.Value(item.GetType().GetProperty(field)?.GetValue(item));
+
+    /// <summary>列宽：取「类型最小宽度」与「表头文字所需宽度」的较大值，避免中文列名被省略号截断。</summary>
+    private static string ColumnWidth(GameDataColumnDefinition column, Type type)
+    {
+        if (!string.IsNullOrWhiteSpace(column.Width)) return column.Width;
+
+        Type underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        int minimum =
+            typeof(MirDB.DBObject).IsAssignableFrom(underlying) ? 200 :
+            underlying == typeof(bool) ? 96 :
+            underlying.IsEnum ? 130 : 120;
+
+        int width = Math.Max(minimum, TextWidth(column.Title) + 40);
+
+        return $"{Math.Min(width, 280)}px";
+    }
+
+    private static int TextWidth(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+
+        int width = 0;
+        foreach (char character in text)
+        {
+            width += character >= 0x2E80 ? 15 : 9;
+        }
+        return width;
+    }
+
+    private static string CellText(object item, string field)
+    {
+        object? value = item.GetType().GetProperty(field)?.GetValue(item);
+
+        return value is MirDB.DBObject reference ? $"{reference.Index}: {reference}" : UiText.Value(value);
+    }
 }

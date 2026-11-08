@@ -280,7 +280,72 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 }
 .give-item-dialog .give-item-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-/* 数据表格：列宽按内容自适应（保证内容显示完整），超宽时用底部横向滚动条拖动查看 */
-.legacy-data-grid .rz-cell-data,
-.legacy-data-grid .rz-column-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.legacy-data-grid .rz-frozen-cell-right { box-shadow: -6px 0 8px -6px rgba(0, 0, 0, .55); }
+/* ── 数据表格（游戏数据 / 运行时数据）─────────────────────────────────────
+   1) 列名与内容一律单行 + 省略号，完整文字靠 title 悬浮提示（列宽在 C# 里按表头字数算过，
+      正常不会截断；被手动拖窄后仍能看到完整值）。
+   2) 列宽拖动条加宽热区并常显一条细线，避免「找不到拖动条」。
+   3) 工具条右侧是搜索 + 筛选，换行时不会被挤成两行字。 */
+
+.legacy-grid-shell,
+.relation-grid-shell {
+    --rz-grid-column-resizer-width: 16px;         /* 默认 8px，太细不好抓 */
+    --rz-grid-column-resizer-helper-width: 3px;
+}
+
+.legacy-grid-shell .rz-column-resizer::after,
+.relation-grid-shell .rz-column-resizer::after { background: #ffffff14; }
+
+.legacy-grid-shell .rz-column-resizer:hover::after,
+.legacy-grid-shell .rz-column-resizer:active::after,
+.relation-grid-shell .rz-column-resizer:hover::after,
+.relation-grid-shell .rz-column-resizer:active::after { background: var(--amber); }
+
+.game-data-grid .rz-cell-data > .grid-cell-text {
+    display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 横向 / 纵向滚动条加粗一点，列多的时候更好拖 */
+.game-data-grid .rz-data-grid-data {
+    scrollbar-width: thin; scrollbar-color: #3a4a4f #0b1012;
+}
+.game-data-grid .rz-data-grid-data::-webkit-scrollbar { width: 12px; height: 12px; }
+.game-data-grid .rz-data-grid-data::-webkit-scrollbar-track { background: #0b1012; }
+.game-data-grid .rz-data-grid-data::-webkit-scrollbar-thumb {
+    background: #3a4a4f; border: 2px solid #0b1012; border-radius: 6px;
+}
+.game-data-grid .rz-data-grid-data::-webkit-scrollbar-thumb:hover { background: #4f666c; }
+
+/* 网格高度：工具条移到表格外之后，把「标题区 + 工具条」占的高度扣掉，避免整页再滚一次 */
+.game-data-grid { max-height: calc(100vh - 268px); }
+
+.game-data-grid .rz-frozen-cell-right,
+.game-data-grid .rz-cell-data.rz-frozen-cell-right { box-shadow: -6px 0 8px -6px rgba(0, 0, 0, .55); }
+
+/* 工具条：左侧按钮组、右侧搜索与筛选 */
+.game-data-bar { border: 1px solid var(--line); border-bottom: 0; background: var(--panel); }
+.game-data-toolbar { gap: 8px 12px; }
+.grid-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+/* 搜索 + 筛选整组一起换行；组内不压缩，避免出现「搜索框一行、按钮又一行」的碎块 */
+.grid-toolbar-search { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; margin-left: auto; max-width: 100%; }
+.grid-search {
+    flex: 0 0 230px; width: 230px; min-height: 34px; height: 34px; padding: 0 10px;
+    color: var(--text); background: #0c1214; border: 1px solid #334044; border-radius: 3px;
+}
+.grid-search:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54d4dd16; }
+.grid-filter-count { color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
+
+/* 列筛选面板：每列一个输入框 / 下拉框，按列名标注 */
+.grid-filter-panel {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 14px; padding: 12px 12px 14px;
+    border-top: 1px solid var(--line); background: #0b1012;
+}
+.grid-filter-field { display: grid; gap: 4px; min-width: 0; color: #8fa0a4; font-size: 11px; }
+.grid-filter-field > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid-filter-field input,
+.grid-filter-field select {
+    width: 100%; min-height: 28px; height: 28px; padding: 0 6px; font-size: 12px;
+    color: #dfe8ea; background: #131b1d; border: 1px solid #2a3a3e; border-radius: 3px;
+}
+.grid-filter-field input:focus,
+.grid-filter-field select:focus { border-color: var(--cyan); box-shadow: none; }
