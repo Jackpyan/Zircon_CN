@@ -116,24 +116,36 @@
         <Template Context="parent">
             @if (Table.Relations.Count > 0 && parent is MirDB.DBObject parentObject)
             {
-                GameDataRelationDefinition selectedRelation = GetSelectedRelation(parentObject.Index);
-                <div class="hierarchy-detail-panel">
-                    @if (Table.Relations.Count > 1)
-                    {
-                        <div class="entity-switcher hierarchy-relation-tabs" role="tablist" aria-label="@($"{parentObject} 的关联数据")">
-                            @foreach (GameDataRelationDefinition candidate in Table.Relations)
-                            {
-                                <button class="@(candidate == selectedRelation ? "active" : null)" role="tab"
-                                        aria-selected="@(candidate == selectedRelation)"
-                                        @onclick="() => SelectRelation(parentObject.Index, candidate)"
-                                        @onclick:stopPropagation="true">@candidate.Title</button>
-                            }
-                        </div>
-                    }
-                    <GameDataRelationGrid @key="(Table.Key, parentObject.Index, selectedRelation.Property)"
-                                          ParentType="@Table.ModelType" ParentIndex="@parentObject.Index"
-                                          Relation="@selectedRelation" />
-                </div>
+                @* 「新增」出来还没保存的行只是内存里的临时对象，不在会话集合里，
+                   子表按序号查父记录会查不到（旧版直接抛「Sequence contains no matching element」，
+                   整页变成错误页）。这里先让玩家保存，避免动子表。 *@
+                if (!IsSaved(parentObject))
+                {
+                    <div class="hierarchy-detail-panel">
+                        <div class="grid-hint">本行尚未保存，请先点「保存」再编辑下方子表。</div>
+                    </div>
+                }
+                else
+                {
+                    GameDataRelationDefinition selectedRelation = GetSelectedRelation(parentObject.Index);
+                    <div class="hierarchy-detail-panel">
+                        @if (Table.Relations.Count > 1)
+                        {
+                            <div class="entity-switcher hierarchy-relation-tabs" role="tablist" aria-label="@($"{parentObject} 的关联数据")">
+                                @foreach (GameDataRelationDefinition candidate in Table.Relations)
+                                {
+                                    <button class="@(candidate == selectedRelation ? "active" : null)" role="tab"
+                                            aria-selected="@(candidate == selectedRelation)"
+                                            @onclick="() => SelectRelation(parentObject.Index, candidate)"
+                                            @onclick:stopPropagation="true">@candidate.Title</button>
+                                }
+                            </div>
+                        }
+                        <GameDataRelationGrid @key="(Table.Key, parentObject.Index, selectedRelation.Property)"
+                                              ParentType="@Table.ModelType" ParentIndex="@parentObject.Index"
+                                              Relation="@selectedRelation" />
+                    </div>
+                }
             }
         </Template>
         <Columns>
@@ -280,6 +292,9 @@
     private string FilterButtonText => ShowFilters ? "收起筛选" : "列筛选";
 
     private IReadOnlyList<object>? _visibleRowsCache;
+
+    /// <summary>已落库的行（引用比较）。「新增」但没保存的行不在其中，不能展开子表。</summary>
+    private HashSet<object> SavedRows = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>筛选结果按渲染周期缓存一次，避免一次渲染里被多次求值（大表 1 万行时很关键）。</summary>
     private IReadOnlyList<object> VisibleRows => _visibleRowsCache ??= BuildVisibleRows();
@@ -590,12 +605,15 @@
     private async Task LoadRows()
     {
         Rows = await DataSession.ReadAsync(Table);
+        SavedRows = new HashSet<object>(Rows, ReferenceEqualityComparer.Instance);
         SelectedItems = [];
         SelectedRelations.Clear();
         RowTextCache.Clear();
         ChoiceCache.Clear();
         _visibleRowsCache = null;
     }
+
+    private bool IsSaved(object item) => SavedRows.Contains(item);
 
     private async Task Run(Func<string, Task> operation)
     {
@@ -666,13 +684,13 @@
     {
         object? value = item.GetType().GetProperty(field)?.GetValue(item);
 
-        return value is MirDB.DBObject reference ? $"{reference.Index}: {reference}" : UiText.Value(value);
+        return value is MirDB.DBObject reference ? UiText.Reference(reference) : UiText.Value(value);
     }
 
     private static string FormatReference(object item, string field)
     {
         MirDB.DBObject? value = item.GetType().GetProperty(field)?.GetValue(item) as MirDB.DBObject;
-        return value is null ? "—" : $"{value.Index}: {value}";
+        return value is null ? "—" : UiText.Reference(value);
     }
 
     private static string GetDisplayValue(object item, string field) => UiText.Value(item.GetType().GetProperty(field)?.GetValue(item));

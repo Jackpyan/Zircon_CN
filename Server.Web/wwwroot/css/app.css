@@ -198,6 +198,8 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .nested-hierarchy-detail .relation-radzen-grid .rz-data-grid-data { min-height: 120px; max-height: 320px; }
 .relation-message { padding: 9px 14px; color: var(--green); border-bottom: 1px solid var(--line); font-size: 11px; }
 .relation-message.danger { color: #ffaaa3; }
+/* 「新增未保存的行」展开子表时的提示（旧版这里会直接 500，见 grid 展开模板） */
+.grid-hint { padding: 6px 2px; color: var(--amber); font: 11px var(--mono); }
 
 .plugin-grid { display: grid; grid-template-columns: repeat(3, minmax(250px, 1fr)); gap: 14px; }
 .plugin-card { padding: 20px; border: 1px solid var(--line); background: var(--panel); }

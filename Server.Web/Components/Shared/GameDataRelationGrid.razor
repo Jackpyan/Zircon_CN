@@ -24,20 +24,30 @@
         <Template Context="child">
             @if (Relation.Relations.Count > 0 && child is MirDB.DBObject childObject)
             {
-                <div class="hierarchy-detail-panel nested-hierarchy-detail">
-                    @foreach (GameDataRelationDefinition childRelation in Relation.Relations)
-                    {
-                        <section class="nested-relation-section">
-                            <div class="nested-relation-title">
-                                <RadzenIcon Icon="account_tree" />
-                                <span>@childRelation.Title</span>
-                            </div>
-                            <GameDataRelationGrid @key="(Relation.Property, childObject.Index, childRelation.Property)"
-                                                  ParentType="@Relation.ItemType" ParentIndex="@childObject.Index"
-                                                  Relation="@childRelation" />
-                        </section>
-                    }
-                </div>
+                @* 与主表同理：新增未保存的子项不在集合里，再往下查子表会查不到父记录。 *@
+                if (!SavedRows.Contains(childObject))
+                {
+                    <div class="hierarchy-detail-panel nested-hierarchy-detail">
+                        <div class="grid-hint">该子项尚未保存，请先保存后再展开下一级。</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="hierarchy-detail-panel nested-hierarchy-detail">
+                        @foreach (GameDataRelationDefinition childRelation in Relation.Relations)
+                        {
+                            <section class="nested-relation-section">
+                                <div class="nested-relation-title">
+                                    <RadzenIcon Icon="account_tree" />
+                                    <span>@childRelation.Title</span>
+                                </div>
+                                <GameDataRelationGrid @key="(Relation.Property, childObject.Index, childRelation.Property)"
+                                                      ParentType="@Relation.ItemType" ParentIndex="@childObject.Index"
+                                                      Relation="@childRelation" />
+                            </section>
+                        }
+                    </div>
+                }
             }
         </Template>
         <HeaderTemplate>
@@ -148,6 +158,9 @@
     [Parameter, EditorRequired] public int ParentIndex { get; set; }
 
     private IReadOnlyList<object> Rows = [];
+
+    /// <summary>已落库的子项（引用比较），只有它们能继续往下展开；新增未保存的不能。</summary>
+    private HashSet<object> SavedRows = new(ReferenceEqualityComparer.Instance);
     private RadzenDataGrid<object>? Grid;
     private string? Message;
     private bool HasError;
@@ -216,7 +229,14 @@
     /// <summary>供 Run(...) 内部使用：抛出的异常由 Run 捕获并转成提示，不会中断 Blazor 电路。</summary>
     private void DenyManage() => throw new InvalidOperationException("权限不足：修改关联数据需要「管理员」身份。");
 
-    private async Task Load() => Rows = await DataSession.ReadRelationAsync(ParentType, ParentIndex, Relation);
+    private async Task Load() => Rows = await LoadRowsAsync();
+
+    private async Task<IReadOnlyList<object>> LoadRowsAsync()
+    {
+        IReadOnlyList<object> rows = await DataSession.ReadRelationAsync(ParentType, ParentIndex, Relation);
+        SavedRows = new HashSet<object>(rows, ReferenceEqualityComparer.Instance);
+        return rows;
+    }
 
     private async Task Run(Func<string, Task> operation)
     {
@@ -244,7 +264,7 @@
     private static string FormatReference(object item, string field)
     {
         MirDB.DBObject? value = item.GetType().GetProperty(field)?.GetValue(item) as MirDB.DBObject;
-        return value is null ? "—" : $"{value.Index}: {value}";
+        return value is null ? "—" : UiText.Reference(value);
     }
     private static string GetDisplayValue(object item, string field) => UiText.Value(item.GetType().GetProperty(field)?.GetValue(item));
 
@@ -281,6 +301,6 @@
     {
         object? value = item.GetType().GetProperty(field)?.GetValue(item);
 
-        return value is MirDB.DBObject reference ? $"{reference.Index}: {reference}" : UiText.Value(value);
+        return value is MirDB.DBObject reference ? UiText.Reference(reference) : UiText.Value(value);
     }
 }

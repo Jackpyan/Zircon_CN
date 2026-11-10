@@ -1,6 +1,7 @@
 ﻿using Client.Controls;
 using Client.Envir;
 using Library;
+using Shared.Rendering;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -20,8 +21,11 @@ namespace Client.Scenes.Views
         private readonly DXImageControl _100 = null;
         private readonly DXImageControl _10 = null;
         private readonly DXImageControl _1 = null;
-        private readonly DXImageControl _colon = null;
         private readonly int _libraryOffset = 6580;
+
+        // 库里没有冒号帧：6580~6589 是数字 0~9，6590 是韩文「호」（第…号）、6591 是「Go!」。
+        // 原版把 6590 当冒号用，显示出来就是两个字叠在一起，所以这里改成自绘两点。
+        private bool _colonVisible = false;
 
         private readonly List<ClientTimer> ActiveTimers = new();
         private ClientTimer CurrentTimer = null;
@@ -70,17 +74,6 @@ namespace Client.Scenes.Views
                 Visible = false
             };
 
-            _colon = new DXImageControl
-            {
-                Parent = this,
-                Index = _libraryOffset + 10,
-                LibraryFile = LibraryFile.GameInter,
-                PassThrough = true,
-                UseOffSet = true,
-                Location = new Point(50, 70),
-                Visible = false
-            };
-
             _10 = new DXImageControl
             {
                 Parent = this,
@@ -119,7 +112,9 @@ namespace Client.Scenes.Views
 
                     _timerStarted = true;
                     _timerTime = CEnvir.Now.AddSeconds(1);
-                    _timerCounter = (int)(CurrentTimer.RelativeTime - CEnvir.Now).TotalSeconds;
+                    // 直接用包里下发的整数秒：再用 (RelativeTime - Now) 取整会再丢 1 秒，
+                    // 叠加服务端下发时的截断，倒计时会比真实到期早 2~3 秒归零。
+                    _timerCounter = CurrentTimer.Seconds;
 
                     UpdateTimeGraphic();
                 }
@@ -133,6 +128,7 @@ namespace Client.Scenes.Views
             if (_timerCounter < 0 && _eggTimer != null)
             {
                 _1000.Visible = _100.Visible = _10.Visible = _1.Visible = false;
+                _colonVisible = false;
                 _eggTimer.Loop = false;
                 _timerStarted = false;
 
@@ -209,6 +205,8 @@ namespace Client.Scenes.Views
 
             Visible = true;
             _1000.Visible = _100.Visible = _10.Visible = _1.Visible = true;
+            // 冒号画在第二位与第三位之间，与数字同高
+            _colonVisible = true;
 
             switch (CurrentTimer.Type)
             {
@@ -230,6 +228,38 @@ namespace Client.Scenes.Views
             _eggTimer.Loop = true;
         }
 
+        protected override void DrawControl()
+        {
+            base.DrawControl();
+
+            if (!_colonVisible) return;
+
+            Rectangle area = Rectangle.Intersect(ClipArea, DisplayArea);
+            if (area.Width <= 0 || area.Height <= 0) return;
+
+            // 数字帧 6582 实测 24x32、偏移 (-24,-16)，控件位置 (50,70) → 数字占位 X1~25 / X51~75、Y54~86。
+            // 冒号落在中间空隙：X 34~38，两点 Y 59~63 / 75~79，中点对齐数字中线。
+            float oldOpacity = RenderingPipelineManager.GetOpacity();
+            RenderingPipelineManager.SetOpacity(Opacity);
+
+            FillColonDot(area, DisplayArea.X + 34, DisplayArea.Y + 59);
+            FillColonDot(area, DisplayArea.X + 34, DisplayArea.Y + 75);
+
+            RenderingPipelineManager.SetOpacity(oldOpacity);
+        }
+
+        private static void FillColonDot(Rectangle clip, int x, int y)
+        {
+            const int size = 5;
+
+            Rectangle dot = Rectangle.Intersect(new Rectangle(x, y, size, size), clip);
+            if (dot.Width <= 0 || dot.Height <= 0) return;
+
+            // 与数字同色系：主体取字身中调，顶边一像素高光
+            RenderingPipelineManager.FillRectangle(dot, Color.FromArgb(255, 226, 196, 126));
+            RenderingPipelineManager.FillRectangle(new Rectangle(dot.X, dot.Y, dot.Width, 1), Color.FromArgb(255, 255, 245, 214));
+        }
+
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
@@ -238,6 +268,7 @@ namespace Client.Scenes.Views
 
             _timerStarted = false;
             _timerCounter = 0;
+            _colonVisible = false;
             CurrentTimer = null;
             ActiveTimers.Clear();
 
@@ -255,9 +286,6 @@ namespace Client.Scenes.Views
 
             if (_1 != null && !_1.IsDisposed)
                 _1.Dispose();
-
-            if (_colon != null && !_colon.IsDisposed)
-                _colon.Dispose();
         }
     }
 

@@ -55,7 +55,8 @@
                     NextPageTitle="下一页" NextPageAriaLabel="转到下一页" LastPageTitle="末页" LastPageAriaLabel="转到末页"
                     PageTitleFormat="第 {0} 页" PageAriaLabelFormat="转到第 {0} 页">
         <Columns>
-            <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Timestamp" Title="时间" Width="185px" Frozen="true" />
+            <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Timestamp" Title="时间" Width="185px" Frozen="true"
+                                  FormatString="{0:yyyy-MM-dd HH:mm:ss}" />
             <RadzenDataGridColumn TItem="AdminAuditEntry" Property="User" Title="操作者" Width="150px" />
             <RadzenDataGridColumn TItem="AdminAuditEntry" Property="Role" Title="身份" Width="130px">
                 <Template Context="entry">@UiText.AuditRole(entry.Role)</Template>

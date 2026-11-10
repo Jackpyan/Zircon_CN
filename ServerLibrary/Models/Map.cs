@@ -598,6 +598,11 @@ namespace Server.Models
 
                 Map map = SEnvir.GetMap(movement.DestinationRegion.Map, Map.Instance, Map.InstanceSequence);
 
+                // 副本里踩到「目标地图不在本实例」的连线（出口门），退回外部世界地图。
+                // 否则 GetMap 会去实例字典里找这张图、找不到返回 null，玩家就卡在副本里出不去。
+                if (map == null && Map.Instance != null)
+                    map = SEnvir.GetMap(movement.DestinationRegion.Map, null, 0);
+
                 if (movement.NeedInstance != null)
                 {
                     if (ob.Race != ObjectType.Player) break;

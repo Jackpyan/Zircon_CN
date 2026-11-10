@@ -49,7 +49,7 @@ namespace Server.Envir
 
         public static void Log(string log, bool hardLog = true)
         {
-            log = string.Format("[{0:F}]: {1}", Time.Now, log);
+            log = string.Format("[{0:yyyy-MM-dd HH:mm:ss}]: {1}", Time.LocalNow, log);
 
             if (UseLogConsole)
             {
@@ -71,7 +71,7 @@ namespace Server.Envir
         /// <summary>停服阶段直接落盘：此时日志队列线程已退出，普通 Log 会丢失。</summary>
         public static void LogShutdown(string log)
         {
-            string line = string.Format("[{0:F}]: [停服] {1}", Time.Now, log);
+            string line = string.Format("[{0:yyyy-MM-dd HH:mm:ss}]: [停服] {1}", Time.LocalNow, log);
 
             try
             {
@@ -87,7 +87,7 @@ namespace Server.Envir
 
         public static void LogChat(string log)
         {
-            log = string.Format("[{0:F}]: {1}", Time.Now, log);
+            log = string.Format("[{0:yyyy-MM-dd HH:mm:ss}]: {1}", Time.LocalNow, log);
 
             if (DisplayChatLogs.Count < 500)
                 DisplayChatLogs.Enqueue(log);
@@ -4681,8 +4681,10 @@ namespace Server.Envir
                     switch (instance.Type)
                     {
                         case InstanceType.Guild:
+                        case InstanceType.Castle:
+                            // 行会 / 城堡副本的冷却归行会：GetInstance 进入时查的也是 GuildCooldown。
                             var character = GetCharacter(user);
-                            var guildName = character.Account?.GuildMember?.Guild.GuildName;
+                            var guildName = character?.Account?.GuildMember?.Guild.GuildName;
                             if (guildName != null && !instance.GuildCooldown.ContainsKey(guildName))
                                 instance.GuildCooldown.Add(guildName, cooldown);
                             break;

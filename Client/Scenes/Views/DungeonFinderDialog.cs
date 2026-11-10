@@ -22,6 +22,7 @@ namespace Client.Scenes.Views
         public DXTabControl TabControl;
 
         public DXTab DungeonTab, RaidTab;
+        public DXControl FilterPanel;
         public DXTextBox DungeonNameBox;
         public DXComboBox SortBox;
         public DXButton SearchButton;
@@ -105,7 +106,7 @@ namespace Client.Scenes.Views
                 Border = true,
             };
 
-            DXControl filterPanel = new DXControl
+            DXControl filterPanel = FilterPanel = new DXControl
             {
                 Parent = DungeonTab,
                 Size = new Size(DungeonTab.Size.Width - 20, 26),
@@ -252,6 +253,9 @@ namespace Client.Scenes.Views
             JoinButton.MouseClick += (o, e) => JoinInstance();
 
             #endregion
+
+            // 「副本」与「团队副本」共用同一套列表控件，切页签时搬过去并按分类重新筛选。
+            TabControl.SelectedTabChanged += (o, e) => MoveListToSelectedTab();
         }
 
         #region Methods
@@ -306,6 +310,10 @@ namespace Client.Scenes.Views
 
                 //if (filter != null && !info.Filter.Contains(filter)) continue;
 
+                // 「副本」页签只放单人 / 组队，「团队副本」页签只放行会 / 城堡。
+                bool raid = IsRaidInstance(info);
+                if (raid != (TabControl.SelectedTab == RaidTab)) continue;
+
                 if (!string.IsNullOrEmpty(DungeonNameBox.TextBox.Text) && info.Name.IndexOf(DungeonNameBox.TextBox.Text, StringComparison.OrdinalIgnoreCase) < 0) continue;
 
                 DungeonSearchResults.Add(info);
@@ -325,6 +333,27 @@ namespace Client.Scenes.Views
             }
 
             RefreshDungeonList();
+        }
+
+        /// <summary>行会 / 城堡副本归到「团队副本」页签，单人 / 组队归到「副本」页签。</summary>
+        private static bool IsRaidInstance(InstanceInfo info) => info.Type is InstanceType.Guild or InstanceType.Castle;
+
+        /// <summary>切换页签时把共用列表控件搬到当前页签，并按该页签的分类重新筛选。</summary>
+        private void MoveListToSelectedTab()
+        {
+            DXTab tab = TabControl.SelectedTab;
+
+            if (tab == null || FilterPanel == null || FilterPanel.Parent == tab) return;
+
+            FilterPanel.Parent = tab;
+            DungeonScrollBar.Parent = tab;
+
+            foreach (DungeonRow row in DungeonRows)
+                row.Parent = tab;
+
+            SelectedDungeonRow = null;
+
+            DungeonSearch();
         }
 
         public void RefreshDungeonList()
@@ -364,6 +393,7 @@ namespace Client.Scenes.Views
             if (instance.ConnectRegion == null)
             {
                 GameScene.Game.ReceiveChat(CEnvir.Language.DungeonRegionNotConfigured, MessageType.System);
+                return;
             }
 
             if (instance.MinPlayerLevel > 0 && MapObject.User.Level < instance.MinPlayerLevel || instance.MaxPlayerLevel > 0 && MapObject.User.Level > instance.MaxPlayerLevel)
@@ -417,7 +447,9 @@ namespace Client.Scenes.Views
             }
             else if (instance.Type == InstanceType.Castle)
             {
-                if (GameScene.Game.GuildBox.GuildInfo == null || !GameScene.Game.CastleOwners.Any(x => x.Value == GameScene.Game.GuildBox.GuildInfo.GuildName))
+                // 只拦「完全没有行会」；有行会但没城堡的情况交给服务端判定，
+                // 否则会和服务端共用「你必须加入行会。」这句，把「没城堡」也说成「没行会」。
+                if (GameScene.Game.GuildBox.GuildInfo == null)
                 {
                     GameScene.Game.ReceiveChat(CEnvir.Language.DungeonInGuild, MessageType.System);
                     return;

@@ -255,6 +255,10 @@ public static class UiText
         ["Plugin.SetEnabled"] = "修改插件启用状态", ["GMCommand"] = "GM 命令"
     };
 
+    /// <summary>ToString 不可用时依次尝试的名称属性（覆盖未重写 ToString 的模型）。</summary>
+    private static readonly string[] ReferenceNameProperties =
+        ["Name", "Description", "Title", "FileName", "MonsterName", "NPCName", "ItemName", "QuestName", "SetName"];
+
     public static string GameDataField(string field) => GameDataFields.GetValueOrDefault(field, SplitIdentifier(field));
     public static string ConfigSection(string section) => ConfigSections.GetValueOrDefault(section, section);
     public static string ConfigField(string field) => ConfigFields.GetValueOrDefault(field, SplitIdentifier(field));
@@ -320,7 +324,35 @@ public static class UiText
     {
         if (value is null) return "—";
         if (value is bool boolean) return boolean ? "是" : "否";
+        if (value is MirDB.DBObject reference) return Reference(reference);
         return value.GetType().IsEnum ? EnumValue(value.GetType(), value.ToString() ?? string.Empty) : value.ToString() ?? "—";
+    }
+
+    /// <summary>引用列的显示文本：序号 + 业务名称。</summary>
+    public static string Reference(MirDB.DBObject value) => $"{value.Index}: {ReferenceName(value)}";
+
+    /// <summary>
+    /// 引用对象的可读名称。不少模型仍是 object.ToString 默认实现（MapInfo 会输出
+    /// LibrarySystemModels.MapInfo），直接把类型名展示给使用者没有意义，这里统一收敛。
+    /// </summary>
+    public static string ReferenceName(MirDB.DBObject value)
+    {
+        if (value is Library.SystemModels.MapInfo map)
+        {
+            if (!string.IsNullOrWhiteSpace(map.Description)) return map.Description;
+            if (!string.IsNullOrWhiteSpace(map.FileName)) return map.FileName;
+        }
+
+        string text = value.ToString() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(text) && text != value.GetType().FullName && text != value.GetType().Name) return text;
+
+        foreach (string property in ReferenceNameProperties)
+        {
+            if (value.GetType().GetProperty(property)?.GetValue(value) is string candidate && !string.IsNullOrWhiteSpace(candidate))
+                return candidate;
+        }
+
+        return $"#{value.Index}";
     }
 
     public static string EnumValue(Type enumType, string name)

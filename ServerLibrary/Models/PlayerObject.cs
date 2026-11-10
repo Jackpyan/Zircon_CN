@@ -17480,7 +17480,7 @@ namespace Server.Models
                             return (null, InstanceResult.NotInGuild);
 
                         if (Character.Account.GuildMember.Guild.Castle == null)
-                            return (null, InstanceResult.NotInGuild);
+                            return (null, InstanceResult.NotInCastle);
 
                         if (instance.GuildCooldown.TryGetValue(Character.Account.GuildMember.Guild.GuildName, out DateTime cooldown))
                         {
@@ -17606,7 +17606,9 @@ namespace Server.Models
 
         public void SetTimer(string key, DateTime expiry)
         {
-            var seconds = Math.Max(0, (int)(expiry - SEnvir.Now).TotalSeconds);
+            // 向上取整：截断会让客户端一开始就少 1 秒，配合 1 秒刷新节拍，
+            // 玩家会看到「还剩 2~3 秒」时人已经被传出副本。
+            var seconds = Math.Max(0, (int)Math.Ceiling((expiry - SEnvir.Now).TotalSeconds));
 
             Enqueue(new S.SetTimer { Key = key, Type = 0, Seconds = seconds });
         }
@@ -17627,7 +17629,7 @@ namespace Server.Models
                     break;
                 case InstanceResult.SafeZoneOnly:
                     {
-                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceSafeZoneOnly, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceSafeZoneOnly, MessageType.System);
                     }
                     break;
                 case InstanceResult.NotInGroup:
@@ -17677,13 +17679,14 @@ namespace Server.Models
                     break;
                 case InstanceResult.UserCooldown:
                     {
-                        var cooldown = instance.UserCooldown[Name];
+                        // 冷却时间内部按 UTC 存，显示给玩家时换成服务器本地时间。
+                        var cooldown = instance.UserCooldown[Name].ToLocalTime();
                         Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceUserCooldown, cooldown), MessageType.System);
                     }
                     break;
                 case InstanceResult.GuildCooldown:
                     {
-                        var cooldown = instance.GuildCooldown[Character.Account.GuildMember.Guild.GuildName];
+                        var cooldown = instance.GuildCooldown[Character.Account.GuildMember.Guild.GuildName].ToLocalTime();
                         Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceGuildCooldown, cooldown), MessageType.System);
                     }
                     break;

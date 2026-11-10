@@ -106,7 +106,7 @@ public sealed class GameDataSessionService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            DBObject parent = GetObjects(parentType).Single(item => item.Index == parentIndex);
+            DBObject parent = FindParent(parentType, parentIndex);
             return GetRelation(parent, relation).Cast<object>().ToArray();
         }
         finally { _gate.Release(); }
@@ -119,7 +119,7 @@ public sealed class GameDataSessionService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            DBObject parent = GetObjects(parentType).Single(item => item.Index == parentIndex);
+            DBObject parent = FindParent(parentType, parentIndex);
             IBindingList list = GetRelation(parent, relation);
             DBObject target = (DBObject)(list.AddNew() ?? throw new InvalidOperationException("无法创建关联记录。"));
             CopyAllowedValues(relation.ItemType, relation.Columns, values, target);
@@ -143,7 +143,7 @@ public sealed class GameDataSessionService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            DBObject parent = GetObjects(parentType).Single(item => item.Index == parentIndex);
+            DBObject parent = FindParent(parentType, parentIndex);
             DBObject target = GetRelation(parent, relation).Cast<DBObject>().Single(item => item.Index == values.Index);
             CopyAllowedValues(relation.ItemType, relation.Columns, values, target);
             ValidateObject(target);
@@ -166,7 +166,7 @@ public sealed class GameDataSessionService : IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            DBObject parent = GetObjects(parentType).Single(item => item.Index == parentIndex);
+            DBObject parent = FindParent(parentType, parentIndex);
             IBindingList list = GetRelation(parent, relation);
             DBObject target = list.Cast<DBObject>().Single(item => item.Index == childIndex);
             if (relation.Aggregate) target.Delete();
@@ -371,6 +371,7 @@ public sealed class GameDataSessionService : IDisposable
                 BaseEventAction when field == nameof(BaseEventAction.RegionParameter1) => regions.Where(IsEventRegion),
                 PlayerEventTrigger when field == nameof(PlayerEventTrigger.RegionParameter1) => regions.Where(IsEventRegion),
                 MonsterEventTrigger when field == nameof(MonsterEventTrigger.RegionParameter1) => regions.Where(IsEventRegion),
+                InstanceInfo instance when field == nameof(InstanceInfo.ConnectRegion) => FilterInstanceConnectRegions(regions, instance),
                 _ => regions
             };
         }
@@ -389,8 +390,24 @@ public sealed class GameDataSessionService : IDisposable
         }
 
         return options
-            .Select(item => new GameDataReferenceOption(item.Index, $"{item.Index}: {item}", item))
+            .Select(item => new GameDataReferenceOption(item.Index, UiText.Reference(item), item))
             .ToArray();
+    }
+
+    /// <summary>
+    /// 实例的「连接区域」必须落在该实例 Maps 子表里的地图上，否则 SEnvir.GetMap 取不到实例地图、Teleport 直接失败（NoMap）。
+    /// 一个地图都还没配时不加限制，避免先选区域再补地图的操作顺序被卡住。
+    /// </summary>
+    private static IEnumerable<MapRegion> FilterInstanceConnectRegions(IEnumerable<MapRegion> regions, InstanceInfo instance)
+    {
+        HashSet<MapInfo>? maps = instance.Maps?
+            .Where(item => item.Map is not null)
+            .Select(item => item.Map)
+            .ToHashSet();
+
+        if (maps is null || maps.Count == 0) return regions;
+
+        return regions.Where(item => item.Map is not null && maps.Contains(item.Map));
     }
 
     private IEnumerable<MapRegion> FilterMiningRegions(
@@ -478,6 +495,11 @@ public sealed class GameDataSessionService : IDisposable
         session.Initialize(Assembly.GetAssembly(typeof(ItemInfo))!, Assembly.GetAssembly(typeof(AccountInfo))!);
         return session;
     }
+
+    private DBObject FindParent(Type parentType, int parentIndex) =>
+        GetObjects(parentType).SingleOrDefault(item => item.Index == parentIndex) ??
+        throw new InvalidOperationException(
+            $"父记录 {parentType.Name} #{parentIndex} 不存在（该行可能尚未保存），请先保存父记录再操作子表。");
 
     private IEnumerable<DBObject> GetObjects(Type modelType)
     {

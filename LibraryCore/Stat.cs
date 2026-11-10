@@ -516,25 +516,25 @@ namespace Library
         [StatDescription(Title = "魔法值", Format = "{0:+#0;-#0;#0}", Mode = StatType.Default)]
         Mana,
 
-        [StatDescription(Title = "AC", Format = "{0}-0", Mode = StatType.Min, MinStat = MinAC, MaxStat = MaxAC)]
+        [StatDescription(Title = "物理防御", Format = "{0}-0", Mode = StatType.Min, MinStat = MinAC, MaxStat = MaxAC)]
         MinAC,
-        [StatDescription(Title = "AC", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinAC, MaxStat = MaxAC)]
+        [StatDescription(Title = "物理防御", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinAC, MaxStat = MaxAC)]
         MaxAC,
-        [StatDescription(Title = "MR", Format = "{0}-0", Mode = StatType.Min, MinStat = MinMR, MaxStat = MaxMR)]
+        [StatDescription(Title = "魔法防御", Format = "{0}-0", Mode = StatType.Min, MinStat = MinMR, MaxStat = MaxMR)]
         MinMR,
-        [StatDescription(Title = "MR", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinMR, MaxStat = MaxMR)]
+        [StatDescription(Title = "魔法防御", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinMR, MaxStat = MaxMR)]
         MaxMR,
-        [StatDescription(Title = "DC", Format = "{0}-0", Mode = StatType.Min, MinStat = MinDC, MaxStat = MaxDC)]
+        [StatDescription(Title = "破坏力", Format = "{0}-0", Mode = StatType.Min, MinStat = MinDC, MaxStat = MaxDC)]
         MinDC,
-        [StatDescription(Title = "DC", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinDC, MaxStat = MaxDC)]
+        [StatDescription(Title = "破坏力", Format = "{0}-{1}", Mode = StatType.Max, MinStat = MinDC, MaxStat = MaxDC)]
         MaxDC,
-        [StatDescription(Title = "MC", Format = "{0}-0", Mode = StatType.SpellPower, MinStat = MinMC, MaxStat = MaxMC)]
+        [StatDescription(Title = "自然魔法", Format = "{0}-0", Mode = StatType.SpellPower, MinStat = MinMC, MaxStat = MaxMC)]
         MinMC,
-        [StatDescription(Title = "MC", Format = "{0}-{1}", Mode = StatType.SpellPower, MinStat = MinMC, MaxStat = MaxMC)]
+        [StatDescription(Title = "自然魔法", Format = "{0}-{1}", Mode = StatType.SpellPower, MinStat = MinMC, MaxStat = MaxMC)]
         MaxMC,
-        [StatDescription(Title = "SC", Format = "{0}-0", Mode = StatType.SpellPower, MinStat = MinSC, MaxStat = MaxSC)]
+        [StatDescription(Title = "灵魂魔法", Format = "{0}-0", Mode = StatType.SpellPower, MinStat = MinSC, MaxStat = MaxSC)]
         MinSC,
-        [StatDescription(Title = "SC", Format = "{0}-{1}", Mode = StatType.SpellPower, MinStat = MinSC, MaxStat = MaxSC)]
+        [StatDescription(Title = "灵魂魔法", Format = "{0}-{1}", Mode = StatType.SpellPower, MinStat = MinSC, MaxStat = MaxSC)]
         MaxSC,
 
         [StatDescription(Title = "准确", Format = "{0:+#0;-#0;#0}", Mode = StatType.Default)]
@@ -629,7 +629,7 @@ namespace Library
         [StatDescription(Title = "伤害反射", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         ReflectDamage,
 
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "武器元素", Mode = StatType.None)]
         WeaponElement,
         [StatDescription(Title = "暂时免除罪恶值。", Mode = StatType.Text)]
         Redemption,
@@ -666,7 +666,7 @@ namespace Library
         [StatDescription(Title = "全服喊话不受等级限制", Mode = StatType.Text)]
         GlobalShout,
 
-        [StatDescription(Title = "MC", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
+        [StatDescription(Title = "自然魔法", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         MCPercent,
 
         [StatDescription(Title = "审判几率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
@@ -702,16 +702,16 @@ namespace Library
         AvailableHuntGoldCap,
         [StatDescription(Title = "复活冷却时间", Mode = StatType.Time)]
         ItemReviveTime,
-        [StatDescription(Title = "最大精炼成功率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
+        [StatDescription(Title = "精炼成功率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         MaxRefineChance,
 
         [StatDescription(Title = "宠物背包空间", Format = "{0:+#0;-#0;#0}", Mode = StatType.Default)]
         CompanionInventory,
         [StatDescription(Title = "宠物背包负重", Format = "{0:+#0;-#0;#0}", Mode = StatType.Default)]
         CompanionBagWeight,
-        [StatDescription(Title = "DC", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
+        [StatDescription(Title = "破坏力", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         DCPercent,
-        [StatDescription(Title = "SC", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
+        [StatDescription(Title = "灵魂魔法", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         SCPercent,
         [StatDescription(Title = "宠物饥饿度", Format = "{0:+#0;-#0;#0}", Mode = StatType.Default)]
         CompanionHunger,
@@ -754,16 +754,16 @@ namespace Library
         [StatDescription(Title = "普通怪物基础生命值", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         MonsterHealth,
 
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "物品索引", Mode = StatType.None)]
         ItemIndex,
 
         [StatDescription(Title = "提高宠物拾取物品的能力。", Mode = StatType.Text)]
         CompanionCollection,
         [StatDescription(Title = "护身戒指", Mode = StatType.Text)]
         ProtectionRing,
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "清除戒指", Mode = StatType.None)]
         ClearRing,
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "传送戒指", Mode = StatType.None)]
         TeleportRing,
 
         [StatDescription(Title = "基础经验倍率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
@@ -793,7 +793,7 @@ namespace Library
         [StatDescription(Title = "普通怪物基础生命值上限", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         MaxMonsterHealth,
 
-        [StatDescription(Title = "暴击伤害（PvE）", Format = "x{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
+        [StatDescription(Title = "暴击伤害（对怪物）", Format = "x{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         CriticalDamage,
 
         [StatDescription(Title = "经验", Format = "{0}", Mode = StatType.Default)]
@@ -825,9 +825,9 @@ namespace Library
         [StatDescription(Title = "闪避几率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         EvasionChance,
 
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "无视隐身", Mode = StatType.None)]
         IgnoreStealth,
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "足球服动作几率", Mode = StatType.None)]
         FootballArmourAction,
 
         [StatDescription(Title = "毒素抗性", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
@@ -857,20 +857,20 @@ namespace Library
         [StatDescription(Title = "你与另一名玩家处于灵魂绑定状态。", Mode = StatType.Text, UsageHint = "Used in Soul Resonance to tie together 2 players HP")]
         SoulResonance,
 
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "声望", Mode = StatType.None)]
         Fame,
 
         [StatDescription(Title = "元素之剑", Format = "{0}", Mode = StatType.Text, UsageHint = "Used in Elemental Swords to track remaining swords")]
         ElementalSwords,
 
-        [StatDescription(Mode = StatType.None, ServerOnly = true)]
+        [StatDescription(Title = "游荡距离", Mode = StatType.None, ServerOnly = true)]
         RoamDistance,
 
-        [StatDescription(Mode = StatType.None, ServerOnly = true, UsageHint = "Monsters with this stat provoke vengeance in eligible living monsters in the same dungeon when they die.")]
+        [StatDescription(Title = "复仇来源", Mode = StatType.None, ServerOnly = true, UsageHint = "Monsters with this stat provoke vengeance in eligible living monsters in the same dungeon when they die.")]
         VengeanceSource,
-        [StatDescription(Mode = StatType.None, ServerOnly = true, UsageHint = "Percentage added to this monster's combat stats for each Vengeance Source that dies while this monster is alive in the same dungeon.")]
+        [StatDescription(Title = "复仇加成", Mode = StatType.None, ServerOnly = true, UsageHint = "Percentage added to this monster's combat stats for each Vengeance Source that dies while this monster is alive in the same dungeon.")]
         VengeancePercent,
-        [StatDescription(Title = "Vengeance Response Chance", Format = "{0}%", Mode = StatType.Default, ServerOnly = true, UsageHint = "Percentage chance that this monster moves toward a nearby Vengeance Source when it dies and grants a stack.")]
+        [StatDescription(Title = "复仇响应几率", Format = "{0}%", Mode = StatType.Default, ServerOnly = true, UsageHint = "Percentage chance that this monster moves toward a nearby Vengeance Source when it dies and grants a stack.")]
         VengeanceResponseChance,
 
         [StatDescription(Title = "合成成功率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
@@ -891,13 +891,13 @@ namespace Library
         [StatDescription(Title = "探测几率", Format = "{0:+#0%;-#0%;#0%}", Mode = StatType.Percent)]
         FinderChance,
 
-        [StatDescription(Mode = StatType.None, ServerOnly = true)]
+        [StatDescription(Title = "随机参数 1", Mode = StatType.None, ServerOnly = true)]
         Random1 = 250,
-        [StatDescription(Mode = StatType.None, ServerOnly = true)]
+        [StatDescription(Title = "随机参数 2", Mode = StatType.None, ServerOnly = true)]
         Random2,
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "计数器 1", Mode = StatType.None)]
         Counter1,
-        [StatDescription(Mode = StatType.None)]
+        [StatDescription(Title = "计数器 2", Mode = StatType.None)]
         Counter2,
 
         [StatDescription(Title = "持续时间", Mode = StatType.Time)]

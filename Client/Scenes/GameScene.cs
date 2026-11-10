@@ -4696,7 +4696,7 @@ namespace Client.Scenes
         public void ReceiveChat(string message, MessageType type, List<ClientUserItem> linkedItems = null)
         {
             if (Config.LogChat)
-                CEnvir.ChatLog.Enqueue($"[{Time.Now:F}]: {message}");
+                CEnvir.ChatLog.Enqueue($"[{Time.LocalNow:yyyy-MM-dd HH:mm:ss}]: {message}");
 
             foreach (ChatTab tab in ChatTab.Tabs)
                 tab.ReceiveChat(message, type, linkedItems);
