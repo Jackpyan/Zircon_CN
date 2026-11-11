@@ -48,6 +48,36 @@ namespace Server.Bots
             return player.CurrentLocation != before ? BotMoveResult.Moved : BotMoveResult.Blocked;
         }
 
+        /// <summary>
+        /// 朝目标**附近**迈一步（终点可以是目标周围的任一格）。
+        /// <para>
+        /// 为什么需要这个：A* 的终点是**格子**，而 NPC / 怪就站在自己那格上 ——
+        /// 那格是阻挡物，物理上永远迈不进去。于是「走向 NPC」会一直算出一条
+        /// 最后一步指向 NPC 所在格的路径，那一步必然被引擎拒绝 → 每帧都 Blocked。
+        /// </para>
+        /// <para>
+        /// 实测踩到过：假人买完药去杂货商买回城卷，伦纳德在 43 格外，
+        /// 假人连走 20 步都过不去，最后报「走不到杂货商」—— 药买到了，卷没买到。
+        /// 药店因为离出生点近，之前没暴露这个问题。
+        /// </para>
+        /// </summary>
+        public static BotMoveResult TryStepTowardsNear(PlayerObject player, Point target, int radius)
+        {
+            if (player == null || player.Dead || player.CurrentMap == null) return BotMoveResult.Blocked;
+
+            if (player.CurrentLocation == target) return BotMoveResult.Arrived;
+
+            if (!player.CanMove) return BotMoveResult.Busy;
+
+            if (!TryGetNextStepNear(player, target, radius, out Point next)) return BotMoveResult.Blocked;
+
+            Point before = player.CurrentLocation;
+
+            player.Move(Functions.DirectionFromPoint(player.CurrentLocation, next), 1);
+
+            return player.CurrentLocation != before ? BotMoveResult.Moved : BotMoveResult.Blocked;
+        }
+
         /// <summary>只算路不走路，用于「这个点到底去不去得」的预检和调试。</summary>
         public static bool TryGetNextStep(PlayerObject player, Point target, out Point next)
         {
@@ -62,6 +92,65 @@ namespace Server.Bots
             next = path[1];
 
             return true;
+        }
+
+        /// <summary>
+        /// 算「走到目标附近」的下一格：A* 的终点集合是目标周围 <paramref name="radius"/> 格内的所有可走格。
+        /// </summary>
+        public static bool TryGetNextStepNear(PlayerObject player, Point target, int radius, out Point next)
+        {
+            next = Point.Empty;
+
+            Map map = player?.CurrentMap;
+
+            if (map == null) return false;
+
+            HashSet<Point> targets = CollectWalkableAround(player, map, target, radius);
+
+            if (targets.Count == 0) return false;
+
+            if (!AutoPathRoutePlanner.TryBuildCurrentPathTo(player, targets, false, out List<Point> path)) return false;
+
+            if (path == null || path.Count < 2) return false;
+
+            next = path[1];
+
+            return true;
+        }
+
+        /// <summary>
+        /// 收集目标周围的**可走**格子。
+        /// <para>
+        /// 过滤掉阻挡格很关键：NPC 自己那格必然是阻挡的，
+        /// 不滤掉的话 A* 还是会挑中它当终点。
+        /// </para>
+        /// </summary>
+        private static HashSet<Point> CollectWalkableAround(PlayerObject player, Map map, Point target, int radius)
+        {
+            HashSet<Point> result = new HashSet<Point>();
+
+            if (radius < 0) radius = 0;
+
+            for (int x = target.X - radius; x <= target.X + radius; x++)
+            {
+                for (int y = target.Y - radius; y <= target.Y + radius; y++)
+                {
+                    Point point = new Point(x, y);
+
+                    Cell cell = map.GetCell(point);
+
+                    if (cell == null) continue;
+
+                    // 阻挡格（NPC 站的那格、墙、水）不能当终点。
+                    // checker 传玩家本人：IsBlocking 内部会读 checker.Level，
+                    // 传 null 会在隐身 Buff 分支直接 NRE。
+                    if (cell.IsBlocking(player, false)) continue;
+
+                    result.Add(point);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>

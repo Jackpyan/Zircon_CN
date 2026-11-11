@@ -1204,6 +1204,135 @@ namespace Server.DBModels
         }
         private long _BotOnlineSeconds;
 
+        /// <summary>
+        /// 假人累计成功补给次数（2026-11-11 新增，跨重启持久化）。
+        /// <para>
+        /// 只在**真的买到东西**时 +1（见 <c>BotBrain.FinishRestock</c>）。
+        /// D5 压测靠这个数量化「断药能回城买」这条闭环是否成立。
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotRestocks
+        {
+            get { return _BotRestocks; }
+            set
+            {
+                if (_BotRestocks == value) return;
+
+                var oldValue = _BotRestocks;
+                _BotRestocks = value;
+
+                OnChanged(oldValue, value, "BotRestocks");
+            }
+        }
+        private int _BotRestocks;
+
+        /// <summary>
+        /// 假人累计补给失败次数（超时 / 没钱 / 找不到药店）。
+        /// <para>
+        /// 与 <see cref="BotRestocks"/> 配对看：失败率过高说明闭环有问题。
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotRestockFails
+        {
+            get { return _BotRestockFails; }
+            set
+            {
+                if (_BotRestockFails == value) return;
+
+                var oldValue = _BotRestockFails;
+                _BotRestockFails = value;
+
+                OnChanged(oldValue, value, "BotRestockFails");
+            }
+        }
+        private int _BotRestockFails;
+
+        /// <summary>
+        /// 假人累计使用回城卷次数（衡量「瞬移回城」这条捷径的利用量）。
+        /// <para>
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotTownScrollUses
+        {
+            get { return _BotTownScrollUses; }
+            set
+            {
+                if (_BotTownScrollUses == value) return;
+
+                var oldValue = _BotTownScrollUses;
+                _BotTownScrollUses = value;
+
+                OnChanged(oldValue, value, "BotTownScrollUses");
+            }
+        }
+        private int _BotTownScrollUses;
+
+        /// <summary>
+        /// 假人累计买到回城卷的张数。
+        /// <para>
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotTownScrollBuys
+        {
+            get { return _BotTownScrollBuys; }
+            set
+            {
+                if (_BotTownScrollBuys == value) return;
+
+                var oldValue = _BotTownScrollBuys;
+                _BotTownScrollBuys = value;
+
+                OnChanged(oldValue, value, "BotTownScrollBuys");
+            }
+        }
+        private int _BotTownScrollBuys;
+
+        /// <summary>
+        /// 假人累计交易次数（卖货 / 修理各算一次）。
+        /// <para>
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotTrades
+        {
+            get { return _BotTrades; }
+            set
+            {
+                if (_BotTrades == value) return;
+
+                var oldValue = _BotTrades;
+                _BotTrades = value;
+
+                OnChanged(oldValue, value, "BotTrades");
+            }
+        }
+        private int _BotTrades;
+
+        /// <summary>
+        /// 假人累计挖取次数（鸡 / 猪 / 牛的掉落不落地，必须挖）。
+        /// <para>
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public int BotHarvests
+        {
+            get { return _BotHarvests; }
+            set
+            {
+                if (_BotHarvests == value) return;
+
+                var oldValue = _BotHarvests;
+                _BotHarvests = value;
+
+                OnChanged(oldValue, value, "BotHarvests");
+            }
+        }
+        private int _BotHarvests;
+
         public Dictionary<RequiredClass, int> CurrentRank = new();
         public Dictionary<RequiredClass, int> RankChange = new();
 

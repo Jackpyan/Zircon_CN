@@ -365,6 +365,98 @@ namespace Server.Bots
 
         #endregion
 
+        #region 杂货商（回城卷卖家）
+
+        /// <summary>
+        /// 「这个 NPC 卖不卖回城卷」的缓存。按 NPCInfo 引用做 key（Index 在建号前可能是 0）。
+        /// 12 个杂货商是静态数据，一次扫描终身有效。
+        /// </summary>
+        private static readonly Dictionary<NPCInfo, bool> ScrollShopCache = new Dictionary<NPCInfo, bool>();
+
+        /// <summary>
+        /// 在当前地图上找卖回城卷的 NPC（杂货商）。
+        /// <para>
+        /// ⚠ **杂货商与药店不是同一个 NPC** —— 实测 12 个主城里：
+        /// 药店（大卫 / 海莉 / 凯茜…）只卖药，杂货商（伦纳德 / 科里 / 赛文…）只卖卷轴火把这类，
+        /// 只有炼狱岛的拉瓦尔两个都有。所以「买药」和「买回城卷」要分别跑一趟。
+        /// </para>
+        /// </summary>
+        public static NPCObject FindScrollShop(Map map)
+        {
+            if (map?.NPCs == null) return null;
+
+            foreach (NPCObject npc in map.NPCs)
+            {
+                if (npc?.NPCInfo == null) continue;
+
+                if (IsScrollShop(npc.NPCInfo)) return npc;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 判断一个 NPC 是不是杂货商：入口页、或入口页一层按钮的目标页里，有回城卷（Shape == 2）。
+        /// </summary>
+        public static bool IsScrollShop(NPCInfo npc)
+        {
+            if (npc == null) return false;
+
+            if (ScrollShopCache.TryGetValue(npc, out bool cached)) return cached;
+
+            bool result = SellsTownScroll(npc.EntryPage);
+
+            if (!result && npc.EntryPage?.Buttons != null)
+            {
+                foreach (NPCButton button in npc.EntryPage.Buttons)
+                {
+                    if (!SellsTownScroll(button.DestinationPage)) continue;
+
+                    result = true;
+                    break;
+                }
+            }
+
+            ScrollShopCache[npc] = result;
+
+            return result;
+        }
+
+        private static bool SellsTownScroll(NPCPage page)
+        {
+            if (page?.Goods == null) return false;
+
+            foreach (NPCGood good in page.Goods)
+            {
+                if (good?.Item == null) continue;
+                if (!BotActions.IsTownScroll(good.Item)) continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 在 NPC 的入口页里找出「通往卖回城卷的买卖页」的按钮号。
+        /// 返回 -1 表示这个 NPC 不卖回城卷。
+        /// </summary>
+        public static int FindScrollButton(NPCInfo npc)
+        {
+            if (npc?.EntryPage?.Buttons == null) return -1;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                if (!SellsTownScroll(button.DestinationPage)) continue;
+
+                return button.ButtonID;
+            }
+
+            return -1;
+        }
+
+        #endregion
+
         #region 商店与修理铺
 
         /// <summary>

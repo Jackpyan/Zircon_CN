@@ -248,6 +248,19 @@ namespace Server.Envir
         public static int BotRestockBuyRed { get; set; } = 20;
         /// <summary>每次补给买多少瓶蓝药（法师/道士用，战士用不上会剩下）。</summary>
         public static int BotRestockBuyBlue { get; set; } = 10;
+        /// <summary>
+        /// 每次补给顺路买多少张回城卷（0 = 不买）。
+        /// <para>
+        /// 回城卷（ItemInfo 156，价 500）是「断药后一秒回主城」的道具：
+        /// 断药时最费时间的不是买药，是走回主城（实测 60 秒以上）。
+        /// 假人用它省下这段路，用来在城外多打一会儿怪。
+        /// </para>
+        /// <para>
+        /// 回城卷在**杂货商**处卖（药店只卖药，是两个不同的 NPC），
+        /// 所以一次回城要跑两趟：先药店买药，再杂货商买卷。
+        /// </para>
+        /// </summary>
+        public static int BotRestockBuyTownScroll { get; set; } = 2;
 
         public static void LoadVersion()
         {

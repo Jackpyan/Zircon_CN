@@ -32,6 +32,9 @@ namespace Server.Bots
         public int RestockBuyRed { get; private init; }
         public int RestockBuyBlue { get; private init; }
 
+        /// <summary>每次补给顺路买多少张回城卷（0 = 不买）。</summary>
+        public int RestockBuyTownScroll { get; private init; }
+
         public int LevelCap { get; private init; }
         public int LogLevel { get; private init; }
         public int MaxFailures { get; private init; }
@@ -59,6 +62,7 @@ namespace Server.Bots
                 RestockPotionLow = Math.Max(0, Config.BotRestockPotionLow),
                 RestockBuyRed = Math.Max(0, Config.BotRestockBuyRed),
                 RestockBuyBlue = Math.Max(0, Config.BotRestockBuyBlue),
+                RestockBuyTownScroll = Math.Max(0, Config.BotRestockBuyTownScroll),
                 LevelCap = Math.Max(0, Config.BotLevelCap),
                 LogLevel = Config.BotLogLevel,
                 MaxFailures = Math.Max(1, Config.BotMaxFailures),

@@ -202,6 +202,10 @@ Console.WriteLine();
 Console.WriteLine("掉落筛选：");
 
 ItemInfo potion = MakeItem(ItemType.Consumable, stackSize: 20);
+// 「药」的判定依据是恢复量（Stats[Health] / Stats[Mana]），MakeItem 造出来的是 0 ——
+// 必须显式设上，否则它跟回城卷一样是「有 ItemType 但没属性」的消耗品。
+potion.Stats[Stat.Health] = 30;
+potion.ItemName = "金创药";
 ItemInfo weapon = MakeItem(ItemType.Weapon, durability: 1000);
 ItemInfo junkOre = MakeItem(ItemType.Ore);
 ItemInfo flower = MakeItem(ItemType.Flower);
@@ -368,8 +372,150 @@ Check(sellableWeapon.CanSell, "武器可卖");
 Check(!nonSellable.CanSell, "部分物品不可卖");
 
 // 商店的收货类型（引擎的 NPCPage.Types）
+// 注意：药店页的 Types 含 Consumable，而药 / 回城卷的 ItemType 就是 Consumable ——
+// 这正是下面「卖货保护」要挡的东西。
 ItemInfo sellablePotion = MakeItem(ItemType.Consumable, stackSize: 10, canSell: true);
 ItemInfo sellableOre = MakeItem(ItemType.Ore, canSell: true);
+
+// ---------- 8) 回城卷 ----------
+
+Console.WriteLine();
+Console.WriteLine("回城卷（断药后瞬移回城）：");
+
+// 引擎里回城卷是 ItemType.Consumable + Shape == 2
+// （PlayerObject.ItemUse 的 case 2: Town Teleport）。
+// Shape == 3 是随机传送卷，Shape == 0 是药 —— 三者必须分得清。
+ItemInfo townScroll = MakeItem(ItemType.Consumable, stackSize: 750, canSell: true);
+townScroll.Shape = 2;
+townScroll.ItemName = "回城卷";
+
+ItemInfo randomScroll = MakeItem(ItemType.Consumable, stackSize: 750, canSell: true);
+randomScroll.Shape = 3;
+randomScroll.ItemName = "随机传送卷";
+
+Check(BotActions.IsTownScroll(townScroll), "回城卷（Shape==2）识别正确");
+Check(!BotActions.IsTownScroll(randomScroll), "随机传送卷（Shape==3）不算回城卷");
+Check(!BotActions.IsTownScroll(potion), "药（Shape==0）不算回城卷");
+Check(!BotActions.IsTownScroll((ItemInfo?)null), "空物品不算回城卷");
+Check(!BotActions.IsTownScroll(MakeItem(ItemType.Weapon)), "武器不算回城卷");
+
+// 背包里的回城卷查找与计数
+for (int i = 0; i < player.Inventory.Length; i++)
+    player.Inventory[i] = null;
+
+player.Inventory[0] = MakeUserItem(townScroll, 3);
+player.Inventory[1] = MakeUserItem(randomScroll, 5);
+player.Inventory[2] = MakeUserItem(potion, 10);
+
+Check(BotActions.FindTownScrollSlot(player) == 0, "找到背包里的回城卷");
+Check(BotActions.CountTownScroll(player) == 3, $"回城卷计数是 3（实际 {BotActions.CountTownScroll(player)}）");
+
+// 随机传送卷不能被算进去
+player.Inventory[0] = null;
+
+Check(BotActions.FindTownScrollSlot(player) == -1, "没有回城卷时返回 -1");
+Check(BotActions.CountTownScroll(player) == 0, "没有回城卷时计数是 0");
+
+// 堆叠计数：一张格子里叠 5 张也要算 5 张
+player.Inventory[0] = MakeUserItem(townScroll, 5);
+
+Check(BotActions.CountTownScroll(player) == 5, $"叠放的回城卷按张数算（实际 {BotActions.CountTownScroll(player)}）");
+
+// ---------- 9) 卖货不能把回城卷和药卖掉 ----------
+
+Console.WriteLine();
+Console.WriteLine("卖货保护（回城卷 / 药 不卖）：");
+
+// 药店页的收货类型含 Consumable，而回城卷的 ItemType 就是 Consumable 且 CanSell=true。
+// 不挡的话假人跑一趟卖货就把自己的回城卷贱卖了。
+// 这里验证 BotBrain 的「保留物品」判定。
+MethodInfo? keepItem = typeof(BotBrain).GetMethod("IsKeepItem", BindingFlags.NonPublic | BindingFlags.Static);
+
+Check(keepItem != null, "能找到 IsKeepItem 判定方法");
+
+if (keepItem != null)
+{
+    bool IsKeep(UserItem item) => (bool)(keepItem.Invoke(null, new object[] { item }) ?? false);
+
+    Check(IsKeep(MakeUserItem(townScroll)), "回城卷属于保留物品，不卖");
+    Check(IsKeep(MakeUserItem(potion)), "药属于保留物品，不卖");
+    Check(!IsKeep(MakeUserItem(sellableWeapon)), "武器不是保留物品，可以卖");
+    Check(!IsKeep(MakeUserItem(sellableOre)), "矿石不是保留物品，可以卖");
+    Check(!IsKeep(MakeUserItem(randomScroll)), "随机传送卷不是保留物品（它没有回城用途）");
+}
+
+// ---------- 10) 买药预算不能卡死 ----------
+
+Console.WriteLine();
+Console.WriteLine("买药预算（钱不够时也要买到一点）：");
+
+// 实测踩到的坑（2026-11-11）：
+// 买药的预算是「剩余金币 ÷ 还缺的瓶数」。假人有 400 金币、还缺 16 瓶 →
+// 每瓶预算 25 金币，而最便宜的金创药要 80 → 一瓶都挑不出来 → **一瓶都买不到**。
+// 表现是假人永远卡在 4 瓶药上反复空跑回城，日志里连着两次
+// 「补给结束：红 4 蓝 21，金币 400」。
+//
+// 修法：预算卡死时放宽预算，只按「买得起」挑档位。
+// 这里验证放宽后确实能挑出商品。
+
+// NPCPage / NPCGood 是 System.db 的静态数据 —— 但 DBBindingList 构造要拿 parent.Collection，
+// 所以必须走 Session.GetCollection<T>().CreateNewObject()，不能直接 new。
+NPCPage shopPage = session.GetCollection<NPCPage>().CreateNewObject();
+shopPage.DialogType = NPCDialogType.BuySell;
+
+// 一瓶回 30 血的金创药，价 80 —— 假人 3 级、52 血，上限是 max(30, 52*6/10)=31，正好够格。
+ItemInfo cheapPotion = MakeItem(ItemType.Consumable, stackSize: 100, canSell: true);
+cheapPotion.Stats[Stat.Health] = 30;
+cheapPotion.Price = 80;
+cheapPotion.ItemName = "金创药";
+
+NPCGood cheapGood = session.GetCollection<NPCGood>().CreateNewObject();
+cheapGood.Item = cheapPotion;
+cheapGood.Rate = 1M;
+cheapGood.GoodsIndex = 0;
+
+shopPage.Goods.Add(cheapGood);
+
+player.NPCPage = shopPage;
+
+// 严格预算：400 金币 ÷ 16 瓶 = 25/瓶 < 80 → 挑不出来（这正是那个坑）。
+NPCGood strictPick = BotActions.FindPotionGood(player, Stat.Health, 25, 31);
+
+Check(strictPick == null, "严格预算挑不出药（复现「一瓶都买不到」）");
+
+// 放宽预算（int.MaxValue）：应该能挑出最便宜的那档。
+NPCGood loosePick = BotActions.FindPotionGood(player, Stat.Health, int.MaxValue, 31);
+
+Check(loosePick != null, "放宽预算后能挑到药（修复后的退路）");
+
+if (loosePick != null)
+{
+    Check(loosePick.Item == cheapPotion, "挑到的是最便宜的那档药");
+
+    // 买得起的瓶数：400 / 80 = 5 瓶。
+    int affordable = Math.Min(16, 400 / Math.Max(1, loosePick.Cost));
+
+    Check(affordable == 5, $"买得起的瓶数是 5（实际 {affordable}）");
+}
+
+// 恢复量上限仍然生效：药回 250 血而假人只有 52 血上限 31 → 不该被选中。
+ItemInfo fatPotion = MakeItem(ItemType.Consumable, stackSize: 100, canSell: true);
+fatPotion.Stats[Stat.Health] = 250;
+fatPotion.Price = 2500;
+
+NPCGood fatGood = session.GetCollection<NPCGood>().CreateNewObject();
+fatGood.Item = fatPotion;
+fatGood.Rate = 1M;
+fatGood.GoodsIndex = 0;
+
+shopPage.Goods.Add(fatGood);
+
+NPCGood afterFat = BotActions.FindPotionGood(player, Stat.Health, int.MaxValue, 31);
+
+Check(afterFat?.Item == cheapPotion,
+    "恢复量超上限的贵药不会被选中（1 级号喝回 250 的药是纯浪费）");
+
+// ---------- 11) 背包容量检查 ----------
 
 Console.WriteLine();
 Console.WriteLine("────────────────────────────");

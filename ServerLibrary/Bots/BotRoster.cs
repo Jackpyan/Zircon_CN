@@ -34,6 +34,36 @@ namespace Server.Bots
         public string LastError { get; init; } = string.Empty;
         public bool Broken { get; init; }
 
+        /// <summary>
+        /// 本次在线期间成功补给的次数（D5 量化「断药能回城买」）。
+        /// <para>只在真的买到东西时 +1，与跨重启的累计值分开看。</para>
+        /// </summary>
+        public int Restocks { get; init; }
+
+        /// <summary>本次在线期间补给失败的次数。</summary>
+        public int RestockFails { get; init; }
+
+        /// <summary>本次在线期间的交易（卖货 / 修理）次数。</summary>
+        public int Trades { get; init; }
+
+        /// <summary>本次在线期间挖取的次数。</summary>
+        public int Harvests { get; init; }
+
+        /// <summary>本次在线期间使用回城卷的次数。</summary>
+        public int TownScrollUses { get; init; }
+
+        /// <summary>本次在线期间买到的回城卷张数。</summary>
+        public int TownScrollBuys { get; init; }
+
+        /// <summary>背包里的回城卷张数（存量）。</summary>
+        public int TownScrollCount { get; init; }
+
+        /// <summary>背包里的红药瓶数（存量）。</summary>
+        public int RedPotions { get; init; }
+
+        /// <summary>背包里的蓝药瓶数（存量）。</summary>
+        public int BluePotions { get; init; }
+
         /// <summary>后台单人开关状态（false = 被运营关掉，调度器不再拉起）。</summary>
         public bool Enabled { get; init; } = true;
     }
@@ -294,6 +324,15 @@ namespace Server.Bots
                 Deaths = session.Brain?.Deaths ?? 0,
                 Gold = holder.Gold,
                 MagicCount = holder.MagicCount,
+                Restocks = session.Brain?.RestockCount ?? 0,
+                RestockFails = session.Brain?.RestockFailCount ?? 0,
+                Trades = session.Brain?.TradeCount ?? 0,
+                Harvests = session.Brain?.HarvestCount ?? 0,
+                TownScrollUses = session.Brain?.TownScrollUseCount ?? 0,
+                TownScrollBuys = session.Brain?.TownScrollBuyCount ?? 0,
+                TownScrollCount = holder.TownScrollCount,
+                RedPotions = holder.RedPotions,
+                BluePotions = holder.BluePotions,
                 OnlineFor = session.IsOnline ? FormatDuration(SEnvir.Now - session.OnlineSince) : string.Empty,
                 LastError = session.LastError,
                 Broken = session.Phase == BotPhase.Broken,
@@ -495,6 +534,9 @@ namespace Server.Bots
             public int ManaPercent { get; init; }
             public long Gold { get; init; }
             public int MagicCount { get; init; }
+            public int TownScrollCount { get; init; }
+            public int RedPotions { get; init; }
+            public int BluePotions { get; init; }
 
             public static PlayerObjectHolder From(BotSession session)
             {
@@ -536,6 +578,9 @@ namespace Server.Bots
                     ManaPercent = manaPercent,
                     Gold = gold,
                     MagicCount = BotSkills.KnownCount(player),
+                    TownScrollCount = BotActions.CountTownScroll(player),
+                    RedPotions = BotActions.CountPotion(player, Stat.Health),
+                    BluePotions = BotActions.CountPotion(player, Stat.Mana),
                 };
             }
         }

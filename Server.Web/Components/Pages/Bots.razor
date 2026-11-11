@@ -145,6 +145,9 @@ else
                         <th style="width:70px;">行为</th>
                         <th style="width:56px;">技</th>
                         <th style="width:64px;">杀 / 死</th>
+                        <th style="width:96px;">补给 成/败</th>
+                        <th style="width:90px;">药 / 卷</th>
+                        <th style="width:80px;">交易/挖取</th>
                         <th style="width:60px;">在线</th>
                         <th>最近动作 / 最后错误</th>
                         <th style="width:210px;">操作</th>
@@ -165,6 +168,9 @@ else
                             <td>@StateText(row.State)</td>
                             <td>@row.MagicCount</td>
                             <td>@row.Kills / @row.Deaths</td>
+                            <td>@row.Restocks / @row.RestockFails</td>
+                            <td>@row.RedPotions / @row.TownScrollCount</td>
+                            <td>@row.Trades / @row.Harvests</td>
                             <td>@(string.IsNullOrEmpty(row.OnlineFor) ? "—" : row.OnlineFor)</td>
                             <td>
                                 @if (!string.IsNullOrEmpty(row.LastError))
@@ -238,6 +244,10 @@ else
                         <th style="width:110px;">经验</th>
                         <th style="width:64px;">累计击杀</th>
                         <th style="width:96px;">累计在线</th>
+                        <th style="width:96px;">补给 成/败</th>
+                        <th style="width:64px;">成功率</th>
+                        <th style="width:80px;">用卷/买卷</th>
+                        <th style="width:80px;">交易/挖取</th>
                         <th style="width:64px;">金币</th>
                         <th style="width:56px;">装备</th>
                         <th style="width:56px;">状态</th>
@@ -256,6 +266,10 @@ else
                             <td>@row.ExpPercent%</td>
                             <td>@row.Kills</td>
                             <td>@row.OnlineTimeText</td>
+                            <td>@row.Restocks / @row.RestockFails</td>
+                            <td>@row.RestockRateText</td>
+                            <td>@row.TownScrollUses / @row.TownScrollBuys</td>
+                            <td>@row.Trades / @row.Harvests</td>
                             <td>@row.Gold.ToString("N0")</td>
                             <td>@row.Items</td>
                             <td>@(row.Online ? "在线" : "离线")</td>

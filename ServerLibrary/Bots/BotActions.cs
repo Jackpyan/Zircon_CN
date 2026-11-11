@@ -125,6 +125,167 @@ namespace Server.Bots
             return (int)Math.Min(total, int.MaxValue);
         }
 
+        #region 回城卷（Town Scroll）
+
+        /// <summary>
+        /// 这件物品是不是「回城卷」。
+        /// <para>
+        /// 判定依据是引擎的实现，不是物品名或 Index：引擎的
+        /// <c>PlayerObject.ItemUse</c> 里 <c>ItemType.Consumable</c> 分支按
+        /// <c>item.Info.Shape</c> 分派，<c>Shape == 2</c> 才是 Town Teleport
+        /// （<c>Shape == 3</c> 是随机传送、<c>Shape == 0</c> 是药）。
+        /// 库里 <c>回城卷</c>（Index 156 / 随机传送卷 Index 155）就是按这个规则标的。
+        /// </para>
+        /// <para>
+        /// **不能靠物品名判断**：不同库的回城卷 Index 不一样，靠名字会漏。
+        /// 也不能靠 <c>Stats[Health] &gt; 0</c> 判断 —— 回城卷不回血（实测 Health/Mana 都是 0），
+        /// 靠回血判断会把「回城卷」和「药」混为一谈。
+        /// </para>
+        /// </summary>
+        public static bool IsTownScroll(UserItem item)
+        {
+            return IsTownScroll(item?.Info);
+        }
+
+        /// <inheritdoc cref="IsTownScroll(UserItem)"/>
+        public static bool IsTownScroll(ItemInfo info)
+        {
+            if (info == null) return false;
+            if (info.ItemType != ItemType.Consumable) return false;
+
+            return info.Shape == 2;
+        }
+
+        /// <summary>背包里第一张回城卷的格号，没有返回 -1。</summary>
+        public static int FindTownScrollSlot(PlayerObject player)
+        {
+            if (player?.Inventory == null) return -1;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+            {
+                UserItem item = player.Inventory[i];
+
+                if (item == null) continue;
+                if (!IsTownScroll(item)) continue;
+
+                return i;
+            }
+
+            return -1;
+        }
+
+        /// <summary>背包里的回城卷总张数（按堆叠累加，不是格数）。</summary>
+        public static int CountTownScroll(PlayerObject player)
+        {
+            if (player?.Inventory == null) return 0;
+
+            long total = 0;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+            {
+                UserItem item = player.Inventory[i];
+
+                if (!IsTownScroll(item)) continue;
+
+                total += item.Count;
+            }
+
+            return (int)Math.Min(total, int.MaxValue);
+        }
+
+        /// <summary>
+        /// 用一张回城卷瞬移回绑定主城。
+        /// <para>
+        /// 走真人同一条 <c>ItemUse</c> 路径（引擎的 <c>Shape == 2</c> 分支），
+        /// 不做任何特权传送 —— 引擎会自己校验：
+        /// <list type="bullet">
+        /// <item>所在地图 <c>AllowTT</c>（全服只有幽灵船 4 层不允许）；</item>
+        /// <item>副本 <c>Instance.AllowTeleport</c>；</item>
+        /// <item>物品冷却（<c>UseItemTime</c>，回城卷 500ms）；</item>
+        /// <item>角色有绑定点且绑定点有合法落点。</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// 返回值是**引擎的真实结果**：卷被消耗掉（数量减少）才算成功。
+        /// 引擎在冷却期内会直接 return 不消耗 —— 这时必须返回 false，
+        /// 否则假人会以为已经回城，然后站在野外反复「回城」却永远没动。
+        /// </para>
+        /// </summary>
+        public static bool TryUseTownScroll(PlayerObject player)
+        {
+            if (player == null || player.Dead) return false;
+
+            // 引擎的 case 2 直接解引用 Character.BindPoint —— 没有绑定点会 NRE。
+            // 正常假人一定有（BotFactory 建号时就绑了安全区），这里只是兜底。
+            if (player.Character?.BindPoint?.BindRegion?.Map == null) return false;
+
+            if (player.Character.BindPoint.ValidBindPoints.Count == 0) return false;
+
+            int slot = FindTownScrollSlot(player);
+
+            if (slot < 0) return false;
+
+            UserItem scroll = player.Inventory[slot];
+
+            long before = scroll.Count;
+
+            player.ItemUse(new CellLinkInfo
+            {
+                GridType = GridType.Inventory,
+                Slot = slot,
+                Count = 1,
+            });
+
+            // 引擎用完会把整叠清空（RemoveItem + 格子置空）或把数量减 1。
+            // 两种都算成功。
+            if (player.Inventory[slot] == null) return true;
+
+            UserItem after = player.Inventory[slot];
+
+            return after == null || after.Count < before;
+        }
+
+        /// <summary>
+        /// 当前地图能不能用回城卷。
+        /// <para>
+        /// 引擎的判定是「地图 <c>AllowTT</c> + 副本 <c>AllowTeleport</c>」，
+        /// 这里提前算好，省得发包了才发现传不了。
+        /// </para>
+        /// </summary>
+        public static bool CanUseTownScrollHere(PlayerObject player)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map?.Info == null) return false;
+            if (!map.Info.AllowTT) return false;
+
+            if (map.Instance != null && !map.Instance.AllowTeleport) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// 物品使用冷却是否已过。
+        /// <para>
+        /// 引擎的 <c>ItemUse</c> 在 <c>Consumable</c> 分支开头有一句
+        /// <c>if (SEnvir.Now &lt; UseItemTime) return;</c> ——
+        /// 冷却期内发包**不消耗物品、也不生效**。
+        /// </para>
+        /// <para>
+        /// 为什么要有这个：药水冷却 2000ms、回城卷 500ms，两者共用同一个
+        /// <c>UseItemTime</c>。假人「喝了药 → 立刻用卷回城」会被引擎静默拒绝，
+        /// 看起来就像「卷坏了」。这里提前判断，让调用方知道该等一等。
+        /// </para>
+        /// </summary>
+        public static bool ItemUseCooldownReady(PlayerObject player)
+        {
+            if (player == null) return false;
+
+            return SEnvir.Now >= player.UseItemTime;
+        }
+
+        #endregion
+
         #region NPC 买卖
 
         /// <summary>
@@ -255,6 +416,38 @@ namespace Server.Bots
 
             player.NPC = null;
             player.NPCPage = null;
+        }
+
+        /// <summary>
+        /// 在当前 NPC 页里挑一个回城卷商品：**买得起 + 是回城卷**。
+        /// <para>
+        /// 与 <see cref="FindPotionGood"/> 分开写，因为两者的判定维度不同：
+        /// 药按「恢复量」挑档位，回城卷只有一种（<c>Shape == 2</c>），只按「买得起」筛。
+        /// </para>
+        /// <para>
+        /// 杂货商（伦纳德 / 科里 / 赛文…）与药店（大卫 / 海莉…）是**两个不同的 NPC** ——
+        /// 实测 12 个主城里药店只卖药、杂货商只卖卷，只有炼狱岛的拉瓦尔两个都有。
+        /// 所以「买药」和「买回城卷」要分别跑一趟。
+        /// </para>
+        /// </summary>
+        public static NPCGood FindTownScrollGood(PlayerObject player, int budget)
+        {
+            if (player?.NPCPage?.Goods == null) return null;
+
+            NPCGood best = null;
+
+            foreach (NPCGood good in player.NPCPage.Goods)
+            {
+                if (good?.Item == null) continue;
+                if (!IsTownScroll(good.Item)) continue;
+
+                if (good.Cost > budget) continue;
+
+                if (best == null || good.Cost < best.Cost)
+                    best = good;
+            }
+
+            return best;
         }
 
         #endregion

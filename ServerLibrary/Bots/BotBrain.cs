@@ -69,6 +69,31 @@ namespace Server.Bots
         public DateTime StateSince { get; private set; }
         public int Kills { get; private set; }
         public int Deaths { get; private set; }
+
+        /// <summary>
+        /// 成功回城补给的次数（2026-11-11，D5 量化用）。
+        /// <para>
+        /// 这个数是「断药能回城买」这条闭环的直接证据：
+        /// 每跑一次补给就 +1，且只在**真的买到了东西**时才算（见 <see cref="FinishRestock"/>）。
+        /// </para>
+        /// </summary>
+        public int RestockCount { get; private set; }
+
+        /// <summary>补给失败次数（超时 / 没钱 / 找不到药店）。失败率过高说明闭环有问题。</summary>
+        public int RestockFailCount { get; private set; }
+
+        /// <summary>卖货 / 修理的完成次数。</summary>
+        public int TradeCount { get; private set; }
+
+        /// <summary>挖取（Harvest）完成次数。</summary>
+        public int HarvestCount { get; private set; }
+
+        /// <summary>累计买到的回城卷张数。</summary>
+        public int TownScrollBuyCount { get; private set; }
+
+        /// <summary>累计使用回城卷的次数（衡量「瞬移回城」这条捷径的利用量）。</summary>
+        public int TownScrollUseCount { get; private set; }
+
         public decimal ExperienceStart { get; private set; }
 
         private DateTime _nextActionTime;
@@ -108,6 +133,31 @@ namespace Server.Bots
 
         /// <summary>回城交易的冷却：卖完 / 修完别马上又跑一趟。</summary>
         private DateTime _tradeCooldown;
+
+        /// <summary>
+        /// 本轮「补给」要办的事：买药之外，**还要不要顺路买回城卷**。
+        /// <para>
+        /// 两种东西分属两个 NPC（药店卖药、杂货商卖卷），所以一次回城要跑两趟。
+        /// 用一个阶段位来串，避免状态机再开一个状态。
+        /// </para>
+        /// </summary>
+        private RestockStage _restockStage = RestockStage.Potion;
+
+        /// <summary>
+        /// 进门时背包里的药 + 卷数量（-1 = 本轮还没记）。
+        /// 收尾时用增量判定「这次补给到底买到东西没有」。
+        /// </summary>
+        private int _restockBaselinePotions = -1;
+        private int _restockBaselineScrolls;
+
+        /// <summary>补给流程的子阶段。</summary>
+        private enum RestockStage
+        {
+            /// <summary>去药店买药。</summary>
+            Potion = 0,
+            /// <summary>去杂货商买回城卷（下次断药就能秒回城）。</summary>
+            TownScroll = 1,
+        }
 
         /// <summary>当前要挖的尸体。</summary>
         private MonsterObject _harvestTarget;
@@ -795,10 +845,21 @@ namespace Server.Bots
                 return;
             }
 
-            // 对话已打开：直接买
+            // 进门先记下「进门前有多少药 / 多少卷」——
+            // 收尾时用**增量**判定成功，而不是看存量。
+            // 存量判定会误报：进门前本来就剩 2 瓶药，买不到新的也照样算「成功」。
+            if (_restockBaselinePotions < 0)
+            {
+                _restockBaselinePotions = BotActions.CountPotion(_player, Stat.Health) + BotActions.CountPotion(_player, Stat.Mana);
+                _restockBaselineScrolls = BotActions.CountTownScroll(_player);
+            }
+
+            // 对话已打开：按当前子阶段办事（买药 / 买回城卷）
             if (_player.NPCPage != null)
             {
-                BuyPotions();
+                if (_restockStage == RestockStage.TownScroll) BuyTownScrolls();
+                else BuyPotions();
+
                 return;
             }
 
@@ -810,9 +871,12 @@ namespace Server.Bots
                 return;
             }
 
-            // 不在主城：跨图走回去（CanAutoPath 已全开，上一轮实测可用）
+            // 不在主城：优先用**回城卷**瞬移（省掉 AutoPath 走 60 秒+），
+            // 没有卷才退回 AutoPath 跨图走回去。
             if (_player.CurrentMap?.Info != home)
             {
+                if (TryReturnHomeByScroll(home)) return;
+
                 if (_player.AutoPath != null)
                 {
                     LastDetail = string.Format("正在走回 {0}", home.Description);
@@ -829,60 +893,128 @@ namespace Server.Bots
                 return;
             }
 
-            // 在主城：找药店
-            NPCObject pharmacy = BotPerception.FindPharmacy(_player.CurrentMap);
+            // 在主城：找当前阶段对应的 NPC
+            NPCObject npc = _restockStage == RestockStage.TownScroll
+                ? BotPerception.FindScrollShop(_player.CurrentMap)
+                : BotPerception.FindPharmacy(_player.CurrentMap);
 
-            if (pharmacy == null)
+            if (npc == null)
             {
-                FinishRestock(string.Format("{0} 里找不到药店", home.Description));
+                if (_restockStage == RestockStage.TownScroll)
+                {
+                    // 买不到卷不是致命错误 —— 药已经买到了，回城卷只是加速手段。
+                    FinishRestock(string.Format("{0} 里没有卖回城卷的杂货商", home.Description));
+                }
+                else
+                {
+                    FinishRestock(string.Format("{0} 里找不到药店", home.Description));
+                }
+
                 return;
             }
 
-            int distance = BotNavigator.Distance(_player.CurrentLocation, pharmacy.CurrentLocation);
+            int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
 
             // NPC 本身是阻挡物：A* 的终点是它站的格子，贴身那一步永远迈不进去。
+            // 所以走向 NPC 时，终点用「NPC 周围的可走格」（半径 1），
+            // 而不是 NPC 自己那格 —— 否则永远算得出路径、却一步都迈不出去。
             // 好在 NPCCall 只要求 18 格视野内（Config.MaxViewRange），所以「走不动就直接开口」。
-            if (distance > 3)
+            //
+            // 距离门槛取 2：NPC 周围 1 格的最远距离就是 2（斜向），
+            // 门槛写成 3 的话会出现「已经走到 NPC 跟前了却还在尝试移动」的抖动。
+            if (distance > 2)
             {
-                BotMoveResult move = BotNavigator.TryStepTowards(_player, pharmacy.CurrentLocation);
+                BotMoveResult move = BotNavigator.TryStepTowardsNear(_player, npc.CurrentLocation, 1);
 
                 if (move == BotMoveResult.Moved)
                 {
                     _blockedCount = 0;
-                    LastDetail = string.Format("走向药店 {0}（{1} 格）", pharmacy.Name, distance);
+                    LastDetail = string.Format("走向{0} {1}（{2} 格）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance);
                     return;
                 }
 
                 if (move == BotMoveResult.Busy) return;
 
-                // A* 算不到 NPC 脚下（那格被 NPC 自己占着），改用「贴近一格」的兜底。
-                if (BotNavigator.TryStepAdjacent(_player, pharmacy.CurrentLocation))
+                // A* 也算不到（隔墙、隔河），改用「直线逼近」的兜底。
+                if (BotNavigator.TryStepAdjacent(_player, npc.CurrentLocation))
                 {
                     _blockedCount = 0;
-                    LastDetail = string.Format("贴近药店 {0}（{1} 格）", pharmacy.Name, distance);
+                    LastDetail = string.Format("贴近{0} {1}（{2} 格）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance);
                     return;
                 }
             }
 
-            if (!BotActions.TryOpenNpc(_player, pharmacy))
+            if (!BotActions.TryOpenNpc(_player, npc))
             {
                 _blockedCount++;
 
                 if (_blockedCount > 20)
                 {
-                    FinishRestock(string.Format("走不到药店 {0}（{1} 格外始终过不去）", pharmacy.Name, distance));
+                    FinishRestock(string.Format("走不到{0} {1}（{2} 格外始终过不去）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance));
                     return;
                 }
 
-                LastDetail = string.Format("还差 {0} 格才够到药店 {1}", distance, pharmacy.Name);
+                LastDetail = string.Format("还差 {0} 格才够到{1} {2}", distance, _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name);
                 return;
             }
 
             _blockedCount = 0;
 
-            LastDetail = string.Format("打开 {0}，准备买药", pharmacy.Name);
+            LastDetail = string.Format("打开 {0}，准备{1}", npc.Name, _restockStage == RestockStage.TownScroll ? "买回城卷" : "买药");
         }
 
+        /// <summary>
+        /// 用背包里的回城卷瞬移回绑定主城。
+        /// <para>
+        /// **为什么要这个**：断药时最费时间的不是买药，是「走回主城」——
+        /// 实测从城外走回城要 60 秒以上（每格约 0.6 秒），AutoPath 跨图更久。
+        /// 这一路假人不打怪、不捡东西，纯属浪费。有了回城卷，一秒回到城边。
+        /// </para>
+        /// <para>
+        /// 返回 true = 本帧已经处理完（要么已回城，要么正在尝试），调用方应直接 return。
+        /// </para>
+        /// </summary>
+        private bool TryReturnHomeByScroll(MapInfo home)
+        {
+            if (BotActions.CountTownScroll(_player) <= 0) return false;
+
+            // 地图不允许回城（幽灵船 4 层）/ 副本不许传送 → 只能老老实实走。
+            if (!BotActions.CanUseTownScrollHere(_player)) return false;
+
+            // 已经在主城就别浪费卷。
+            if (_player.CurrentMap?.Info == home) return false;
+
+            // 引擎的 UseItemTime 是**共用**冷却：刚喝过药（2000ms）就发包会被静默拒绝，
+            // 看起来就像「卷坏了」。冷却没到就下一帧再试，别浪费一次机会。
+            if (!BotActions.ItemUseCooldownReady(_player))
+            {
+                LastDetail = "等物品冷却，再用回城卷";
+                return true;
+            }
+
+            if (!BotActions.TryUseTownScroll(_player))
+            {
+                // 卷在冷却期（引擎 UseItemTime）或背包已空 → 下一帧再试，退回 AutoPath。
+                LastDetail = "回城卷用不了（冷却中），改走回主城";
+                return false;
+            }
+
+            // 用卷次数单独记：它衡量的是「瞬移回城」这条捷径的利用量，
+            // 与「补给成功次数」不是一回事（用了卷也可能因为没钱而买不到药）。
+            TownScrollUseCount++;
+            _player.Character.BotTownScrollUses++;
+
+            // 传送后必须取消 AutoPath：引擎不会因为换图就自动清掉旧路线，
+            // 留着的话假人会一边站在主城一边继续往城外走。
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
+            BotLog.Info(Profile.Seq, string.Format("用回城卷回城（还剩 {0} 张）", BotActions.CountTownScroll(_player)));
+
+            LastDetail = "用回城卷瞬移回主城";
+
+            return true;
+        }
         /// <summary>在已打开的 NPC 页里买药。买够、买不起、或没有买药入口时收尾。</summary>
         private void BuyPotions()
         {
@@ -928,16 +1060,140 @@ namespace Server.Bots
                 return;
             }
 
+            // 药买完了（或买不起）。接着去杂货商买回城卷 —— 下次断药就能秒回城。
+            if (ShouldBuyTownScroll())
+            {
+                _restockStage = RestockStage.TownScroll;
+
+                // 换 NPC 必须先关掉当前对话，否则引擎会一直停在药店的页上。
+                BotActions.CloseNpc(_player);
+
+                LastDetail = "药买完了，去买回城卷";
+
+                return;
+            }
+
             FinishRestock(string.Format("补给结束：红 {0} 蓝 {1}，金币 {2}",
                 BotActions.CountPotion(_player, Stat.Health),
                 BotActions.CountPotion(_player, Stat.Mana), gold));
         }
+        /// <summary>
+        /// 要不要顺路买回城卷？
+        /// <para>
+        /// 条件：配置里开了（有剩余额度）、背包里的卷不够买、而且**买得起**。
+        /// 买不起就别跑这一趟 —— 药已经买到就够了，为一张 500 金币的卷再跑一趟不划算。
+        /// </para>
+        /// </summary>
+        private bool ShouldBuyTownScroll()
+        {
+            BotOptions options = Options;
+
+            if (options.RestockBuyTownScroll <= 0) return false;
+
+            int have = BotActions.CountTownScroll(_player);
+
+            if (have >= options.RestockBuyTownScroll) return false;
+
+            // 留够买药的钱之后再买卷：卷比药贵（500 vs 80），不能让卷把买药的钱花光。
+            // 这里用 500 作门槛（12 个杂货商里 11 个是这个价，炼狱岛是 1000）；
+            // 真买贵了就买不到，会在 BuyTownScrolls 里优雅收尾。
+            long gold = GoldAmount();
+
+            return gold >= 500;
+        }
+        /// <summary>
+        /// 在杂货商处买回城卷。
+        /// <para>
+        /// 杂货商的入口页 → 按钮 1 → 买卖页（回城卷在那页，价 500）。
+        /// 实测 12 个主城的杂货商（伦纳德 / 科里 / 赛文…）**按钮 1 全都直达卖回城卷的页**，
+        /// 但不写死按钮号 —— 按「目标页里有没有回城卷」去找。
+        /// </para>
+        /// </summary>
+        private void BuyTownScrolls()
+        {
+            BotOptions options = Options;
+
+            // 当前页不是卖回城卷的买卖页 → 点按钮进去
+            if (BotActions.FindTownScrollGood(_player, int.MaxValue) == null)
+            {
+                int button = BotPerception.FindScrollButton(_player.NPC?.NPCInfo);
+
+                if (button <= 0)
+                {
+                    FinishRestock("这个 NPC 页里没有买回城卷的入口");
+                    return;
+                }
+
+                BotActions.TryPressButton(_player, button);
+                LastDetail = "打开卖回城卷的页";
+
+                return;
+            }
+
+            long gold = GoldAmount();
+
+            int have = BotActions.CountTownScroll(_player);
+            int need = Math.Max(0, options.RestockBuyTownScroll - have);
+
+            if (need <= 0)
+            {
+                FinishRestock("回城卷够用了");
+                return;
+            }
+
+            NPCGood good = BotActions.FindTownScrollGood(_player, (int)Math.Min(gold, int.MaxValue));
+
+            // 预算不够一张卷时也放宽：只要买得起至少一张就别放弃 ——
+            // 回城卷是「断药后秒回城」的工具，缺了它下次断药就得走 60 秒。
+            if (good == null)
+                good = BotActions.FindTownScrollGood(_player, int.MaxValue);
+
+            if (good == null)
+            {
+                // 这个商店页里根本没有回城卷：药已经买到了，直接收尾。
+                FinishRestock(string.Format("钱不够买回城卷（金币 {0}），先回去练级", gold));
+                return;
+            }
+
+            // 每张 500 金币，能买几张买几张。
+            int affordable = (int)Math.Min(need, gold / Math.Max(1, good.Cost));
+
+            if (affordable <= 0)
+            {
+                FinishRestock(string.Format("金币不够买回城卷（{0}），先回去练级", gold));
+                return;
+            }
+
+            int scrollBefore = BotActions.CountTownScroll(_player);
+
+            BotActions.TryBuy(_player, good.Index, affordable);
+
+            // 用**实际到手的张数**判定，不看金币差额：
+            // 引擎在背包满 / 负重超时会静默拒绝购买，金币没扣但东西也没到，
+            // 这种情况下报「买到了 N 张」是假的。
+            int bought = BotActions.CountTownScroll(_player) - scrollBefore;
+
+            if (bought > 0)
+            {
+                TownScrollBuyCount += bought;
+                _player.Character.BotTownScrollBuys += bought;
+            }
+
+            FinishRestock(string.Format("补给结束：买药 + 回城卷 {0} 张（现有 {1}），金币 {2}",
+                bought, BotActions.CountTownScroll(_player), gold));
+        }
 
         /// <summary>
-        /// 买一类药，返回是否买到了。两条约束缺一不可：
-        /// 1. <b>每瓶预算 = 剩余金币 / 还缺的瓶数</b> —— 保证这次能买满，而不是把钱砸在几瓶贵药上；
-        /// 2. <b>单瓶恢复量 ≤ 自身血量/蓝量的合理上限</b> —— 1 级 52 血喝回 250 的药是纯浪费。
+        /// 买一类药，返回是否**真的买到了**。三条约束缺一不可：
+        /// 1. <b>单瓶恢复量 ≤ 自身血量/蓝量的合理上限</b> —— 1 级 52 血喝回 250 的药是纯浪费；
+        /// 2. <b>优先买满</b>：按「剩余金币 ÷ 还缺的瓶数」当预算，能一次买满就一次买满；
+        /// 3. <b>买不起也要买一点</b>：预算卡死时退一步，只买买得起的量。
         /// </summary>
+        /// <para>
+        /// 返回值是**引擎的真实结果**（背包里的药确实变多了），不是「发了请求」。
+        /// 引擎在背包满 / 负重超时会静默拒绝购买 —— 那时返回 true 会让上层以为买到了，
+        /// 结果药一直没补上，假人反复空跑，最后报「补给成功」却是假的。
+        /// </para>
         private bool TryBuyPotions(Stat restoreStat, int need, long gold)
         {
             int pool = _player.Stats[restoreStat];
@@ -955,13 +1211,26 @@ namespace Server.Bots
 
             NPCGood good = BotActions.FindPotionGood(_player, restoreStat, perBottle, maxRestore);
 
+            // 预算卡死时的退路：放宽预算，只按「买得起」挑档位。
+            //
+            // 为什么必须要有这条：严格预算 = 剩余金币 ÷ 还缺的瓶数。
+            // 假人有 400 金币、还缺 16 瓶 → 每瓶预算 25 金币，而最便宜的金创药要 80 →
+            // 一瓶都挑不出来 → **一瓶都买不到** → 假人永远卡在 4 瓶药上反复空跑回城。
+            // 实测就卡在这：日志里连续两次「补给结束：红 4 蓝 21，金币 400」，一瓶没进。
+            if (good == null)
+                good = BotActions.FindPotionGood(_player, restoreStat, int.MaxValue, maxRestore);
+
             if (good == null) return false;
 
             int affordable = (int)Math.Min(need, gold / Math.Max(1, good.Cost));
 
             if (affordable <= 0) return false;
 
-            return BotActions.TryBuy(_player, good.Index, affordable);
+            int before = BotActions.CountPotion(_player, restoreStat);
+
+            BotActions.TryBuy(_player, good.Index, affordable);
+
+            return BotActions.CountPotion(_player, restoreStat) > before;
         }
 
         /// <summary>收尾：关对话、上冷却、回练级。</summary>
@@ -973,6 +1242,31 @@ namespace Server.Bots
             _restockCooldown = SEnvir.Now.AddSeconds(60);
             _blockedCount = 0;
             _target = null;
+
+            // 下一轮补给从头开始（先买药，再考虑买卷）。
+            _restockStage = RestockStage.Potion;
+
+            // 失败判定：看**增量**（这次买到了多少），不看存量。
+            // 存量判定会误报：进门前本来就剩 2 瓶药，买不到新的也照样算「成功」。
+            int potions = BotActions.CountPotion(_player, Stat.Health) + BotActions.CountPotion(_player, Stat.Mana);
+            int scrolls = BotActions.CountTownScroll(_player);
+
+            int gained = potions - _restockBaselinePotions + (scrolls - _restockBaselineScrolls);
+
+            bool success = gained > 0;
+
+            _restockBaselinePotions = -1;
+
+            if (success)
+            {
+                RestockCount++;
+                _player.Character.BotRestocks++;
+            }
+            else
+            {
+                RestockFailCount++;
+                _player.Character.BotRestockFails++;
+            }
 
             BotLog.Info(Profile.Seq, detail);
 
@@ -1096,6 +1390,9 @@ namespace Server.Bots
         {
             _harvestTarget = null;
             _target = null;
+
+            HarvestCount++;
+            _player.Character.BotHarvests++;
 
             BotLog.Debug(Profile.Seq, detail);
 
@@ -1364,7 +1661,14 @@ namespace Server.Bots
             return ItemType.Weapon;
         }
 
-        /// <summary>背包里有没有能卖的东西。</summary>
+        /// <summary>
+        /// 背包里有没有能卖的东西。
+        /// <para>
+        /// **药和回城卷不算**：药是自己要用的，回城卷是回城的工具 ——
+        /// 卖了等于自断退路。药店页的收货类型恰好含 <c>Consumable</c>，
+        /// 引擎不会拦，所以必须在这里自己挡掉。
+        /// </para>
+        /// </summary>
         private bool HasSellableItems()
         {
             foreach (UserItem item in _player.Inventory)
@@ -1374,9 +1678,43 @@ namespace Server.Bots
                 if ((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound) continue;
                 if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
                 if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
+                if (IsKeepItem(item)) continue;
 
                 return true;
             }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 这件东西是「自己要用 / 要留着」的，不卖。
+        /// <para>
+        /// 目前两类：<b>药</b>（回血回蓝的消耗品）与<b>回城卷</b>（回城工具）。
+        /// </para>
+        /// <para>
+        /// 为什么必须挡：
+        /// 1. <b>药</b> —— 药店页的收货类型含 <c>Consumable</c>，而药的 <c>ItemType</c> 就是
+        ///    <c>Consumable</c>。商店买来的药带 <c>Locked</c>（引擎 <c>NPCBuy</c> 给所有商品加的），
+        ///    引擎会拒绝卖；但**从地上捡的药没有这个标记**，会被「背包快满了 → 回城卖货」贱卖掉。
+        ///    卖掉自己的药 → 立刻又断药 → 又得回城买，白跑一趟，「断药能回城买」的闭环就断了。
+        /// 2. <b>回城卷</b> —— 同理，而且它更贵（500 金币）。它是回城的工具，卖了等于自断退路。
+        /// </para>
+        /// <para>
+        /// 判定药的标准与 <see cref="BotActions.CountPotion"/> 一致（<c>Stats[Health]</c> /
+        /// <c>Stats[Mana]</c> 之一大于 0）—— 否则会出现「数药时算它、卖货时又卖它」的自相矛盾。
+        /// </para>
+        /// </summary>
+        private static bool IsKeepItem(UserItem item)
+        {
+            if (item?.Info == null) return false;
+
+            // 回城卷：回城的工具，绝不能卖。
+            if (BotActions.IsTownScroll(item)) return true;
+
+            // 药：回血 / 回蓝的消耗品，自己要用。
+            if (item.Info.ItemType == ItemType.Consumable &&
+                (item.Info.Stats[Stat.Health] > 0 || item.Info.Stats[Stat.Mana] > 0))
+                return true;
 
             return false;
         }
@@ -1389,6 +1727,9 @@ namespace Server.Bots
         /// Necklace/Bracelet/Ring、服装店收 Armour/Helmet/Shoes…），
         /// 所以必须**按类型分别跑一趟**，一次只能处理一个类型。
         /// </para>
+        /// <para>
+        /// 药和回城卷不算「能卖的东西」—— 见 <see cref="IsKeepItem"/>。
+        /// </para>
         /// </summary>
         private ItemType SellableItemType()
         {
@@ -1400,6 +1741,7 @@ namespace Server.Bots
                 if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
                 if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
                 if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) continue;
+                if (IsKeepItem(item)) continue;
 
                 return item.Info.ItemType;
             }
@@ -1477,9 +1819,10 @@ namespace Server.Bots
 
             // NPC 本身是阻挡物：贴身那一步永远迈不进去，
             // 所以走不动就直接开口（NPCCall 只要 18 格视野内）。
-            if (distance > 3)
+            // 终点用「NPC 周围的可走格」（半径 1），否则 A* 只会把最后一步指向 NPC 那格。
+            if (distance > 2)
             {
-                BotMoveResult move = BotNavigator.TryStepTowards(_player, npc.CurrentLocation);
+                BotMoveResult move = BotNavigator.TryStepTowardsNear(_player, npc.CurrentLocation, 1);
 
                 if (move == BotMoveResult.Moved)
                 {
@@ -1590,6 +1933,9 @@ namespace Server.Bots
                 if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
                 if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) continue;
 
+                // 药和回城卷不卖（药店收货类型含 Consumable，引擎不会拦，得自己挡）。
+                if (IsKeepItem(item)) continue;
+
                 links.Add(new CellLinkInfo
                 {
                     GridType = GridType.Inventory,
@@ -1687,6 +2033,9 @@ namespace Server.Bots
             _tradeCooldown = SEnvir.Now.AddMinutes(_tradeIsRepair ? 10 : 1);
             _blockedCount = 0;
             _target = null;
+
+            TradeCount++;
+            _player.Character.BotTrades++;
 
             BotLog.Info(Profile.Seq, detail);
 

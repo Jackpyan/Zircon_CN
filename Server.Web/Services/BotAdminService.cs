@@ -62,10 +62,31 @@ public sealed record BotProfileRow(
     int Items,
     bool Online,
     string MapName,
-    DateTime LastLogin)
+    DateTime LastLogin,
+    int Restocks,
+    int RestockFails,
+    int Trades,
+    int Harvests,
+    int TownScrollUses,
+    int TownScrollBuys)
 {
     /// <summary>经验百分比（满级时按 100 算，避免除零）。</summary>
     public int ExpPercent => MaxExperience <= 0 ? 0 : (int)Math.Clamp(Experience * 100 / MaxExperience, 0, 100);
+
+    /// <summary>
+    /// 补给成功率（成功 /（成功 + 失败））。D5 量化「断药能回城买」的核心指标。
+    /// </summary>
+    public string RestockRateText
+    {
+        get
+        {
+            int total = Restocks + RestockFails;
+
+            if (total <= 0) return "—";
+
+            return $"{Restocks * 100 / total}%";
+        }
+    }
 
     /// <summary>累计在线时长（人类可读）。</summary>
     public string OnlineTimeText
@@ -345,7 +366,13 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
                     character.Items.Count,
                     online,
                     online ? mapName ?? "-" : "-",
-                    account.LastLogin));
+                    account.LastLogin,
+                    character.BotRestocks,
+                    character.BotRestockFails,
+                    character.BotTrades,
+                    character.BotHarvests,
+                    character.BotTownScrollUses,
+                    character.BotTownScrollBuys));
             }
         }
 

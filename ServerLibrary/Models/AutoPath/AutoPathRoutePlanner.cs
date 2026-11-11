@@ -179,6 +179,38 @@ namespace Server.Models.AutoPath
             return TryFindPreferredPath(actor, actor.CurrentMap, actor.CurrentLocation, new HashSet<Point> { destination }, avoidLiveObjects, out path);
         }
 
+        /// <summary>
+        /// 当前图内规划一条到「目标集合中任一点」的路径。
+        /// <para>
+        /// 与 <see cref="TryBuildCurrentPath"/> 的区别：终点是**一组**格子而不是单个格子。
+        /// </para>
+        /// <para>
+        /// 为什么需要它：NPC / 怪就站在自己那格上，那格是阻挡物，物理上迈不进去。
+        /// 单终点 A* 必然把最后一步指向那格 → 每帧都被引擎拒绝 → 永远走不到。
+        /// 把「目标周围的可走格」当终点集合，才能真正走到 NPC 跟前。
+        /// </para>
+        /// </summary>
+        public static bool TryBuildCurrentPathTo(MapObject actor, HashSet<Point> destinations, bool avoidLiveObjects, out List<Point> path)
+        {
+            path = null;
+
+            if (actor?.CurrentMap == null) return false;
+            if (destinations == null || destinations.Count == 0) return false;
+
+            HashSet<Point> targets = new HashSet<Point>();
+
+            foreach (Point point in destinations)
+            {
+                if (actor.CurrentMap.GetCell(point) == null) continue;
+
+                targets.Add(point);
+            }
+
+            if (targets.Count == 0) return false;
+
+            return TryFindPreferredPath(actor, actor.CurrentMap, actor.CurrentLocation, targets, avoidLiveObjects, out path);
+        }
+
         private static Dictionary<MapInfo, int> GetMapDistances(MapObject actor, MapInfo destination)
         {
             Dictionary<MapInfo, int> result = new Dictionary<MapInfo, int>
