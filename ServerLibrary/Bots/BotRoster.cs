@@ -197,10 +197,33 @@ namespace Server.Bots
 
         }
 
+        /// <summary>
+        /// 按当前配置补齐 Session 池（只在需要扩容时动，缩容不动 —— 腾出来的序号留着复用）。
+        /// <para>
+        /// 为什么要按配置而不是按在线数：<see cref="Evaluate"/> 用 <c>Sessions.Count</c> 当可用上限，
+        /// 池子建小了，配置写 30 也只会到 10。
+        /// </para>
+        /// </summary>
+        private static void EnsureCapacity(BotOptions options)
+        {
+            int capacity = Math.Max(options.MaxOnline, options.TargetOnline);
+            capacity = Math.Max(0, Math.Min(capacity, 200));
+
+            while (Sessions.Count < capacity)
+                Sessions.Add(new BotSession(BotProfile.Create(Sessions.Count + 1)));
+        }
+
         /// <summary>按水位决定这一轮拉起几个、撤下几个（每轮最多变 MaxChangePerTick 个）。返回实际变化数量。</summary>
         private static int Evaluate(BotOptions options)
         {
             int realPlayers = SEnvir.Connections.Count(x => !x.IsBot && x.Stage == GameStage.Game);
+
+            // 热扩容：后台把 BotMaxOnline / BotTargetOnline 改大之后，下一轮就把缺的 Session 补出来。
+            //
+            // 原先只在 Start() 里按当时的 MaxOnline 建一次 —— 改了配置也上不去，
+            // 现象是「配置明明写的 30，实际永远只有 10 个在线」，看起来像水位调度坏了。
+            // D5 的阶梯压测（10 → 20 → 30）正是靠热改规模来做，每次都要重启游戏服就废了。
+            EnsureCapacity(options);
 
             int target;
 

@@ -1308,7 +1308,8 @@ namespace Client.Scenes
             }
             private void CharacterNameTextBox_TextChanged(object sender, EventArgs e)
             {
-                CharacterNameValid = Globals.CharacterReg.IsMatch(CharacterNameTextBox.TextBox.Text);
+                // 角色名规则与服务端、假人保持同一套（纯英文数字 3~15 / 含汉字 2~8）。
+                CharacterNameValid = CharacterNameRules.IsValid(CharacterNameTextBox.TextBox.Text);
 
                 if (string.IsNullOrEmpty(CharacterNameTextBox.TextBox.Text))
                     CharacterNameTextBox.BorderColour = Constants.PrimaryColour;

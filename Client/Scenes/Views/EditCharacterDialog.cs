@@ -604,7 +604,8 @@ namespace Client.Scenes.Views
         }
         private void CharacterNameTextBox_TextChanged(object sender, EventArgs e)
         {
-            CharacterNameValid = Globals.CharacterReg.IsMatch(CharacterNameTextBox.TextBox.Text);
+            // 与建角同一套角色名规则（与服务端、假人一致）。
+            CharacterNameValid = CharacterNameRules.IsValid(CharacterNameTextBox.TextBox.Text);
 
             if (string.IsNullOrEmpty(CharacterNameTextBox.TextBox.Text))
                 CharacterNameTextBox.BorderColour = Constants.PrimaryColour;

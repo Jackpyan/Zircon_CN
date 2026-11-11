@@ -33,6 +33,8 @@ namespace Server.Bots
         Trade = 7,
         /// <summary>挖取尸体（鸡 / 猪 / 牛的掉落不落地，必须挖）。</summary>
         Harvest = 8,
+        /// <summary>用主城的六合圣石传送到目标图（跨图首选，避免走路被打死）。</summary>
+        Teleport = 9,
     }
 
     /// <summary>
@@ -99,6 +101,9 @@ namespace Server.Bots
         private DateTime _nextActionTime;
         private DateTime _stateDeadline;
         private DateTime _restockCooldown;
+
+        /// <summary>连续补给失败次数。用来做退避：失败越多，下次重试间隔越长。</summary>
+        private int _restockFailStreak;
         private DateTime _nextOptionsRefresh;
         private BotOptions _options;
         private Point _huntPoint;
@@ -204,6 +209,8 @@ namespace Server.Bots
         {
             _restockRequested = true;
             _restockCooldown = DateTime.MinValue;
+            // 后台强制补给视为「人工介入」，把自动退避的计数清掉，否则会沿用上次的 10 分钟冷却
+            _restockFailStreak = 0;
 
             LastDetail = "后台要求立即补给";
         }
@@ -257,6 +264,9 @@ namespace Server.Bots
                         break;
                     case BotState.Travel:
                         ProcessTravel();
+                        break;
+                    case BotState.Teleport:
+                        ProcessTeleport();
                         break;
                     case BotState.Trade:
                         ProcessTrade();
@@ -665,6 +675,11 @@ namespace Server.Bots
 
                 Point point = points[SEnvir.Random.Next(points.Count)];
 
+                // ① 优先用主城的「六合圣石」传送：不走路，也就不会被路上的怪打死。
+                //    （A* 跨图只能穿北方通道这类刷怪图，低级假人会陷入「打死→复活→再走」的活锁）
+                if (TryStartTeleport(map, point)) return true;
+
+                // ② 传送不可用（没石头 / 没直达按钮 / 钱不够）→ 退回 A* 逐格跨图
                 if (!AutoPathService.Instance.TryStart(_player, map, point)) continue;
 
                 _travelMap = map;
@@ -754,11 +769,161 @@ namespace Server.Bots
             EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(30));
         }
 
+        /// <summary>
+        /// 用主城的「六合圣石」传送到目标图。
+        /// <para>
+        /// **为什么优先传送**：A\* 跨图只能走「北方通道」这类刷怪图，低级假人一路被打死
+        /// → 复活 → 再跨图，形成活锁（D5 实测 死 77 / 杀 16）。传送石直接送到目标图。
+        /// </para>
+        /// <para>
+        /// 传送要钱（3K~10K）。钱不够 / 没有直达按钮 / 本图没有传送石 → 退回 A\* 跨图。
+        /// </para>
+        /// </summary>
+        private void ProcessTeleport()
+        {
+            if (_travelMap == null)
+            {
+                EnterState(BotState.Idle, "没有传送目标", TimeSpan.FromSeconds(5));
+                return;
+            }
+
+            // 已经到了
+            if (_player.CurrentMap?.Info == _travelMap)
+            {
+                _travelMap = null;
+                _emptyHunts = 0;
+                _blockedCount = 0;
+
+                EnterState(BotState.GoHunt, "传送到达，开始找怪", TimeSpan.FromSeconds(HuntTimeoutSeconds));
+                return;
+            }
+
+            if (SEnvir.Now >= _stateDeadline)
+            {
+                FinishTravel(string.Format("传送超时（2 分钟没送到 {0}），先在本图练级", _travelMap.Description));
+                return;
+            }
+
+            NPCObject stone = BotPerception.FindTeleportStone(_player.CurrentMap);
+
+            if (stone == null)
+            {
+                FallbackToTravel("当前地图没有六合圣石，改走 A* 跨图");
+                return;
+            }
+
+            int distance = BotNavigator.Distance(_player.CurrentLocation, stone.CurrentLocation);
+
+            // 同补给流程：NPC 自己是阻挡物，终点用「周围一格」，距离门槛 2。
+            if (distance > 2)
+            {
+                BotMoveResult move = BotNavigator.TryStepTowardsNear(_player, stone.CurrentLocation, 1);
+
+                if (move == BotMoveResult.Moved)
+                {
+                    _blockedCount = 0;
+                    LastDetail = string.Format("走向{0}（{1} 格）", stone.Name, distance);
+                    return;
+                }
+
+                if (move == BotMoveResult.Busy) return;
+
+                if (BotNavigator.TryStepAdjacent(_player, stone.CurrentLocation))
+                {
+                    _blockedCount = 0;
+                    LastDetail = string.Format("贴近{0}（{1} 格）", stone.Name, distance);
+                    return;
+                }
+            }
+
+            // 对话没开 → 先开，开完等下一帧再按按钮（避免每帧重复 NPCCall 把页重置回入口）
+            if (_player.NPC == null || _player.NPC.ObjectID != stone.ObjectID)
+            {
+                if (!BotActions.TryOpenNpc(_player, stone))
+                {
+                    _blockedCount++;
+
+                    if (_blockedCount > 20)
+                        FallbackToTravel(string.Format("走不到传送石 {0}（{1} 格外始终过不去）", stone.Name, distance));
+
+                    return;
+                }
+
+                _blockedCount = 0;
+                LastDetail = string.Format("打开 {0}，准备传送", stone.Name);
+                return;
+            }
+
+            int button = BotPerception.FindTeleportButton(stone.NPCInfo, _travelMap.Index);
+
+            if (button < 0)
+            {
+                BotActions.CloseNpc(_player);
+                FallbackToTravel(string.Format("传送石没有直达 {0} 的按钮", _travelMap.Description));
+                return;
+            }
+
+            // 按下按钮后引擎会在 DoActions 里同步执行 Teleport，玩家当帧就换图了；
+            // 此时 NPCPage 已被清空，所以**不能用返回值判断成败**。
+            BotActions.TryPressButton(_player, button);
+
+            LastDetail = string.Format("传送至 {0}", _travelMap.Description);
+        }
+
+        /// <summary>传送走不通时退回 A* 跨图（保留目标，只换交通方式）。</summary>
+        private void FallbackToTravel(string reason)
+        {
+            BotActions.CloseNpc(_player);
+
+            _blockedCount = 0;
+            _travelFailures = 0;
+
+            BotLog.Info(Profile.Seq, reason);
+
+            if (_travelMap != null && AutoPathService.Instance.TryStart(_player, _travelMap, _travelPoint))
+            {
+                EnterState(BotState.Travel,
+                    string.Format("改走 A* 跨图前往 {0}", _travelMap.Description), TimeSpan.FromMinutes(5));
+                return;
+            }
+
+            FinishTravel(reason + "，放弃跨图");
+        }
+
+        /// <summary>能不能用传送石去目标图（有石头 + 有直达按钮 + 钱够）。</summary>
+        private bool TryStartTeleport(MapInfo map, Point point)
+        {
+            NPCObject stone = BotPerception.FindTeleportStone(_player.CurrentMap);
+
+            if (stone == null) return false;
+
+            int button = BotPerception.FindTeleportButton(stone.NPCInfo, map.Index);
+
+            if (button < 0) return false;
+
+            int cost = BotPerception.CheapestTeleportCost(stone.NPCInfo, map.Index);
+
+            if (cost > 0 && GoldAmount() < cost) return false;
+
+            _travelMap = map;
+            _travelPoint = point;
+            _travelFailures = 0;
+            _emptyHunts = 0;
+            _blockedCount = 0;
+
+            BotLog.Info(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），传送去 {2}（花费 {3}）",
+                _player.CurrentMap.Info.Description, _player.Level, map.Description,
+                cost > 0 ? cost.ToString() : "免费"));
+
+            EnterState(BotState.Teleport, string.Format("传送前往 {0}", map.Description), TimeSpan.FromMinutes(2));
+
+            return true;
+        }
+
         /// <summary>指定地图上现在有几个假人（含自己）。</summary>
         private int CountBotsOnMap(MapInfo map)
         {
             int count = 0;
-
             foreach (PlayerObject player in SEnvir.Players)
             {
                 if (player?.Bot == null) continue;
@@ -800,6 +965,7 @@ namespace Server.Bots
             {
                 _restockRequested = false;
                 _restockCooldown = DateTime.MinValue;
+                _restockFailStreak = 0;
 
                 EnterState(BotState.Restock, "后台要求立即补给", TimeSpan.FromMinutes(3));
 
@@ -816,11 +982,33 @@ namespace Server.Bots
 
             if (options.RestockPotionLow <= 0) return false;
             if (State == BotState.Restock) return false;
+
+            // 卖货 / 修理优先跑完，别被补给打断。
+            //
+            // 为什么必须加这条：Trade 状态下红药通常就是 0（正是没药才要补给），
+            // 于是下一帧 ProcessSurvival 立刻 EnterState(Restock) 并 return true
+            // → ProcessTrade **永远执行不到** → 卖货一次都做不成 → 负重降不下来
+            // → 买药继续失败 → 再触发卖货…… 无限打转。
+            //
+            // 实测（2026-11-11 23:20）：12 个假人卡在「回城卖货」、12 个卡在「回城买药」，
+            // 交易次数恒为 0，后台状态文字永远停在进入时那句「负重快满了，回城卖东西」。
+            if (State == BotState.Trade) return false;
+
             if (SEnvir.Now < _restockCooldown) return false;
 
             int red = BotActions.CountPotion(_player, Stat.Health);
 
             if (red > options.RestockPotionLow) return false;
+
+            // 钱包连一瓶最便宜的药都买不起时，去药店也是空手而归。
+            //
+            // 实测（D5 主压测 126 分钟 + 千倍率探针 30 分钟）：金币 0 的假人每 60 秒
+            // 空跑一趟补给，日志连续刷「补给结束：红 5 蓝 21，金币 0」，一趟一瓶都没买到。
+            // 这种空转把「补给失败」抬到 785 次，而真实原因只是没钱。
+            // 正确做法是去练级 / 卖货攒钱，而不是反复回城。
+            int floorPrice = BotActions.FloorPotionPrice(Stat.Health);
+
+            if (floorPrice > 0 && GoldAmount() < floorPrice) return false;
 
             EnterState(BotState.Restock, string.Format("红药只剩 {0} 瓶，回城补给", red), TimeSpan.FromMinutes(3));
 
@@ -1211,26 +1399,112 @@ namespace Server.Bots
 
             NPCGood good = BotActions.FindPotionGood(_player, restoreStat, perBottle, maxRestore);
 
-            // 预算卡死时的退路：放宽预算，只按「买得起」挑档位。
+            // 挑不到档位时的退路：**预算和恢复量上限一起放宽**。
             //
-            // 为什么必须要有这条：严格预算 = 剩余金币 ÷ 还缺的瓶数。
-            // 假人有 400 金币、还缺 16 瓶 → 每瓶预算 25 金币，而最便宜的金创药要 80 →
-            // 一瓶都挑不出来 → **一瓶都买不到** → 假人永远卡在 4 瓶药上反复空跑回城。
-            // 实测就卡在这：日志里连续两次「补给结束：红 4 蓝 21，金币 400」，一瓶没进。
+            // 原来只放宽预算、maxRestore 保持不变 → 退路形同虚设：
+            // 药店里所有红药的恢复量都超过 maxRestore 时，两次查询都返回 null，一瓶也买不到。
+            // 实测（2026-11-11，金币 50 万）：2 级假人血量上限约 50 → maxRestore = 30，
+            // 而药店最低档红药回 40+ → 一直「补给结束：红 0 蓝 20，金币 499000」，红药永远是 0。
+            // 宁可喝溢出也不能断药 —— 断药就打不了怪，整条经济闭环跟着断。
             if (good == null)
-                good = BotActions.FindPotionGood(_player, restoreStat, int.MaxValue, maxRestore);
+                good = BotActions.FindPotionGood(_player, restoreStat, int.MaxValue, int.MaxValue);
 
-            if (good == null) return false;
+            if (good == null)
+            {
+                BotLog.Warn(Profile.Seq, string.Format(
+                    "买药诊断：{0} 挑不到任何档位（need={1} gold={2} pool={3} maxRestore={4} 页商品：{5}）",
+                    restoreStat, need, gold, pool, maxRestore, DumpPotionGoods()));
+
+                return false;
+            }
 
             int affordable = (int)Math.Min(need, gold / Math.Max(1, good.Cost));
 
-            if (affordable <= 0) return false;
+            // 单次下单量不能超过物品的堆叠上限 —— NPCBuy 里
+            // `if (amountToBuy > good.Item.StackSize) return;` 会**静默拒绝整个请求**，
+            // 假人没有客户端，收不到拒绝提示，表现就是「金币够、背包够，但一瓶都买不到」。
+            if (good.Item != null && good.Item.StackSize > 0)
+                affordable = Math.Min(affordable, good.Item.StackSize);
+
+            // 负重：NPCBuy 里 `CanGainItems(checkWeight:true)` 会按 Weight × 瓶数 校验，
+            // 超了就 return false → 同样静默 return。
+            // **这是「金币 50 万、格子还剩 20 个、却一瓶药都买不到」的真凶**：
+            // 假人背包长期塞满挖取物（打怪挖的肉），格子空着但负重早就满了。
+            // 公式与 PlayerObject.CanCarryInventoryWeight 一致：BagWeight + 新增 <= 上限。
+            if (good.Item != null && good.Item.Weight > 0)
+            {
+                long capacity = (long)_player.Stats[Stat.BagWeight] - _player.BagWeight;
+
+                int byWeight = (int)Math.Max(0, capacity / good.Item.Weight);
+
+                if (byWeight < affordable) affordable = byWeight;
+            }
+
+            if (affordable <= 0)
+            {
+                BotLog.Warn(Profile.Seq, string.Format(
+                    "买药诊断：{0} 装不下（{1} 单价 {2} 金币 {3}，负重 {4}/{5}，背包空位 {6}）",
+                    restoreStat, good.Item?.ItemName, good.Cost, gold,
+                    _player.BagWeight, _player.Stats[Stat.BagWeight],
+                    BotPerception.FreeInventorySlots(_player)));
+
+                return false;
+            }
 
             int before = BotActions.CountPotion(_player, restoreStat);
 
             BotActions.TryBuy(_player, good.Index, affordable);
 
-            return BotActions.CountPotion(_player, restoreStat) > before;
+            int after = BotActions.CountPotion(_player, restoreStat);
+
+            if (after <= before)
+            {
+                // 下单了但没进包：NPCBuy 的静默拒绝点全在这条日志里列出来。
+                BotLog.Warn(Profile.Seq, string.Format(
+                    "买药诊断：{0} 下单失败（{1} ×{2}，金币 {3}，负重 {4}/{5}，背包空位 {6}/{7}，StackSize={8}，goodGs={9}/npcGs={10}）",
+                    restoreStat, good.Item?.ItemName, affordable, gold,
+                    _player.BagWeight, _player.Stats[Stat.BagWeight],
+                    BotPerception.FreeInventorySlots(_player), Globals.InventorySize,
+                    good.Item?.StackSize, good.GoodsIndex, _player.NPC?.NPCInfo?.GoodsIndex));
+
+                return false;
+            }
+
+            // 成功是常态，用 Debug 记（BotLogLevel=2 时不输出）；失败才升 Warn。
+            BotLog.Debug(Profile.Seq, string.Format("买药诊断：{0} 买到 {1} ×{2}（{3} → {4}，金币 {5}）",
+                restoreStat, good.Item?.ItemName, affordable, before, after, gold));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 把当前 NPC 页的商品清单拼成一行，用于买药诊断。
+        /// 只输出关键字段（恢复量 / 单价 / 等级门槛），否则一行太长塞不进日志。
+        /// </summary>
+        private string DumpPotionGoods()
+        {
+            NPCPage page = _player.NPCPage;
+
+            if (page == null) return "无页";
+            if (page.Goods == null) return string.Format("[{0}] 无商品", page.Description);
+
+            var parts = new List<string>();
+
+            foreach (NPCGood good in page.Goods)
+            {
+                if (good?.Item == null) continue;
+
+                parts.Add(string.Format("{0}({1},HP={2},MP={3},价={4},需{5}级)",
+                    good.Item.ItemName,
+                    good.Item.ItemType,
+                    good.Item.Stats[Stat.Health],
+                    good.Item.Stats[Stat.Mana],
+                    good.Cost,
+                    good.Item.RequiredAmount));
+            }
+
+            return string.Format("[{0}] {1}", page.Description,
+                parts.Count == 0 ? "无商品" : string.Join(" | ", parts));
         }
 
         /// <summary>收尾：关对话、上冷却、回练级。</summary>
@@ -1238,8 +1512,6 @@ namespace Server.Bots
         {
             BotActions.CloseNpc(_player);
 
-            // 60 秒内不再触发补给：没钱的时候反复回城会彻底不练级。
-            _restockCooldown = SEnvir.Now.AddSeconds(60);
             _blockedCount = 0;
             _target = null;
 
@@ -1261,12 +1533,24 @@ namespace Server.Bots
             {
                 RestockCount++;
                 _player.Character.BotRestocks++;
+                _restockFailStreak = 0;
             }
             else
             {
                 RestockFailCount++;
                 _player.Character.BotRestockFails++;
+                _restockFailStreak++;
             }
+
+            // 冷却按连续失败次数翻倍：60 → 120 → 240 → 480 → 600（封顶）。
+            //
+            // 固定 60 秒的问题：钱不够的时候，假人会每 60 秒空跑一趟药店，
+            // 一趟一瓶买不到，纯属浪费主循环。D5 实测这类空转占满了 785 次「补给失败」。
+            // 退避之后，第一次失败 1 分钟重试（可能是临时走不到 NPC），
+            // 连续失败就逐步放弃，把时间让给打怪和卖货。
+            int cooldown = Math.Min(600, 60 << Math.Min(_restockFailStreak, 4));
+
+            _restockCooldown = SEnvir.Now.AddSeconds(cooldown);
 
             BotLog.Info(Profile.Seq, detail);
 
@@ -1628,7 +1912,84 @@ namespace Server.Bots
                 return true;
             }
 
+            // 3) 钱包买不起下一轮药 → 去卖货赚钱
+            //
+            // 为什么必须加这条：背包有 Globals.InventorySize = 48 格，而假人挖取物只占 20 来格，
+            // 「剩余 ≤ 8 格」实际上**永远不会成立** → 从不卖货 → 金币只出不进 →
+            // 买药失败率 90%+，假人卡在「回城买药 → 买不起 → 回去挨打」的死循环里。
+            // D5 压测实测：补给成功/失败 = 1/105，交易 0 次。
+            //
+            // 卖货目的地是「肉类买卖」这类收购页（挖取物是 Meat），正好能把挖来的肉换成钱。
+            if (NeedsMoneyForRestock() && HasSellableItems())
+            {
+                _tradeIsRepair = false;
+                _tradeItemType = SellableItemType();
+
+                EnterState(BotState.Trade, "没钱买药了，回城卖东西", TimeSpan.FromMinutes(3));
+
+                return true;
+            }
+
+            // 4) 负重快满 → 去卖货减重
+            //
+            // 为什么必须加这条：格子还剩 20 个、金币 50 万，但**负重早就爆了**。
+            // NPCBuy 的 CanGainItems(checkWeight:true) 按 Weight × 瓶数 校验，
+            // 超重直接 return → 一瓶药都买不到，且假人收不到任何提示。
+            // 而上面两条都不成立（有格子、有钱），卖货永不触发 → 负重永远降不下来
+            // → 断药 → 打不了怪 → 捡不到东西卖。
+            //
+            // 实测（2026-11-11）：金币 500,000、背包空位 18/48，日志
+            // 「买药诊断：Health 下单失败（金创药 ×20 …）」刷了几十条，红药永远是 0。
+            long capacity = _player.Stats[Stat.BagWeight];
+
+            if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10 && HasSellableItems())
+            {
+                _tradeIsRepair = false;
+                _tradeItemType = SellableItemType();
+
+                EnterState(BotState.Trade, "负重快满了，回城卖东西", TimeSpan.FromMinutes(3));
+
+                return true;
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// 钱包够不够买满下一轮药？不够就该去卖货赚钱。
+        /// <para>
+        /// 估算口径：还缺的瓶数 × 背包里同类药的最低价（<see cref="BotActions.CheapestPotionPrice"/>）。
+        /// 背包里没有同类药（取不到价）时**保守返回 true**（当成缺钱）——
+        /// 宁可多跑一趟卖货，也别让假人一直空跑回城。
+        /// </para>
+        /// </summary>
+        private bool NeedsMoneyForRestock()
+        {
+            BotOptions options = Options;
+
+            if (options.RestockPotionLow <= 0) return false;   // 关了自动补给就不需要钱
+
+            int red = BotActions.CountPotion(_player, Stat.Health);
+            int blue = BotActions.CountPotion(_player, Stat.Mana);
+
+            int redNeed = Math.Max(0, options.RestockBuyRed - red);
+            int blueNeed = Math.Max(0, options.RestockBuyBlue - blue);
+
+            if (redNeed == 0 && blueNeed == 0) return false;
+
+            int redPrice = BotActions.CheapestPotionPrice(_player, Stat.Health);
+            int bluePrice = BotActions.CheapestPotionPrice(_player, Stat.Mana);
+
+            // 战士不买蓝药，蓝价缺失不算缺钱
+            bool needBlue = blueNeed > 0 && _player.Character?.Class != MirClass.Warrior;
+
+            if (redNeed > 0 && redPrice <= 0) return true;
+            if (needBlue && bluePrice <= 0) return true;
+
+            long need = (long)redNeed * Math.Max(0, redPrice)
+                      + (needBlue ? (long)blueNeed * Math.Max(0, bluePrice) : 0);
+
+            return GoldAmount() < need;
         }
 
         /// <summary>有没有耐久归零的装备（这类装备会被引擎整件跳过、不计属性）。</summary>
@@ -1781,9 +2142,13 @@ namespace Server.Bots
                 return;
             }
 
-            // 不在主城：跨图走回去
+            // 不在主城：**优先用回城卷瞬移**（和补给流程同一套逻辑）。
+            // 不用卷的话只能跨图走回去 —— 低级假人在路上会被打死，
+            // 30 个假人里有 12 个同时卡在「回城卖货」走不回来就是这么来的。
             if (_player.CurrentMap?.Info != home)
             {
+                if (TryReturnHomeByScroll(home)) return;
+
                 if (_player.AutoPath != null)
                 {
                     LastDetail = string.Format("正在走回 {0} 交易", home.Description);

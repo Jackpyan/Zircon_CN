@@ -264,7 +264,13 @@ namespace Server.Bots
                 return;
             }
 
-            _newbieKitGranted = !created;
+            // 老号也走一次「启动资源」判断：GrantNewbieKit 内部已经做成幂等的
+            // （金币够就跳过），所以这里不必区分新老号。
+            // 原来是 `= !created` —— 老号直接置 true 意味着永远不再判断，
+            // 结果假人一旦花光钱就再也拿不到启动资金，只能陷入
+            // 「买药失败 → 回城卖货 → 没货可卖 → 再买药失败」的活锁
+            // （D5 探针实测：24/30 个假人卡在城里，只有 2 个在打怪）。
+            _newbieKitGranted = false;
 
             // 顶号保护：同一个角色在 Config.RelogDelay（默认 10 秒）内不允许再次进图。
             // 真人会收到「延迟 N 秒」的提示然后重试；假人没有客户端去处理 StartGameResult.Delayed，
@@ -307,11 +313,18 @@ namespace Server.Bots
             player.Bot = new BotBrain(player, Profile);
             Brain = player.Bot;
 
-            // 全新号发一次启动资源（金币 + 红蓝）；老号跳过。
+            // 启动资源（金币 + 红蓝）：GrantNewbieKit 自己判幂等，这里只负责「本轮是否已发」。
             if (!_newbieKitGranted)
             {
                 if (BotFactory.GrantNewbieKit(player, Profile.Seq))
                     _newbieKitGranted = true;
+            }
+            else
+            {
+                // 留痕：区分「根本没调用」和「调用了但被判定跳过」。
+                // 之前查「50 万金币不生效」时两者在日志上完全一样（都没有输出），
+                // 只能靠反复猜。这条 Warn 让下次一眼能分清。
+                BotLog.Warn(Profile.Seq, "启动资源：本轮已发放过，跳过重复判断");
             }
 
             Phase = BotPhase.Online;

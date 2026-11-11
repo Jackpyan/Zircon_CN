@@ -218,21 +218,55 @@ namespace Server.Bots
         }
 
         /// <summary>
-        /// 首次进图后发一次启动资源：金币 + 红蓝药水。
-        /// 幂等判定用「1 级且金币为 0」：花光金币时等级早就超过 1，不会重复发；
-        /// 反过来，如果建号后服务器在进图前崩了，重启也能补上。
+        /// 进图后发启动资源：金币 + 红蓝药水（幂等）。
+        /// <para>
+        /// 判据是「金币低于启动资金的 10%」—— 既是新号的首发，也是老号的**破产救济**。
+        /// </para>
+        /// <para>
+        /// 早期版本要求「1 级且金币为 0」才发，配合 <see cref="BotSession"/> 里
+        /// 「老号不上线不判断」的逻辑，导致假人一旦花光钱就永远拿不到启动资金，陷入
+        /// 「买药失败 → 回城卖货 → 没货可卖 → 再买药失败」的活锁
+        /// （D5 探针实测：24/30 个假人卡在城里，只有 2 个在打怪，击杀数直接停住）。
+        /// </para>
+        /// <para>
+        /// 一次性发放，所以不会无限刷钱：补完就有满额，下次上线金币远超阈值直接跳过。
+        /// </para>
         /// </summary>
         public static bool GrantNewbieKit(PlayerObject player, int seq)
         {
-            if (player == null) return false;
-            if (player.Level > 1) return false;
+            // 诊断用：这条链路以前一直静默失败（日志级别 Info 被 BotLogLevel=2 过滤掉，
+            // 金币永远停在 500），所以每个 return false 的出口都必须留一行 Warn，
+            // 否则下次再出问题还是只能靠猜。发放在 Warn 级别记（重要事件，不该被过滤）。
+            if (player == null)
+            {
+                BotLog.Warn(seq, "启动资源：player 为 null，跳过");
+
+                return false;
+            }
 
             // 金币已下沉到角色（2026-11-11）：假人每个独立账号，但金币在角色上。
-            UserCurrency gold = player.Character.Gold;
+            UserCurrency gold = player.Character?.Gold;
 
-            if (gold == null) return false;
+            if (gold == null)
+            {
+                BotLog.Warn(seq, string.Format("启动资源：角色 {0} 没有金币记录（Character.Gold 为 null），跳过",
+                    player.Character?.CharacterName ?? "-"));
 
-            if (gold.Amount > 0) return false;
+                return false;
+            }
+
+            // 低于启动资金的 10% 才算「没钱了」。BotNewbieGold=0 时退化成「只有 0 金币才发」。
+            int threshold = Math.Max(1, Config.BotNewbieGold / 10);
+
+            if (gold.Amount >= threshold)
+            {
+                // 必须是 Warn：这里曾是 Info，被 BotLogLevel=2 过滤掉，
+                // 结果「金币永远是 500」查了半天看不到任何线索。
+                BotLog.Warn(seq, string.Format("启动资源：金币 {0} 已达阈值 {1}（BotNewbieGold={2}），跳过",
+                    gold.Amount, threshold, Config.BotNewbieGold));
+
+                return false;
+            }
 
             int granted = 0;
 
@@ -245,9 +279,14 @@ namespace Server.Bots
             if (Config.BotNewbiePotionCount > 0)
                 granted += GrantPotions(player, Config.BotNewbiePotionCount);
 
-            if (granted == 0) return false;
+            if (granted == 0)
+            {
+                BotLog.Warn(seq, "启动资源：配置全为 0，未发放任何东西");
 
-            BotLog.Info(seq, string.Format("启动资源已发放：{0} 金币 + {1} 瓶药",
+                return false;
+            }
+
+            BotLog.Warn(seq, string.Format("启动资源已发放：{0} 金币 + {1} 瓶药",
                 Config.BotNewbieGold, Config.BotNewbiePotionCount));
 
             return true;

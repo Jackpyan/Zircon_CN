@@ -257,6 +257,141 @@ namespace Server.Bots
             return null;
         }
 
+        #region 六合圣石（传送 NPC）
+
+        /// <summary>
+        /// 「这个 NPC 是不是传送石」的缓存。125 个 NPC 是静态数据，一次扫描终身有效。
+        /// </summary>
+        private static readonly Dictionary<NPCInfo, bool> TeleportStoneCache = new Dictionary<NPCInfo, bool>();
+
+        /// <summary>
+        /// 在当前地图上找**传送 NPC**（本服叫「六合圣石」，每个主城一个）。
+        /// <para>
+        /// 为什么需要它：跨图用 A* 逐格走要穿过「北方通道」这类刷怪图，
+        /// 低级假人一路被打死 → 复活 → 再跨图，形成活锁（D5 实测 死 77 / 杀 16）。
+        /// 主城的传送石可以直接送到目标图，不用走路。
+        /// </para>
+        /// </summary>
+        public static NPCObject FindTeleportStone(Map map)
+        {
+            if (map?.NPCs == null) return null;
+
+            foreach (NPCObject npc in map.NPCs)
+            {
+                if (npc?.NPCInfo == null) continue;
+
+                if (IsTeleportStone(npc.NPCInfo)) return npc;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 判断一个 NPC 是不是传送石：入口页的按钮目标页里，有指向别的地图的 <c>Teleport</c> 动作。
+        /// <para>
+        /// 引擎的传送实现在 <c>NPCObject.DoActions</c>：<c>NPCActionType.Teleport</c> 读
+        /// <c>action.MapParameter1</c>（目标地图）与 <c>IntParameter1/2</c>（坐标，0,0 = 随机点）。
+        /// 收费是同一页里的 <c>TakeGold</c> 动作 + <c>Gold</c> 检查，不是独立流程。
+        /// </para>
+        /// </summary>
+        public static bool IsTeleportStone(NPCInfo npc)
+        {
+            if (npc == null) return false;
+
+            if (TeleportStoneCache.TryGetValue(npc, out bool cached)) return cached;
+
+            bool result = false;
+
+            if (npc.EntryPage?.Buttons != null)
+            {
+                foreach (NPCButton button in npc.EntryPage.Buttons)
+                {
+                    NPCPage dest = button.DestinationPage;
+
+                    if (dest?.Actions == null) continue;
+
+                    foreach (NPCAction action in dest.Actions)
+                    {
+                        if (action.ActionType != NPCActionType.Teleport) continue;
+                        if (action.MapParameter1 == null) continue;
+
+                        result = true;
+                        break;
+                    }
+
+                    if (result) break;
+                }
+            }
+
+            TeleportStoneCache[npc] = result;
+
+            return result;
+        }
+
+        /// <summary>
+        /// 在传送石的入口页里找「通往 <paramref name="targetMapIndex"/> 的按钮」，返回 ButtonID；找不到返回 -1。
+        /// <para>
+        /// 只匹配**直达**按钮（目标页里的 Teleport 动作指向目标图）。
+        /// 「自由传送员」这类二级页要先点一次父按钮再点子按钮，本版不处理 ——
+        /// 高级图本来就有等级门槛，低级假人也去不了。
+        /// </para>
+        /// </summary>
+        public static int FindTeleportButton(NPCInfo npc, int targetMapIndex)
+        {
+            if (npc?.EntryPage?.Buttons == null) return -1;
+            if (targetMapIndex <= 0) return -1;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                NPCPage dest = button.DestinationPage;
+
+                if (dest?.Actions == null) continue;
+
+                foreach (NPCAction action in dest.Actions)
+                {
+                    if (action.ActionType != NPCActionType.Teleport) continue;
+                    if (action.MapParameter1?.Index != targetMapIndex) continue;
+
+                    return button.ButtonID;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// 传送这颗石头的**最便宜一档**要多少钱（0 = 免费 / 未知）。
+        /// 用来判断「钱够不够传送」，不够就走 A* 跨图。
+        /// </summary>
+        public static int CheapestTeleportCost(NPCInfo npc, int targetMapIndex)
+        {
+            if (npc?.EntryPage?.Buttons == null) return 0;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                NPCPage dest = button.DestinationPage;
+
+                if (dest?.Actions == null) continue;
+
+                bool hits = false;
+                int cost = 0;
+
+                foreach (NPCAction action in dest.Actions)
+                {
+                    if (action.ActionType == NPCActionType.Teleport && action.MapParameter1?.Index == targetMapIndex)
+                        hits = true;
+                    else if (action.ActionType == NPCActionType.TakeGold && action.IntParameter1 > 0)
+                        cost = action.IntParameter1;
+                }
+
+                if (hits) return cost;
+            }
+
+            return 0;
+        }
+
+        #endregion
+
         /// <summary>
         /// 判断一个 NPC 是不是药店：入口页、或入口页一层的按钮目标页里，有恢复生命/魔法的消耗品。
         /// 实测 12 个药店都是「入口页 → 按钮(1) → 基础药品买卖－城堡」，所以最多看一层。

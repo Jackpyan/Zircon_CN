@@ -4038,7 +4038,9 @@ namespace Server.Envir
                 return;
             }
 
-            if (!Globals.CharacterReg.IsMatch(p.CharacterName))
+            // 角色名规则统一走 CharacterNameRules（纯英文数字 3~15 / 含汉字 2~8），
+            // 与假人建角（BotData.IsValidName）和客户端输入框保持同一套判定。
+            if (!CharacterNameRules.IsValid(p.CharacterName))
             {
                 con.Enqueue(new S.NewCharacter { Result = NewCharacterResult.BadCharacterName });
                 return;

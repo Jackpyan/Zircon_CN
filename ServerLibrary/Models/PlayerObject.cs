@@ -9530,7 +9530,8 @@ namespace Server.Models
         }
         public void NameChange(string newName)
         {
-            if (!Globals.CharacterReg.IsMatch(newName))
+            // 与建角同一套规则（CharacterNameRules），否则中文名能建却不能改。
+            if (!CharacterNameRules.IsValid(newName))
             {
                 Connection.ReceiveChat("角色名称不符合要求。", MessageType.System);
                 return;

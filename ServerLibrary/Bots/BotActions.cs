@@ -125,6 +125,76 @@ namespace Server.Bots
             return (int)Math.Min(total, int.MaxValue);
         }
 
+        /// <summary>全库最低药价缓存（按恢复属性）。静态数据，一次算好终身有效。</summary>
+        private static readonly Dictionary<Stat, int> FloorPotionPriceCache = new Dictionary<Stat, int>();
+
+        /// <summary>
+        /// 全库（<see cref="SEnvir.ItemInfoList"/>）里这类药的最低单价。
+        /// <para>
+        /// 兜底用：背包里没有同类药时（红药正好喝完是常态）取不到背包价，
+        /// 上层会把「不知道多少钱」当成「缺钱」—— 结果有 4000 金币的假人也在卖货，永远不买药。
+        /// </para>
+        /// </summary>
+        public static int FloorPotionPrice(Stat restoreStat)
+        {
+            if (FloorPotionPriceCache.TryGetValue(restoreStat, out int cached)) return cached;
+
+            int best = 0;
+            var list = SEnvir.ItemInfoList?.Binding;
+
+            if (list != null)
+            {
+                int min = int.MaxValue;
+
+                foreach (ItemInfo info in list)
+                {
+                    if (info == null) continue;
+                    if (info.ItemType != ItemType.Consumable) continue;
+                    if (info.Stats == null || info.Stats[restoreStat] <= 0) continue;
+                    if (info.Price <= 0) continue;
+
+                    if (info.Price < min) min = info.Price;
+                }
+
+                best = min == int.MaxValue ? 0 : min;
+            }
+
+            // 只缓存有效价：0 表示「全库都没有」，可能是数据还没加载完，
+            // 缓存下来会让后续永远拿 0（假人一直以为买药不要钱/或永远判缺钱）。
+            if (best > 0) FloorPotionPriceCache[restoreStat] = best;
+
+            return best;
+        }
+
+        /// <summary>
+        /// 背包里这类药的**最低单价**（按 <see cref="ItemInfo.Price"/>）。
+        /// <para>
+        /// 用于判断「钱包够不够买下一轮药」—— 买不起就该去卖货赚钱。
+        /// 背包里没有同类药时回退到 <see cref="FloorPotionPrice"/>（全库最低价）。
+        /// </para>
+        /// </summary>
+        public static int CheapestPotionPrice(PlayerObject player, Stat restoreStat)
+        {
+            if (player?.Inventory == null) return FloorPotionPrice(restoreStat);
+
+            int best = int.MaxValue;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+            {
+                UserItem item = player.Inventory[i];
+
+                if (item?.Info == null) continue;
+                if (item.Info.ItemType != ItemType.Consumable) continue;
+                if (item.Info.Stats[restoreStat] <= 0) continue;
+
+                int price = item.Info.Price;
+
+                if (price > 0 && price < best) best = price;
+            }
+
+            return best == int.MaxValue ? FloorPotionPrice(restoreStat) : best;
+        }
+
         #region 回城卷（Town Scroll）
 
         /// <summary>

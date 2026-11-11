@@ -299,14 +299,17 @@ else
         else
         {
             <div style="margin-bottom:10px;line-height:1.9;">
-                将清理：<b>@_cleanupPreview.Accounts</b> 个假人账号、<b>@_cleanupPreview.Characters</b> 个角色、
+                @* 原本文案只显示「已下线可立即删」的账号数，30 个假人全在线时会显示「0 个假人账号」，
+                   看起来像查不到数据，运维不敢点。这里把在线数合并进总数，并说明拆分。 *@
+                将清理：<b>@(_cleanupPreview.Accounts + _cleanupPreview.Online)</b> 个假人账号
+                @if (_cleanupPreview.Online > 0)
+                {
+                    <span>（已下线 <b>@_cleanupPreview.Accounts</b> 个可立即删，在线 <b>@_cleanupPreview.Online</b> 个会先下线再删）</span>
+                }
+                、<b>@_cleanupPreview.Characters</b> 个角色、
                 物品 <b>@_cleanupPreview.Items</b>、货币记录 <b>@_cleanupPreview.Currencies</b>、
                 宠物 <b>@_cleanupPreview.Companions</b>、邮件 <b>@_cleanupPreview.Mails</b>、
                 寄售 <b>@_cleanupPreview.Auctions</b>、任务 <b>@_cleanupPreview.Quests</b>。
-                @if (_cleanupPreview.Online > 0)
-                {
-                    <span style="color:#e08b84;">（另有 @_cleanupPreview.Online 个假人在线，会先被下线后再删）</span>
-                }
             </div>
 
             @if (!_cleanupConfirming)
@@ -340,7 +343,7 @@ else
         避免 30 个假人同一帧涌进来把主循环顶住。
     </p>
     <p>
-        <strong>行为</strong>：待机 / 去刷怪点 / 打怪 / 捡东西 / 等复活 / 回城买药 / 跨图赶路。
+        <strong>行为</strong>：待机 / 去刷怪点 / 打怪 / 捡东西 / 等复活 / 回城买药 / 回城卖货 / 挖取 / 跨图赶路 / 传送跨图。
         法师道士<b>按引擎等级门槛补技能</b>（火球术 7 级、灵魂火符 13 级），1~6 级只有平砍 —— 与真人一致。
     </p>
     <p>
@@ -570,6 +573,9 @@ else
         "Dead" => "等复活",
         "Restock" => "回城买药",
         "Travel" => "跨图赶路",
+        "Trade" => "回城卖货",
+        "Harvest" => "挖取",
+        "Teleport" => "传送跨图",
         _ => state,
     };
 

@@ -31,6 +31,23 @@
     </None>
   </ItemGroup>
 
+  <!--
+    客户端版本文件（Zircon.dll）：服务端用它算 SHA256 做版本校验（Config.VersionPath 默认 .\Zircon.dll）。
+    文件不在服务端目录 → Config.ClientHash = null → IsMatch 必 false → **任何真实客户端都连不上**。
+    这里从客户端输出目录按需复制一份过来，避免"忘了放文件"导致开服即不可用。
+    客户端没编译过（文件不存在）时跳过，不影响构建；跨机部署仍需手工拷一次。
+  -->
+  <ItemGroup Condition="Exists('..\..\Debug\Client\Zircon.dll')">
+    <None Include="..\..\Debug\Client\Zircon.dll" Link="Zircon.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\..\Release\Client\Zircon.dll')">
+    <None Include="..\..\Release\Client\Zircon.dll" Link="Zircon.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <PropertyGroup>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

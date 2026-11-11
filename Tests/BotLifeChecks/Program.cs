@@ -515,6 +515,105 @@ NPCGood afterFat = BotActions.FindPotionGood(player, Stat.Health, int.MaxValue, 
 Check(afterFat?.Item == cheapPotion,
     "恢复量超上限的贵药不会被选中（1 级号喝回 250 的药是纯浪费）");
 
+// ---------- 12) 缺钱卖货 + 六合圣石传送（2026-11-11 D5 补） ----------
+
+Console.WriteLine();
+Console.WriteLine("缺钱卖货 + 六合圣石传送：");
+
+// 12.1 药价查询：同恢复属性取最低单价
+PlayerObject banker = MakePlayer(MakeCharacter(account, "假人乙"));
+
+ItemInfo potionCheap = MakeItem(ItemType.Consumable, stackSize: 10, canSell: true);
+potionCheap.Stats[Stat.Health] = 30;
+potionCheap.Price = 80;
+
+ItemInfo potionPricey = MakeItem(ItemType.Consumable, stackSize: 10, canSell: true);
+potionPricey.Stats[Stat.Health] = 90;
+potionPricey.Price = 220;
+
+ItemInfo manaPotion = MakeItem(ItemType.Consumable, stackSize: 10, canSell: true);
+manaPotion.Stats[Stat.Mana] = 40;
+manaPotion.Price = 120;
+
+// 背包空时没法按「已有的」取价，但全库里已经造了 80 / 220 两种红药 → 取全库最低 80。
+// 这一步是关键：取不到价会让上层把「不知道多少钱」当成「缺钱」，
+// 结果有 4000 金币的假人也在卖货、永远不买药（D5 实测 12 个假人卡在卖货）。
+Check(BotActions.CheapestPotionPrice(banker, Stat.Health) == 80,
+    "背包空 → 回退全库最低红药价 80");
+Check(BotActions.FloorPotionPrice(Stat.Health) == 80, "全库最低红药价 80");
+
+banker.Inventory[0] = MakeUserItem(potionPricey, 3);
+banker.Inventory[1] = MakeUserItem(potionCheap, 5);
+
+Check(BotActions.CheapestPotionPrice(banker, Stat.Health) == 80, "两种红药取最低价 80");
+Check(BotActions.CheapestPotionPrice(banker, Stat.Mana) == 120,
+    "背包里没有蓝药 → 回退全库最低蓝药价 120（取不到价会让假人误判成缺钱）");
+Check(BotActions.CountPotion(banker, Stat.Health) == 8, "红药总数 8 瓶");
+
+banker.Inventory[2] = MakeUserItem(manaPotion, 2);
+Check(BotActions.CheapestPotionPrice(banker, Stat.Mana) == 120, "蓝药价 120");
+
+// 12.2 六合圣石：入口页 → 按钮 → 目标页（Teleport + TakeGold）
+DBCollection<NPCPage> pages = SEnvir.Session.GetCollection<NPCPage>();
+DBCollection<NPCAction> actions = SEnvir.Session.GetCollection<NPCAction>();
+DBCollection<NPCButton> buttons = SEnvir.Session.GetCollection<NPCButton>();
+
+MapInfo teleportTarget = SEnvir.MapInfoList.CreateNewObject();
+teleportTarget.Description = "失乐园";
+teleportTarget.MinimumLevel = 0;
+
+NPCPage stoneEntry = pages.CreateNewObject();
+stoneEntry.Description = "比奇城传送员";
+
+NPCPage stoneDest = pages.CreateNewObject();
+stoneDest.Description = "失乐园 10K";
+
+NPCAction teleportAction = actions.CreateNewObject();
+teleportAction.ActionType = NPCActionType.Teleport;
+teleportAction.MapParameter1 = teleportTarget;
+teleportAction.Page = stoneDest;
+
+NPCAction takeGoldAction = actions.CreateNewObject();
+takeGoldAction.ActionType = NPCActionType.TakeGold;
+takeGoldAction.IntParameter1 = 10000;
+takeGoldAction.Page = stoneDest;
+
+NPCButton teleportButton = buttons.CreateNewObject();
+teleportButton.ButtonID = 7;
+teleportButton.Page = stoneEntry;
+teleportButton.DestinationPage = stoneDest;
+
+NPCInfo stone = SEnvir.NPCInfoList.CreateNewObject();
+stone.NPCName = "六合圣石";
+stone.EntryPage = stoneEntry;
+
+Check(stoneDest.Actions.Count == 2, "目标页有 Teleport + TakeGold 两个动作");
+Check(BotPerception.IsTeleportStone(stone), "六合圣石识别为传送 NPC");
+Check(BotPerception.FindTeleportButton(stone, teleportTarget.Index) == 7, "找到通往目标图的按钮（id 7）");
+Check(BotPerception.FindTeleportButton(stone, teleportTarget.Index + 1000) == -1, "没有直达按钮的图返回 -1");
+Check(BotPerception.CheapestTeleportCost(stone, teleportTarget.Index) == 10000, "传送费用 10000");
+Check(BotPerception.CheapestTeleportCost(stone, teleportTarget.Index + 1000) == 0, "无此目标时费用 0");
+
+// 12.3 不能把普通 NPC 误判成传送石
+NPCPage shopEntry = pages.CreateNewObject();
+shopEntry.Description = "基础药品买卖";
+
+NPCPage shopDest = pages.CreateNewObject();
+shopDest.Description = "药品页";
+
+NPCButton buyButton = buttons.CreateNewObject();
+buyButton.ButtonID = 1;
+buyButton.Page = shopEntry;
+buyButton.DestinationPage = shopDest;
+
+NPCInfo pharmacy = SEnvir.NPCInfoList.CreateNewObject();
+pharmacy.NPCName = "药店";
+pharmacy.EntryPage = shopEntry;
+
+Check(!BotPerception.IsTeleportStone(pharmacy), "药店不是传送石（目标页没有 Teleport 动作）");
+Check(!BotPerception.IsTeleportStone(null!), "空 NPC 不是传送石");
+Check(BotPerception.FindTeleportButton(pharmacy, teleportTarget.Index) == -1, "药店没有传送按钮");
+
 // ---------- 11) 背包容量检查 ----------
 
 Console.WriteLine();
