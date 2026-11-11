@@ -48,7 +48,7 @@ namespace Server.Envir.Events.Triggers
                 EventTrackingType.Group => context.GroupMembers?.Any() == true
                     ? $"Group:{context.GroupMembers[0].Character.Index}"
                     : null,
-                EventTrackingType.Guild => context.Character.Account.GuildMember?.Guild.GuildName is string guildName
+                EventTrackingType.Guild => context.Character.GuildMember?.Guild.GuildName is string guildName
                     ? $"Guild:{guildName}"
                     : null,
                 EventTrackingType.Instance => context.CurrentMap.Instance is { } instance

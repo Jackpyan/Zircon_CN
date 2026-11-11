@@ -148,11 +148,11 @@ namespace Server.Models.Monsters
 
             if (War == null) return 0;
 
-            if (player.Character.Account.GuildMember == null) return 0;
+            if (player.Character.GuildMember == null) return 0;
 
-            if (player.Character.Account.GuildMember.Guild.Castle != null) return 0;
+            if (player.Character.GuildMember.Guild.Castle != null) return 0;
 
-            if (War.Participants.Count > 0 && !War.Participants.Contains(player.Character.Account.GuildMember.Guild)) return 0;
+            if (War.Participants.Count > 0 && !War.Participants.Contains(player.Character.GuildMember.Guild)) return 0;
 
             int result = base.Attacked(attacker, 1, element, canReflect, ignoreShield, canCrit);
 
@@ -221,7 +221,7 @@ namespace Server.Models.Monsters
                     PlayerObject player = (PlayerObject)ob;
                     if (player.GameMaster) return false;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }
@@ -246,7 +246,7 @@ namespace Server.Models.Monsters
 
                     if (player.GameMaster) return false;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }
@@ -258,11 +258,11 @@ namespace Server.Models.Monsters
             {
                 if (EXPOwner?.Node == null) return;
 
-                if (EXPOwner.Character.Account.GuildMember == null) return;
+                if (EXPOwner.Character.GuildMember == null) return;
 
-                if (EXPOwner.Character.Account.GuildMember.Guild.Castle != null) return;
+                if (EXPOwner.Character.GuildMember.Guild.Castle != null) return;
 
-                if (War.Participants.Count > 0 && !War.Participants.Contains(EXPOwner.Character.Account.GuildMember.Guild)) return;
+                if (War.Participants.Count > 0 && !War.Participants.Contains(EXPOwner.Character.GuildMember.Guild)) return;
 
                 #region Conquest Stats
 
@@ -278,17 +278,17 @@ namespace Server.Models.Monsters
                 if (ownerGuild != null)
                     ownerGuild.Castle = null;
 
-                EXPOwner.Character.Account.GuildMember.Guild.Castle = War.Castle;
+                EXPOwner.Character.GuildMember.Guild.Castle = War.Castle;
 
                 foreach (SConnection con in SEnvir.Connections)
-                    con.ReceiveChat(string.Format(con.Language.ConquestCapture, EXPOwner.Character.Account.GuildMember.Guild.GuildName, War.Castle.Name), MessageType.System);
+                    con.ReceiveChat(string.Format(con.Language.ConquestCapture, EXPOwner.Character.GuildMember.Guild.GuildName, War.Castle.Name), MessageType.System);
 
                 SEnvir.Broadcast(new S.GuildCastleInfo
                 {
                     Index = War.Castle.Index,
-                    Owner = EXPOwner.Character.Account.GuildMember.Guild.GuildName,
-                    Flag = EXPOwner.Character.Account.GuildMember.Guild.Flag,
-                    Colour = EXPOwner.Character.Account.GuildMember.Guild.Colour
+                    Owner = EXPOwner.Character.GuildMember.Guild.GuildName,
+                    Flag = EXPOwner.Character.GuildMember.Guild.Flag,
+                    Colour = EXPOwner.Character.GuildMember.Guild.Colour
                 });
 
                 War.CastleTarget = null;

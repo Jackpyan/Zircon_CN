@@ -49,15 +49,22 @@ namespace Library.Network
 
         public EventHandler<Exception> OnException;
 
-        protected BaseConnection(TcpClient client)
+        /// <summary>
+        /// 无 socket 构造：给服务器内部对象（如假人）使用，不绑定任何网络连接。
+        /// 派生类需自行把 Connected 置真，并保证 Process / BeginSend 等网络路径不会被走到。
+        /// </summary>
+        protected BaseConnection()
         {
-            Client = client;
-            Client.NoDelay = true;
-
             Connected = true;
             TimeConnected = Time.Now;
 
             TotalPacketsProcessed = 0;
+        }
+
+        protected BaseConnection(TcpClient client) : this()
+        {
+            Client = client;
+            Client.NoDelay = true;
         }
 
         protected void BeginReceive()
@@ -121,7 +128,7 @@ namespace Library.Network
         }
         private void BeginSend(List<byte> data)
         {
-            if (!Connected || data.Count == 0) return;
+            if (Client == null || !Connected || data.Count == 0) return;
 
             try
             {
@@ -172,7 +179,7 @@ namespace Library.Network
             ReceiveList = null;
             _rawData = null;
 
-            Client.Client.Dispose();
+            Client?.Client?.Dispose();
             Client = null;
         }
 
@@ -194,7 +201,7 @@ namespace Library.Network
         }
         private void BeginSendDisconnect(List<byte> data)
         {
-            if (!Connected || data.Count == 0) return;
+            if (Client == null || !Connected || data.Count == 0) return;
 
             if (Disconnecting) return;
 

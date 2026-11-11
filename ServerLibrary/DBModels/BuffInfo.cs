@@ -23,22 +23,6 @@ namespace Server.DBModels
         }
         private CharacterInfo _Character;
 
-        [Association("Buffs")]
-        public AccountInfo Account
-        {
-            get { return _Account; }
-            set
-            {
-                if (_Account == value) return;
-
-                var oldValue = _Account;
-                _Account = value;
-
-                OnChanged(oldValue, value, "Account");
-            }
-        }
-        private AccountInfo _Account;
-
         public BuffType Type
         {
             get { return _Type; }
@@ -192,7 +176,6 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
             Character = null;
 
             base.OnDeleted();
@@ -203,19 +186,9 @@ namespace Server.DBModels
         {
             base.OnChanged(oldValue, newValue, propertyName);
 
-            switch (propertyName)
-            {
-                case "Character":
-                    if (newValue == null) break;
-
-                    Account = null;
-                    break;
-                case "Account":
-                    if (newValue == null) break;
-
-                    Character = null;
-                    break;
-            }
+            // Buff 现在只挂在角色上（2026-11-11 起从账号下沉到角色），
+            // 原来这里是「角色变了要解绑账号 / 账号变了要解绑角色」的交叉解绑，
+            // 账号侧字段已删除后没有交叉对象可解绑，只保留基类调用。
         }
 
 

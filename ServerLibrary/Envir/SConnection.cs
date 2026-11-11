@@ -29,8 +29,21 @@ namespace Server.Envir
         public GameStage Stage { get; set; }
         public AccountInfo Account { get; set; }
         public PlayerObject Player { get; set; }
+
+        /// <summary>
+        /// 该连接当前代表的角色。游戏阶段 = 自己上线的角色；
+        /// 观察阶段没有上线角色，退回账号的最后登录角色（与聊天里的 <c>con.Account?.LastCharacter</c> 一致）。
+        /// 屏蔽名单下沉到角色后，所有按账号做的屏蔽判定都改走这里。
+        /// </summary>
+        public CharacterInfo ActiveCharacter => Player?.Character ?? Account?.LastCharacter;
         public string IPAddress { get; }
         public int SessionID { get; }
+
+        /// <summary>
+        /// 是否为服务器内置假人。假人没有 socket，所有网络路径（Process / Enqueue / Disconnect）
+        /// 都必须提前短路，否则会走到 base 实现里去碰 Client，直接抛 NullReference。
+        /// </summary>
+        public bool IsBot { get; }
 
         public SConnection Observed;
         public List<SConnection> Observers = new List<SConnection>();
@@ -63,9 +76,46 @@ namespace Server.Envir
             Enqueue(new G.Connected());
         }
 
+        /// <summary>
+        /// 假人专用：不建立 socket，直接把连接当作「已连上」的对象塞进 SEnvir.Connections，
+        /// 之后与真人走完全相同的 Login / StartGame / PlayerObject 流程。
+        /// </summary>
+        public SConnection(string botAddress, bool isBot) : base()
+        {
+            IsBot = isBot;
+            IPAddress = botAddress;
+            SessionID = ++SessionCount;
+
+            Language = (StringMessages)ConfigReader.ConfigObjects[typeof(ChineseMessages)];
+            Stage = GameStage.Login;
+
+            // 假人不会被 BeginReceive 刷新超时，必须给一个永不到期的时间，否则第一帧就被判超时踢掉。
+            TimeOutTime = DateTime.MaxValue;
+        }
+
         public override void Disconnect()
         {
             if (!Connected) return;
+
+            if (IsBot)
+            {
+                Connected = false;
+                CleanUp();
+
+                SEnvir.Connections.Remove(this);
+
+                if (SEnvir.IPCount.TryGetValue(IPAddress, out int botCount))
+                {
+                    if (botCount <= 1)
+                        SEnvir.IPCount.Remove(IPAddress);
+                    else
+                        SEnvir.IPCount[IPAddress] = botCount - 1;
+                }
+
+                SEnvir.DBytesSent += TotalBytesSent;
+                SEnvir.DBytesReceived += TotalBytesReceived;
+                return;
+            }
 
             base.Disconnect();
 
@@ -82,12 +132,24 @@ namespace Server.Envir
 
         public override void SendDisconnect(Packet p)
         {
+            if (IsBot)
+            {
+                Disconnect();
+                return;
+            }
+
             base.SendDisconnect(p);
 
             CleanUp();
         }
         public override void TryDisconnect()
         {
+            if (IsBot)
+            {
+                Disconnect();
+                return;
+            }
+
             if (Stage == GameStage.Game)
             {
                 if (SEnvir.Now >= Player.CombatTime.AddSeconds(10))
@@ -109,6 +171,12 @@ namespace Server.Envir
         }
         public override void TrySendDisconnect(Packet p)
         {
+            if (IsBot)
+            {
+                Disconnect();
+                return;
+            }
+
             if (Stage == GameStage.Game)
             {
                 if (SEnvir.Now >= Player.CombatTime.AddSeconds(10))
@@ -170,6 +238,10 @@ namespace Server.Envir
 
         public override void Process()
         {
+            // 假人没有 socket：base.Process() 第一件事就是判 Client == null 然后 TryDisconnect，
+            // 必须在这里整段跳过，否则假人一个心跳都活不过。
+            if (IsBot) return;
+
             if (SEnvir.Now >= PingTime && !PingSent && Stage != GameStage.None)
             {
                 PingTime = SEnvir.Now;
@@ -208,6 +280,9 @@ namespace Server.Envir
 
         public override void Enqueue(Packet p)
         {
+            // 假人不发网络包：一律丢弃，避免 SendList 无界增长（Process 已早退，没人消费）。
+            if (IsBot) return;
+
             base.Enqueue(p);
 
             if (p == null || !p.ObserverPacket) return;
@@ -1049,7 +1124,7 @@ namespace Server.Envir
             {
                 if (results.Count >= 9) break;
 
-                results.Add(info.ToClientInfo(Account));
+                results.Add(info.ToClientInfo(Player?.Character));
                 VisibleResults.Add(info);
             }
 
@@ -1073,7 +1148,7 @@ namespace Server.Envir
 
             VisibleResults.Add(info);
 
-            Enqueue(new S.MarketPlaceSearchIndex { Index = p.Index, Result = info.ToClientInfo(Account), ObserverPacket = false });
+            Enqueue(new S.MarketPlaceSearchIndex { Index = p.Index, Result = info.ToClientInfo(Player?.Character), ObserverPacket = false });
         }
         public void Process(C.MarketPlaceCancelConsign p)
         {
@@ -1110,7 +1185,7 @@ namespace Server.Envir
         {
             if (Stage != GameStage.Game) return;
 
-            MailInfo mail = Account.Mail.FirstOrDefault(x => x.Index == p.Index);
+            MailInfo mail = Player?.Character?.Mail.FirstOrDefault(x => x.Index == p.Index);
 
             if (mail == null) return;
 
@@ -1414,9 +1489,20 @@ namespace Server.Envir
                 return;
             }
 
-            foreach (BlockInfo blockInfo in Account.BlockingList)
+            // 屏蔽名单是角色级的（2026-11-11 起从账号下沉到角色）：
+            // 屏蔽「张三」只屏蔽张三这个角色，他同账号的其它角色照常聊天。
+            // 观察阶段连接没有上线角色，退回账号最后登录的角色（与聊天侧屏蔽判定一致）。
+            CharacterInfo blocker = ActiveCharacter;
+
+            if (blocker == null)
             {
-                if (blockInfo.BlockedAccount == info.Account)
+                ReceiveChat(string.Format(Language.CannotFindPlayer, p.Name), MessageType.System);
+                return;
+            }
+
+            foreach (BlockInfo blockInfo in blocker?.BlockingList ?? Enumerable.Empty<BlockInfo>())
+            {
+                if (blockInfo.BlockedCharacter == info)
                 {
                     ReceiveChat(string.Format(Language.AlreadyBlocked, p.Name), MessageType.System);
                     return;
@@ -1425,8 +1511,8 @@ namespace Server.Envir
 
             BlockInfo block = SEnvir.BlockInfoList.CreateNewObject();
 
-            block.Account = Account;
-            block.BlockedAccount = info.Account;
+            block.Character = blocker;
+            block.BlockedCharacter = info;
             block.BlockedName = info.CharacterName;
 
             Enqueue(new S.BlockAdd { Info = block.ToClientInfo(), ObserverPacket = false });
@@ -1435,7 +1521,7 @@ namespace Server.Envir
         {
             if (Stage != GameStage.Game && Stage != GameStage.Observer) return;
 
-            BlockInfo block = Account?.BlockingList.FirstOrDefault(x => x.Index == p.Index);
+            BlockInfo block = ActiveCharacter?.BlockingList.FirstOrDefault(x => x.Index == p.Index);
 
             if (block == null) return;
 

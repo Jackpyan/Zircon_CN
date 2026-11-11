@@ -49,7 +49,7 @@ namespace Server.Envir.Commands.Command.Admin
 
                 long actualIncrease = currency.Amount - originalAmount;
 
-                player.LogMilestone(MilestoneType.CurrencyGain, actualIncrease, currency: player.Character.Account.HuntGold.Info);
+                player.LogMilestone(MilestoneType.CurrencyGain, actualIncrease, currency: player.Character.HuntGold?.Info);
                 player.CurrencyChanged(currency);
                 return;
             }

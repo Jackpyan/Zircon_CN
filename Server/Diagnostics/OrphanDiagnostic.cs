@@ -201,13 +201,13 @@ namespace Server.Diagnostics
 
             AddOwnership<CharacterInfo, AccountInfo>(result, collections, nameof(CharacterInfo.Account), nameof(AccountInfo.Characters));
             AddOwnership<UserCurrency, AccountInfo>(result, collections, nameof(UserCurrency.Account), nameof(AccountInfo.Currencies));
-            AddOwnership<AuctionInfo, AccountInfo>(result, collections, nameof(AuctionInfo.Account), nameof(AccountInfo.Auctions));
-            AddOwnership<MailInfo, AccountInfo>(result, collections, nameof(MailInfo.Account), nameof(AccountInfo.Mail));
+            AddOwnership<AuctionInfo, CharacterInfo>(result, collections, nameof(AuctionInfo.Character), nameof(CharacterInfo.Auctions));
+            AddOwnership<MailInfo, CharacterInfo>(result, collections, nameof(MailInfo.Character), nameof(CharacterInfo.Mail));
             AddOwnership<UserDrop, CharacterInfo>(result, collections, nameof(UserDrop.Character), nameof(CharacterInfo.UserDrops));
-            AddOwnership<UserCompanion, AccountInfo>(result, collections, nameof(UserCompanion.Account), nameof(AccountInfo.Companions));
-            AddOwnership<UserCompanionUnlock, AccountInfo>(result, collections, nameof(UserCompanionUnlock.Account), nameof(AccountInfo.CompanionUnlocks));
-            AddOwnership<BlockInfo, AccountInfo>(result, collections, nameof(BlockInfo.Account), nameof(AccountInfo.BlockingList));
-            AddOwnership<BlockInfo, AccountInfo>(result, collections, nameof(BlockInfo.BlockedAccount), nameof(AccountInfo.BlockedByList));
+            AddOwnership<UserCompanion, CharacterInfo>(result, collections, nameof(UserCompanion.Owner), nameof(CharacterInfo.Companions));
+            AddOwnership<UserCompanionUnlock, CharacterInfo>(result, collections, nameof(UserCompanionUnlock.Character), nameof(CharacterInfo.CompanionUnlocks));
+            AddOwnership<BlockInfo, CharacterInfo>(result, collections, nameof(BlockInfo.Character), nameof(CharacterInfo.BlockingList));
+            AddOwnership<BlockInfo, CharacterInfo>(result, collections, nameof(BlockInfo.BlockedCharacter), nameof(CharacterInfo.BlockedByList));
             AddOwnership<UserFortuneInfo, CharacterInfo>(result, collections, nameof(UserFortuneInfo.Character), nameof(CharacterInfo.Fortunes));
 
             AddOwnership<CharacterBeltLink, CharacterInfo>(result, collections, nameof(CharacterBeltLink.Character), nameof(CharacterInfo.BeltLinks));
@@ -217,10 +217,8 @@ namespace Server.Diagnostics
             AddOwnership<UserDiscipline, CharacterInfo>(result, collections, nameof(UserDiscipline.Character), nameof(CharacterInfo.Discipline));
             AddOwnership<UserCompanion, CharacterInfo>(result, collections, nameof(UserCompanion.Character), nameof(CharacterInfo.Companion));
             AddOwnership<BuffInfo, CharacterInfo>(result, collections, nameof(BuffInfo.Character), nameof(CharacterInfo.Buffs));
-            AddOwnership<BuffInfo, AccountInfo>(result, collections, nameof(BuffInfo.Account), nameof(AccountInfo.Buffs));
             AddOwnership<RefineInfo, CharacterInfo>(result, collections, nameof(RefineInfo.Character), nameof(CharacterInfo.Refines));
             AddOwnership<UserQuest, CharacterInfo>(result, collections, nameof(UserQuest.Character), nameof(CharacterInfo.Quests));
-            AddOwnership<UserQuest, AccountInfo>(result, collections, nameof(UserQuest.Account), nameof(AccountInfo.Quests));
             AddOwnership<FriendInfo, CharacterInfo>(result, collections, nameof(FriendInfo.Character), nameof(CharacterInfo.Friends));
             AddOwnership<FriendInfo, CharacterInfo>(result, collections, nameof(FriendInfo.FriendedCharacter), nameof(CharacterInfo.FriendedBy));
 
@@ -229,7 +227,7 @@ namespace Server.Diagnostics
             AddOwnership<UserMilestoneLog, CharacterInfo>(result, collections, nameof(UserMilestoneLog.Character), nameof(CharacterInfo.MilestoneLogs));
             AddOwnership<UserMilestone, CharacterInfo>(result, collections, nameof(UserMilestone.Character), nameof(CharacterInfo.Milestones));
             AddOwnership<GuildMemberInfo, GuildInfo>(result, collections, nameof(GuildMemberInfo.Guild), nameof(GuildInfo.Members));
-            AddOwnership<GuildMemberInfo, AccountInfo>(result, collections, nameof(GuildMemberInfo.Account), nameof(AccountInfo.GuildMember));
+            AddOwnership<GuildMemberInfo, CharacterInfo>(result, collections, nameof(GuildMemberInfo.Character), nameof(CharacterInfo.GuildMember));
             AddOwnership<UserConquest, GuildInfo>(result, collections, nameof(UserConquest.Guild), nameof(GuildInfo.Conquest));
 
             return result;

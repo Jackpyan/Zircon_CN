@@ -375,7 +375,7 @@ namespace Server.Models
                                     value2 = ob.Name;
                                     break;
                                 case NPCFieldType.GuildName:
-                                    value2 = ob.Character.Account.GuildMember?.Guild?.GuildName ?? null;
+                                    value2 = ob.Character.GuildMember?.Guild?.GuildName ?? null;
                                     break;
                                 case NPCFieldType.FameCost:
                                     {
@@ -551,7 +551,7 @@ namespace Server.Models
                             return false;
                         break;
                     case NPCCheckType.Horse:
-                        if (!Compare(check.Operator, (int)ob.Character.Account.Horse, check.IntParameter1)) return false;
+                        if (!Compare(check.Operator, (int)ob.Character.Horse, check.IntParameter1)) return false;
                         break;
                     case NPCCheckType.Marriage:
                         if (check.Operator == Operator.Equal)
@@ -702,8 +702,8 @@ namespace Server.Models
                     value = $"{type}_{ob.Name}";
                     break;
                 case NPCDataType.Guild:
-                    if (ob.Character.Account.GuildMember?.Guild?.GuildName != null)
-                        value = $"{type}_{ob.Character.Account.GuildMember.Guild.GuildName}";
+                    if (ob.Character.GuildMember?.Guild?.GuildName != null)
+                        value = $"{type}_{ob.Character.GuildMember.Guild.GuildName}";
                     break;
                 case NPCDataType.Account:
                     value = $"{type}_{ob.Character.Account.EMailAddress}";

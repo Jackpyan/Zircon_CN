@@ -327,92 +327,78 @@ namespace Server.DBModels
         }
         private string _BanReason;
 
+        /// <summary>
+        /// 充值元宝（真钱）。**账号级**，同账号的所有角色共同拥有（用户 2026-11-11 决策）。
+        /// </summary>
+        /// <remarks>
+        /// 金币 / 狩猎币 / 声望点 / 贡献点已于 2026-11-11 下沉到角色，改用 <see cref="CharacterInfo.Gold"/> 等。
+        /// 这里刻意**不再**提供 <c>Gold</c> / <c>HuntGold</c> 便捷属性 —— 让编译器把全部旧调用点暴露出来，
+        /// 避免漏改成账号级读取。
+        /// </remarks>
         [IgnoreProperty]
-        public UserCurrency Gold => Currencies.First(x => x.Info.Type == CurrencyType.Gold);
+        public UserCurrency GameGold => Currencies.FirstOrDefault(x => x.Info?.Type == CurrencyType.GameGold);
 
-        [IgnoreProperty]
-        public UserCurrency GameGold => Currencies.First(x => x.Info.Type == CurrencyType.GameGold);
-
-        [IgnoreProperty]
-        public UserCurrency HuntGold => Currencies.First(x => x.Info.Type == CurrencyType.HuntGold);
-
-        public bool AllowGroup
+        /// <summary>
+        /// 账号上挂账的狩猎币（2026-11-11 起狩猎币下沉到角色）。
+        /// <para>
+        /// 推荐奖励这类「在角色建好之前就要发钱」的场景先挂在这里，等该账号的**第一个角色**上线时转入。
+        /// </para>
+        /// </summary>
+        public long PendingHuntGold
         {
-            get { return _AllowGroup; }
+            get { return _PendingHuntGold; }
             set
             {
-                if (_AllowGroup == value) return;
+                if (_PendingHuntGold == value) return;
 
-                var oldValue = _AllowGroup;
-                _AllowGroup = value;
+                var oldValue = _PendingHuntGold;
+                _PendingHuntGold = value;
 
-                OnChanged(oldValue, value, "AllowGroup");
+                OnChanged(oldValue, value, "PendingHuntGold");
             }
         }
-        private bool _AllowGroup;
+        private long _PendingHuntGold;
 
-        public bool AllowTrade
+        /// <summary>
+        /// 给账号下的某个角色发狩猎币。
+        /// <para>
+        /// 角色级货币下沉后，「给账号发钱」必须落到具体角色上。规则：优先发给**最后登录的角色**，
+        /// 其次第一个未删除的角色；账号下还没有角色时先挂账（<see cref="PendingHuntGold"/>），
+        /// 等第一个角色上线时补发。
+        /// </para>
+        /// </summary>
+        /// <returns>实际入账的货币对象；走挂账时返回 null。</returns>
+        public UserCurrency GrantHuntGold(long amount)
         {
-            get { return _AllowTrade; }
-            set
+            if (amount <= 0) return null;
+
+            CharacterInfo target = LastCharacter != null && !LastCharacter.Deleted
+                ? LastCharacter
+                : Characters.FirstOrDefault(x => x != null && !x.Deleted);
+
+            if (target == null)
             {
-                if (_AllowTrade == value) return;
-
-                var oldValue = _AllowTrade;
-                _AllowTrade = value;
-
-                OnChanged(oldValue, value, "AllowTrade");
+                PendingHuntGold += amount;
+                return null;
             }
-        }
-        private bool _AllowTrade;
 
-        public bool AllowGuild
-        {
-            get { return _AllowGuild; }
-            set
+            UserCurrency currency = target.HuntGold;
+
+            if (currency == null)
             {
-                if (_AllowGuild == value) return;
-
-                var oldValue = _AllowGuild;
-                _AllowGuild = value;
-
-                OnChanged(oldValue, value, "AllowGuild");
+                currency = Session.GetCollection<UserCurrency>().CreateNewObject();
+                currency.Character = target;
+                currency.Info = Session.GetCollection<CurrencyInfo>().Binding.FirstOrDefault(x => x.Type == CurrencyType.HuntGold);
             }
+
+            if (currency == null || currency.Info == null) return null;
+
+            currency.Amount += amount;
+
+            return currency;
         }
-        private bool _AllowGuild;
-
-        public bool AllowGroupRecall
-        {
-            get { return _AllowGroupRecall; }
-            set
-            {
-                if (_AllowGroupRecall == value) return;
-
-                var oldValue = _AllowGroupRecall;
-                _AllowGroupRecall = value;
-
-                OnChanged(oldValue, value, "AllowGroupRecall");
-            }
-        }
-        private bool _AllowGroupRecall;
 
 
-
-        [Association("Member")]
-        public GuildMemberInfo GuildMember
-        {
-            get { return _GuildMember; }
-            set
-            {
-                if (_GuildMember == value) return;
-
-                var oldValue = _GuildMember;
-                _GuildMember = value;
-
-                OnChanged(oldValue, value, "GuildMember");
-            }
-        }
-        private GuildMemberInfo _GuildMember;
 
         public DateTime GlobalShoutExpiry
         {
@@ -429,21 +415,6 @@ namespace Server.DBModels
         }
         private DateTime _GlobalTime;
 
-        public HorseType Horse
-        {
-            get { return _Horse; }
-            set
-            {
-                if (_Horse == value) return;
-
-                var oldValue = _Horse;
-                _Horse = value;
-
-                OnChanged(oldValue, value, "Horse");
-            }
-        }
-        private HorseType _Horse;
-
         public bool Admin
         {
             get { return _Admin; }
@@ -458,21 +429,6 @@ namespace Server.DBModels
             }
         }
         private bool _Admin;
-
-        public int StorageSize
-        {
-            get { return _StorageSize; }
-            set
-            {
-                if (_StorageSize == value) return;
-
-                var oldValue = _StorageSize;
-                _StorageSize = value;
-
-                OnChanged(oldValue, value, "StorageSize");
-            }
-        }
-        private int _StorageSize;
 
         public string LastSum
         {
@@ -520,21 +476,6 @@ namespace Server.DBModels
         private bool _ItemBot;
 
 
-        public DateTime GuildTime
-        {
-            get { return _GuildTime; }
-            set
-            {
-                if (_GuildTime == value) return;
-
-                var oldValue = _GuildTime;
-                _GuildTime = value;
-
-                OnChanged(oldValue, value, "GuildTime");
-            }
-        }
-        private DateTime _GuildTime;
-
         public bool Observer
         {
             get { return _Observer; }
@@ -555,47 +496,14 @@ namespace Server.DBModels
         [Association("Currencies")]
         public DBBindingList<UserCurrency> Currencies { get; set; }
 
-        [Association("Items")]
-        public DBBindingList<UserItem> Items { get; set; }
-
         [Association("Referrals")]
         public DBBindingList<AccountInfo> Referrals { get; set; }
 
         [Association("Characters")]
         public DBBindingList<CharacterInfo> Characters { get; set; }
 
-        [Association("Buffs")]
-        public DBBindingList<BuffInfo> Buffs { get; set; }
-
-        [Association("Auctions")]
-        public DBBindingList<AuctionInfo> Auctions { get; set; }
-
-        [Association("Mail")]
-        public DBBindingList<MailInfo> Mail { get; set; }
-
-        [Association("Companions")]
-        public DBBindingList<UserCompanion> Companions { get; set; }
-
-        [Association("CompanionUnlocks")]
-        public DBBindingList<UserCompanionUnlock> CompanionUnlocks { get; set; }
-
-        [Association("BlockingList")]
-        public DBBindingList<BlockInfo> BlockingList { get; set; } //Who this account is Blocking.
-
-        [Association("BlockedByList")]
-        public DBBindingList<BlockInfo> BlockedByList { get; set; } //Who's blocked this account.
-
         [Association("Payments")]
         public DBBindingList<GameGoldPayment> Payments { get; set; }
-
-        [Association("StoreSales")]
-        public DBBindingList<GameStoreSale> StoreSales { get; set; }
-
-        [Association("StoreFavourites")]
-        public DBBindingList<GameStoreFavourite> StoreFavourites { get; set; }
-
-        [Association("Quests")]
-        public DBBindingList<UserQuest> Quests { get; set; }
 
         public CharacterInfo LastCharacter
         {
@@ -621,48 +529,27 @@ namespace Server.DBModels
         {
             base.OnCreated();
 
-            StorageSize = Globals.StorageSize;
-
-            BuffInfo buff = SEnvir.BuffInfoList.CreateNewObject();
-
-            buff.Account = this;
-            buff.Type = BuffType.HuntGold;
-            buff.TickFrequency = TimeSpan.FromMinutes(1);
-            buff.Stats = new Stats { [Stat.AvailableHuntGoldCap] = 15 };
-            buff.RemainingTime = TimeSpan.MaxValue;
-
             AddDefaultCurrencies();
         }
         protected override void OnLoaded()
         {
             base.OnLoaded();
 
-            if (StorageSize == 0)
-                StorageSize = Globals.StorageSize;
-
-            BuffInfo buff = Buffs.FirstOrDefault(x => x.Type == BuffType.HuntGold);
-            if (buff != null)
-                buff.Stats = new Stats { [Stat.AvailableHuntGoldCap] = 15 };
-
-            var removeList = new List<UserItem>();
-
-            foreach (var item in Items)
-            {
-                if (item.Info == null)
-                    removeList.Add(item);
-            }
-
-            foreach (var item in removeList)
-                Items.Remove(item);
-
             AddDefaultCurrencies();
             RemoveDeletedCurrencies();
         }
 
+        /// <summary>
+        /// 补齐账号级货币。2026-11-11 起**只有充值元宝 GameGold 留在账号**，
+        /// 金币 / 狩猎币 / 声望点 / 贡献点全部下沉到角色（见 <see cref="CharacterInfo.Currencies"/>）。
+        /// </summary>
         private void AddDefaultCurrencies()
         {
             foreach (var currency in Session.GetCollection<CurrencyInfo>().Binding)
             {
+                // 只有充值元宝是账号级的，其余币种在角色上。
+                if (currency.Type != CurrencyType.GameGold) continue;
+
                 var userCurrency = Currencies.FirstOrDefault(x => x.Info == currency);
 
                 if (userCurrency == null)
@@ -755,6 +642,37 @@ namespace Server.DBModels
             }
         }
         private AccountIdentity _Identity = AccountIdentity.Normal;
+
+        /// <summary>
+        /// 账号类型（后台显示用，2026-11-11）。
+        /// <para>
+        /// 只读 + <see cref="IgnoreProperty"/>：不参与持久化，也不改变 <see cref="IsBot"/> 作为最后一个 DB 属性的位置。
+        /// 后台账号列表用它显示「真人 / 假人」，避免运营把假人账号当真人账号处理。
+        /// </para>
+        /// </summary>
+        [IgnoreProperty]
+        public string AccountType => IsBot ? "假人" : "真人";
+
+        /// <summary>
+        /// 是否为服务器内置假人账号（AI 假人系统）。
+        /// 用途：假人账号不参与后台账号统计、不允许玩家登录（后端加校验）、
+        /// 上线人数与水位调度靠它区分真假人。
+        /// 注意：DB 属性按声明顺序序列化，新增字段必须加在类的最后一个属性位置。
+        /// </summary>
+        public bool IsBot
+        {
+            get { return _IsBot; }
+            set
+            {
+                if (_IsBot == value) return;
+
+                var oldValue = _IsBot;
+                _IsBot = value;
+
+                OnChanged(oldValue, value, "IsBot");
+            }
+        }
+        private bool _IsBot;
 
         /// <summary>
         /// 实际生效的管理身份。

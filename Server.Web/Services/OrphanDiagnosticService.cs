@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Reflection;
 using MirDB;
 using Server.Envir;
@@ -12,13 +12,14 @@ public sealed class OrphanDiagnosticService(AdminAuditService audit)
     [
         ("CharacterInfo", "AccountInfo", "Account", "Characters"),
         ("UserCurrency", "AccountInfo", "Account", "Currencies"),
-        ("AuctionInfo", "AccountInfo", "Account", "Auctions"),
-        ("MailInfo", "AccountInfo", "Account", "Mail"),
+        ("UserCurrency", "CharacterInfo", "Character", "Currencies"),
+        ("AuctionInfo", "CharacterInfo", "Character", "Auctions"),
+        ("MailInfo", "CharacterInfo", "Character", "Mail"),
         ("UserDrop", "CharacterInfo", "Character", "UserDrops"),
-        ("UserCompanion", "AccountInfo", "Account", "Companions"),
-        ("UserCompanionUnlock", "AccountInfo", "Account", "CompanionUnlocks"),
-        ("BlockInfo", "AccountInfo", "Account", "BlockingList"),
-        ("BlockInfo", "AccountInfo", "BlockedAccount", "BlockedByList"),
+        ("UserCompanion", "CharacterInfo", "Owner", "Companions"),
+        ("UserCompanionUnlock", "CharacterInfo", "Character", "CompanionUnlocks"),
+        ("BlockInfo", "CharacterInfo", "Character", "BlockingList"),
+        ("BlockInfo", "CharacterInfo", "BlockedCharacter", "BlockedByList"),
         ("UserFortuneInfo", "CharacterInfo", "Character", "Fortunes"),
         ("CharacterBeltLink", "CharacterInfo", "Character", "BeltLinks"),
         ("AutoPotionLink", "CharacterInfo", "Character", "AutoPotionLinks"),
@@ -27,10 +28,8 @@ public sealed class OrphanDiagnosticService(AdminAuditService audit)
         ("UserDiscipline", "CharacterInfo", "Character", "Discipline"),
         ("UserCompanion", "CharacterInfo", "Character", "Companion"),
         ("BuffInfo", "CharacterInfo", "Character", "Buffs"),
-        ("BuffInfo", "AccountInfo", "Account", "Buffs"),
         ("RefineInfo", "CharacterInfo", "Character", "Refines"),
         ("UserQuest", "CharacterInfo", "Character", "Quests"),
-        ("UserQuest", "AccountInfo", "Account", "Quests"),
         ("FriendInfo", "CharacterInfo", "Character", "Friends"),
         ("FriendInfo", "CharacterInfo", "FriendedCharacter", "FriendedBy"),
         ("UserItemStat", "UserItem", "Item", "AddedStats"),
@@ -38,7 +37,7 @@ public sealed class OrphanDiagnosticService(AdminAuditService audit)
         ("UserMilestoneLog", "CharacterInfo", "Character", "MilestoneLogs"),
         ("UserMilestone", "CharacterInfo", "Character", "Milestones"),
         ("GuildMemberInfo", "GuildInfo", "Guild", "Members"),
-        ("GuildMemberInfo", "AccountInfo", "Account", "GuildMember"),
+        ("GuildMemberInfo", "CharacterInfo", "Character", "GuildMember"),
         ("UserConquest", "GuildInfo", "Guild", "Conquest")
     ];
 

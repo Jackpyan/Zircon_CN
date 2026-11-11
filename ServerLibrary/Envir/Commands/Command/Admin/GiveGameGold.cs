@@ -29,7 +29,7 @@ namespace Server.Envir.Commands.Admin
 
             if (character.Account.Referral != null)
             {
-                character.Account.Referral.HuntGold.Amount += count / 10;
+                character.Account.Referral.GrantHuntGold(count / 10);
 
                 if (character.Account.Referral.Connection != null)
                 {

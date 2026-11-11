@@ -890,7 +890,6 @@ namespace Library.Network.ServerPackets
     public sealed class StartObserver : Packet
     {
         public StartInformation StartInformation { get; set; }
-        public List<ClientUserItem> Items { get; set; }
     }
     public sealed class ObservableSwitch : Packet
     {

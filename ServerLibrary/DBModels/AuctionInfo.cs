@@ -7,22 +7,6 @@ namespace Server.DBModels
     [UserObject]
     public sealed class AuctionInfo : DBObject
     {
-        [Association("Auctions")]
-        public AccountInfo Account
-        {
-            get { return _Account; }
-            set
-            {
-                if (_Account == value) return;
-
-                var oldValue = _Account;
-                _Account = value;
-
-                OnChanged(oldValue, value, "Account");
-            }
-        }
-        private AccountInfo _Account;
-
         [Association("Auction")]
         public UserItem Item
         {
@@ -39,6 +23,10 @@ namespace Server.DBModels
         }
         private UserItem _Item;
 
+        /// <summary>
+        /// 上架角色（2026-11-11 起拍卖从账号下沉到角色）。
+        /// </summary>
+        [Association("Auctions")]
         public CharacterInfo Character
         {
             get { return _Character; }
@@ -101,7 +89,6 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
             Item = null;
             Character = null;
 
@@ -109,7 +96,7 @@ namespace Server.DBModels
         }
 
 
-        public ClientMarketPlaceInfo ToClientInfo(AccountInfo account)
+        public ClientMarketPlaceInfo ToClientInfo(CharacterInfo character)
         {
             return new ClientMarketPlaceInfo
             {
@@ -121,7 +108,7 @@ namespace Server.DBModels
 
                 Message = Message,
 
-                IsOwner = account == Account,
+                IsOwner = character == Character,
 
                 Price = Price,
                 ConsignDate = ConsignDate,
@@ -132,7 +119,7 @@ namespace Server.DBModels
 
         public override string ToString()
         {
-            return Account?.ToString() ?? string.Empty;
+            return Character?.Account?.ToString() ?? string.Empty;
         }
     }
 }

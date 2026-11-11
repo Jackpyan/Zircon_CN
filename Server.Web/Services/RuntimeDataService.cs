@@ -16,7 +16,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
     public IReadOnlyList<RuntimeCollectionDescriptor> Collections { get; } =
     [
         View("accounts", "账号", nameof(SEnvir.AccountInfoList), "AccountView",
-            ("EMailAddress", "邮箱"), ("RealName", "真实姓名"), ("BirthDate", "出生日期"), ("Referral", "推荐人"),
+            ("AccountType", "类型"), ("EMailAddress", "邮箱"), ("RealName", "真实姓名"), ("BirthDate", "出生日期"), ("Referral", "推荐人"),
             ("CreationIP", "创建 IP"), ("CreationDate", "创建日期"), ("LastIP", "最后 IP"), ("LastLogin", "最后登录"),
             ("Activated", "已激活"), ("Banned", "封禁"), ("ExpiryDate", "到期时间"), ("BanReason", "封禁原因"),
             ("Admin", "管理员"), ("Observer", "观察者"), ("WebAdmin", "后台权限"), ("Identity", "身份")),
@@ -30,14 +30,14 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             ("TransactionID", "交易号"), ("TransactionType", "交易类型"), ("Status", "状态"), ("GameGoldAmount", "元宝数量"),
             ("Payer_EMail", "付款邮箱"), ("Payer_ID", "付款人 ID"), ("Price", "价格"), ("Currency", "币种"), ("Fee", "手续费"), ("Error", "错误")),
         View("sales", "商店销售", nameof(SEnvir.GameStoreSaleList), "GameStoreSaleView",
-            ("Account", "账号"), ("Item", "物品"), ("Date", "日期"), ("Price", "价格"), ("Count", "数量"), ("HuntGold", "狩猎金币")),
+            ("Character", "购买角色"), ("Item", "物品"), ("Date", "日期"), ("Price", "价格"), ("Count", "数量"), ("HuntGold", "狩猎金币")),
         View("conquest", "攻城战统计", nameof(SEnvir.UserConquestStatsList), "UserConquestStatsView",
             ("WarStartDate", "战争开始"), ("CastleName", "城堡"), ("CharacterName", "角色"), ("GuildName", "行会"),
             ("Level", "等级"), ("Class", "职业"), ("BossDamageTaken", "首领承伤"), ("BossDamageDealt", "首领伤害"),
             ("BossDeathCount", "首领战死亡"), ("BossKillCount", "首领击杀"), ("PvPDamageTaken", "玩家对战承伤"),
             ("PvPDamageDealt", "玩家对战伤害"), ("PvPDeathCount", "玩家对战死亡"), ("PvPKillCount", "玩家对战击杀")),
         View("mail", "用户邮件", nameof(SEnvir.MailInfoList), "UserMailView",
-            ("Sender", "发件人"), ("Recipient", "收件人"), ("Subject", "主题"), ("Message", "内容"),
+            ("Sender", "发件人"), ("Character", "收件角色"), ("Subject", "主题"), ("Message", "内容"),
             ("Date", "日期"), ("Gold", "金币"), ("HuntGold", "狩猎金币"), ("Read", "已读")),
         View("npcs", "NPC 数据", nameof(SEnvir.GameNPCList), "NPCListView",
             ("Category", "分类"), ("TypeValue", "类型值"), ("IntValue1", "整数值 1")),
@@ -121,8 +121,6 @@ public sealed class RuntimeDataService(AdminAuditService audit)
 
     /// <summary>
     /// 删除账号（账号页「删除」按钮用，二次确认在 UI 层）。
-    /// 账号自身的集合没有 Aggregate 级联，必须按依赖顺序逐个删除，否则会留下孤儿行；
-    /// 角色子集合（Items/Magics/Buffs/Quests…）是 Aggregate，删角色即级联清理。
     /// </summary>
     public Task<bool> DeleteAccountAsync(int index, string expectedETag, string user,
         CancellationToken cancellationToken = default) =>
@@ -142,38 +140,7 @@ public sealed class RuntimeDataService(AdminAuditService audit)
             string email = account.EMailAddress;
             int characterCount = account.Characters.Count;
 
-            // 1) 解除外部引用：以本账号为推荐人的账号、屏蔽本账号的记录、行会成员记录
-            foreach (Server.DBModels.AccountInfo child in account.Referrals.ToList())
-                child.Referral = null;
-
-            foreach (Server.DBModels.BlockInfo block in account.BlockedByList.ToList())
-                block.Delete();
-
-            foreach (Server.DBModels.GuildMemberInfo member in SEnvir.GuildMemberInfoList.Binding
-                         .Where(x => x.Account == account).ToList())
-                member.Delete();
-
-            // 2) 角色（其 Items/Magics/Buffs/Quests 等是 Aggregate，会级联删除）
-            foreach (Server.DBModels.CharacterInfo character in account.Characters.ToList())
-                character.Delete();
-
-            // 3) 账号自有集合（无级联，逐个删）
-            foreach (Server.DBModels.UserCurrency currency in account.Currencies.ToList()) currency.Delete();
-            foreach (Server.DBModels.UserItem item in account.Items.ToList()) item.Delete();
-            foreach (Server.DBModels.BuffInfo buff in account.Buffs.ToList()) buff.Delete();
-            foreach (Server.DBModels.MailInfo mail in account.Mail.ToList()) mail.Delete();
-            foreach (Server.DBModels.AuctionInfo auction in account.Auctions.ToList()) auction.Delete();
-            // 保底账本（UserDrop / UserFortuneInfo）挂在角色上，删角色时已随之级联清理
-            foreach (Server.DBModels.UserCompanion companion in account.Companions.ToList()) companion.Delete();
-            foreach (Server.DBModels.UserCompanionUnlock unlock in account.CompanionUnlocks.ToList()) unlock.Delete();
-            foreach (Server.DBModels.BlockInfo block in account.BlockingList.ToList()) block.Delete();
-            foreach (Server.DBModels.GameGoldPayment payment in account.Payments.ToList()) payment.Delete();
-            foreach (Server.DBModels.GameStoreSale sale in account.StoreSales.ToList()) sale.Delete();
-            foreach (Server.DBModels.GameStoreFavourite favourite in account.StoreFavourites.ToList()) favourite.Delete();
-            foreach (Server.DBModels.UserQuest quest in account.Quests.ToList()) quest.Delete();
-
-            // 4) 最后删账号
-            account.Delete();
+            AccountCleanup.DeleteAccount(account);
 
             SEnvir.Session.Save(true);
 
@@ -182,6 +149,32 @@ public sealed class RuntimeDataService(AdminAuditService audit)
 
             return true;
         }, cancellationToken);
+
+    /// <summary>
+    /// 删除所有假人账号（AI 假人系统的「清理假人」用，2026-11-11）。
+    /// <para>
+    /// 严格限定 <c>AccountInfo.IsBot == true</c> —— 真人账号一个都不碰。
+    /// 正在线上的假人账号跳过（<c>Connection != null</c> 删不掉），由调用方先让它们下线。
+    /// </para>
+    /// </summary>
+    public Task<BotCleanupStats> DeleteBotAccountsAsync(string user, CancellationToken cancellationToken = default) =>
+        SEnvir.InvokeOnGameThreadAsync(() =>
+        {
+            BotCleanupStats result = AccountCleanup.DeleteBots();
+
+            SEnvir.Session.Save(true);
+
+            SEnvir.Log($"[后台清理假人] 删除假人账号 {result.Accounts} 个（角色 {result.Characters} 个），操作者：{user}");
+            audit.Record(user, "RuntimeData.DeleteBotAccounts", result.Summary);
+
+            return result;
+        }, cancellationToken);
+
+    /// <summary>
+    /// 统计假人账号将要被清掉多少东西（清理前的 dry-run 预览）。
+    /// </summary>
+    public Task<BotCleanupStats> PreviewBotCleanupAsync(CancellationToken cancellationToken = default) =>
+        SEnvir.InvokeOnGameThreadAsync(AccountCleanup.PreviewBots, cancellationToken);
 
     /// <summary>
     /// 给指定角色发放物品（仅在线角色）。物品页「发放」按钮用。

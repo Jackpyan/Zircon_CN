@@ -41,7 +41,7 @@ namespace Server.Envir.Commands.Command.Player
                     continue;
                 }
 
-                if (!member.Character.Account.AllowGroupRecall)
+                if (!member.Character.AllowGroupRecall)
                 {
                     member.Connection.ReceiveChatWithObservers(con => con.Language.GroupRecallNotAllowed, MessageType.System);
 

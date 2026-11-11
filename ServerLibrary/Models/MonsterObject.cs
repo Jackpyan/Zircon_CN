@@ -2986,6 +2986,7 @@ namespace Server.Models
                     {
                         Item = item,
                         Account = owner.Character.Account,
+                        Character = owner.Character,
                         Owners = eligibleAccounts,
                         MonsterDrop = true,
                     };
@@ -3031,13 +3032,13 @@ namespace Server.Models
                     if (SEnvir.IsUndroppableCurrencyItem(drop.Item))
                     {
                         //Only gold
-                        long taxableAmount = owner.Character.Account.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
+                        long taxableAmount = owner.Character.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
 
                         if (taxableAmount > 0)
                         {
                             item.Count -= taxableAmount;
 
-                            owner.Character.Account.GuildMember.Contribute(taxableAmount);
+                            owner.Character.GuildMember.Contribute(taxableAmount);
                         }
 
                         if (eligibleAccounts != null && owner.UsesGroupCurrencySharing(item))
@@ -3053,6 +3054,7 @@ namespace Server.Models
                     {
                         Item = item,
                         Account = owner.Character.Account,
+                        Character = owner.Character,
                         Owners = eligibleAccounts,
                         MonsterDrop = true,
                     };
@@ -3145,13 +3147,13 @@ namespace Server.Models
                             if (SEnvir.IsUndroppableCurrencyItem(task.ItemParameter))
                             {
                                 //Only gold
-                                long taxableAmount = owner.Character.Account.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
+                                long taxableAmount = owner.Character.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
 
                                 if (taxableAmount > 0)
                                 {
                                     item.Count -= taxableAmount;
 
-                                    owner.Character.Account.GuildMember.Contribute(taxableAmount);
+                                    owner.Character.GuildMember.Contribute(taxableAmount);
                                 }
 
                                 owner.GainItem(item);

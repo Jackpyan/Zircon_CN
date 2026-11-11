@@ -24,7 +24,7 @@ namespace Server.Envir.Commands.Command.Admin
             if (castle == null)
                 throw new UserCommandException(string.Format("找不到城堡 {0}。", vals[1]));
 
-            if (player.Character.Account.GuildMember?.Guild == null)
+            if (player.Character.GuildMember?.Guild == null)
             {
                 GuildInfo ownerGuild = SEnvir.GuildInfoList.Binding.FirstOrDefault(x => x.Castle == castle);
                 if (ownerGuild == null)
@@ -59,14 +59,14 @@ namespace Server.Envir.Commands.Command.Admin
             }
             else
             {
-                player.Character.Account.GuildMember.Guild.Castle = castle;
+                player.Character.GuildMember.Guild.Castle = castle;
                 foreach (SConnection con in SEnvir.Connections)
                 {
                     switch (con.Stage)
                     {
                         case GameStage.Game:
                         case GameStage.Observer:
-                            con.ReceiveChat(string.Format(con.Language.ConquestCapture, player.Character.Account.GuildMember.Guild.GuildName, castle.Name), MessageType.System);
+                            con.ReceiveChat(string.Format(con.Language.ConquestCapture, player.Character.GuildMember.Guild.GuildName, castle.Name), MessageType.System);
                             break;
                         default:
                             continue;
@@ -76,9 +76,9 @@ namespace Server.Envir.Commands.Command.Admin
                 SEnvir.Broadcast(new S.GuildCastleInfo
                 {
                     Index = castle.Index,
-                    Owner = player.Character.Account.GuildMember.Guild.GuildName,
-                    Flag = player.Character.Account.GuildMember.Guild.Flag,
-                    Colour = player.Character.Account.GuildMember.Guild.Colour
+                    Owner = player.Character.GuildMember.Guild.GuildName,
+                    Flag = player.Character.GuildMember.Guild.Flag,
+                    Colour = player.Character.GuildMember.Guild.Colour
                 });
                 foreach (PlayerObject user in SEnvir.Players)
                     user.ApplyCastleBuff();

@@ -68,21 +68,24 @@ namespace Server.DBModels
         }
         private long _Count;
 
+        /// <summary>
+        /// 购买角色（2026-11-11 起商城记录从账号下沉到角色）。
+        /// </summary>
         [Association("StoreSales")]
-        public AccountInfo Account
+        public CharacterInfo Character
         {
-            get { return _Account; }
+            get { return _Character; }
             set
             {
-                if (_Account == value) return;
+                if (_Character == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _Character;
+                _Character = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "Character");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Character;
 
         public bool HuntGold
         {
@@ -101,7 +104,7 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
+            Character = null;
             Item = null;
 
             base.OnDeleted();

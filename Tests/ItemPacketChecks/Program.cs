@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reflection;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -154,20 +154,19 @@ player = Player();
 player.InSafeZone = true;
 var moved = Put(player, 0, ring);
 player.Connection.Process(new C.ItemMove { FromGrid = GridType.Inventory, FromSlot = 0, ToGrid = GridType.Storage, ToSlot = 0 });
-Check(player.Inventory[0] == null && player.Storage[0] == moved && moved.Character == null && moved.Account == player.Character.Account &&
-    !player.Character.Items.Contains(moved) && player.Character.Account.Items.Contains(moved), "Storage move clears old persistent owner");
+Check(player.Inventory[0] == null && player.Storage[0] == moved && moved.Character == null && moved.StorageOwner == player.Character &&
+    !player.Character.Items.Contains(moved) && player.Character.Storage.Contains(moved), "Storage move clears old persistent owner");
 var swapped = Put(player, 1, stack, 2);
 player.Connection.Process(new C.ItemMove { FromGrid = GridType.Storage, FromSlot = 0, ToGrid = GridType.Inventory, ToSlot = 1 });
-Check(player.Inventory[1] == moved && player.Storage[0] == swapped && moved.Account == null && moved.Character == player.Character &&
-    swapped.Character == null && swapped.Account == player.Character.Account, "Swap clears both old persistent owners");
+Check(player.Inventory[1] == moved && player.Storage[0] == swapped && moved.StorageOwner == null && moved.Character == player.Character &&
+    swapped.Character == null && swapped.StorageOwner == player.Character, "Swap clears both old persistent owners");
 int movedIndex = moved.Index;
 int swappedIndex = swapped.Index;
 int characterIndex = player.Character.Index;
-int accountIndex = player.Character.Account.Index;
 
 var buyer = Player();
 var listing = SEnvir.AuctionInfoList.CreateNewObject();
-listing.Account = player.Character.Account;
+listing.Character = player.Character;
 listing.Price = int.MaxValue;
 var listedItem = SEnvir.UserItemList.CreateNewObject();
 listedItem.Info = ring;
@@ -229,8 +228,8 @@ var reload = new Session(SessionMode.System | SessionMode.Users, root + Path.Dir
 reload.Initialize(typeof(ItemInfo).Assembly, typeof(UserItem).Assembly);
 var reloadedMove = reload.GetCollection<UserItem>().Binding.Single(x => x.Index == movedIndex);
 var reloadedSwap = reload.GetCollection<UserItem>().Binding.Single(x => x.Index == swappedIndex);
-Check(reloadedMove.Character?.Index == characterIndex && reloadedMove.Account == null && reloadedSwap.Character == null &&
-    reloadedSwap.Account?.Index == accountIndex, "Exclusive ownership survives save and reload");
+Check(reloadedMove.Character?.Index == characterIndex && reloadedMove.StorageOwner == null && reloadedSwap.Character == null &&
+    reloadedSwap.StorageOwner?.Index == characterIndex, "Exclusive ownership survives save and reload");
 
 Console.WriteLine($"Passed {checks} item packet regression checks. Disposable database: {root}");
 

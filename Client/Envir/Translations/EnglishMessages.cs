@@ -375,7 +375,7 @@ namespace Client.Envir.Translations
         public override string NewCharacterArmourColorLabel { get; set; } = "Armour Colour:";
         public override string NewCharacterPreviewLabel { get; set; } = "Preview";
         public override string NewCharacterCharacterNameLabel { get; set; } = "Name:";
-        public override string NewCharacterCharacterNameHelpHint { get; set; } = "Character Name.\nAccepted characters: a-z A-Z 0-9.\nLength: between {0} and {1} characters.\nCan use previous names on same account.";
+        public override string NewCharacterCharacterNameHelpHint { get; set; } = "Character Name.\nAccepted characters: a-z A-Z 0-9 and common Chinese characters.\nLength: 2-8 characters when Chinese is used, {0}-{1} for letters/digits only.\nCan use previous names on same account.";
 
         public override string SelectNameLabel { get; set; } = "名称";
         public override string SelectClassLabel { get; set; } = "职业";

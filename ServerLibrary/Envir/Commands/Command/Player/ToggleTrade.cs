@@ -12,8 +12,8 @@ namespace Server.Envir.Commands.Player
 
         public override void Action(PlayerObject player)
         {
-            player.Character.Account.AllowTrade = !player.Character.Account.AllowTrade;
-            player.Connection.ReceiveChat(player.Character.Account.AllowTrade ?
+            player.Character.AllowTrade = !player.Character.AllowTrade;
+            player.Connection.ReceiveChat(player.Character.AllowTrade ?
                 player.Connection.Language.TradingEnabled : player.Connection.Language.TradingDisabled, MessageType.System);
         }
     }

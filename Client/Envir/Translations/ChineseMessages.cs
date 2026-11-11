@@ -374,7 +374,7 @@ namespace Client.Envir.Translations
         public override string NewCharacterArmourColorLabel { get; set; } = "衣服颜色:";
         public override string NewCharacterPreviewLabel { get; set; } = "预览";
         public override string NewCharacterCharacterNameLabel { get; set; } = "名称:";
-        public override string NewCharacterCharacterNameHelpHint { get; set; } = "角色名称.\n规则: a-z A-Z 0-9.\n长度: {0}到{1}个字符.\n相同账号可以使用历史角色名称.";
+        public override string NewCharacterCharacterNameHelpHint { get; set; } = "角色名称.\n规则: 字母、数字或常用汉字.\n长度: 含汉字 2 到 8 个字符；纯字母数字 {0} 到 {1} 个字符.\n相同账号可以使用历史角色名称.";
 
         public override string SelectNameLabel { get; set; } = "名称";
         public override string SelectClassLabel { get; set; } = "职业";

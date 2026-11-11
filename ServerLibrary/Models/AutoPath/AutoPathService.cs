@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Library.SystemModels;
 using Server.Envir;
 using System;
@@ -243,7 +243,7 @@ namespace Server.Models.AutoPath
 
         private static bool ShouldMount(PlayerObject player)
         {
-            return player.Character.Account.Horse != HorseType.None &&
+            return player.Character.Horse != HorseType.None &&
                    player.Horse == HorseType.None &&
                    player.CurrentMap.Info.CanHorse &&
                    !player.Dead;

@@ -775,6 +775,11 @@ namespace Client.Envir
 
                         scene.User = new UserObject(p.StartInformation);
 
+                        // 仓库与屏蔽名单都是角色级的（2026-11-11 起从账号下沉到角色），
+                        // 必须在选定角色进入游戏时用该角色的数据覆盖登录时那份。
+                        CEnvir.FillStorage(p.StartInformation.Storage, false);
+                        CEnvir.BlockList = new List<ClientBlockInfo>(p.StartInformation.BlockList ?? new List<ClientBlockInfo>());
+
                         GameScene.Game.BuffBox.BuffsChanged();
                         GameScene.Game.ConfigBox.Observable = p.StartInformation.Observable;
 
@@ -3720,7 +3725,7 @@ namespace Client.Envir
 
         public void Process(S.StartObserver p)
         {
-            CEnvir.FillStorage(p.Items, true);
+            CEnvir.FillStorage(p.StartInformation.Storage, true);
 
             int index = 0;
             RankInfo selectedRank = null;

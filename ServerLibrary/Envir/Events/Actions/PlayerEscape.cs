@@ -67,7 +67,7 @@ namespace Server.Envir.Events.Actions
                 EventTrackingType.Global => players,
                 EventTrackingType.Player => [triggerPlayer],
                 EventTrackingType.Group => players.Where(pl => triggerPlayer.GroupMembers.Contains(pl)).ToList(),
-                EventTrackingType.Guild => players.Where(pl => pl.Character.Account.GuildMember?.Guild == triggerPlayer.Character.Account.GuildMember?.Guild).ToList(),
+                EventTrackingType.Guild => players.Where(pl => pl.Character.GuildMember?.Guild == triggerPlayer.Character.GuildMember?.Guild).ToList(),
                 EventTrackingType.Instance => players.Where(pl => pl.CurrentMap.Instance == triggerPlayer.CurrentMap.Instance && pl.CurrentMap.InstanceSequence == triggerPlayer.CurrentMap.InstanceSequence).ToList(),
                 _ => []
             };

@@ -28,7 +28,7 @@ namespace Server.Envir.Commands.Command.Admin
             if (character.Player != null)
                 character.Player.GiveHorse(type);
             else
-                character.Account.Horse = type;
+                character.Horse = type;
 
             player.Connection.ReceiveChat(string.Format("[发放坐骑] {0}，类型：{1}", character.CharacterName, type.ToString()), MessageType.System);
         }

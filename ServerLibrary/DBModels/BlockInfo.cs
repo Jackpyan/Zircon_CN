@@ -6,37 +6,43 @@ namespace Server.DBModels
     [UserObject]
     public sealed class BlockInfo : DBObject
     {
+        /// <summary>
+        /// 发起屏蔽的角色（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// </summary>
         [Association("BlockingList")]
-        public AccountInfo Account
+        public CharacterInfo Character
         {
-            get { return _Account; }
+            get { return _Character; }
             set
             {
-                if (_Account == value) return;
+                if (_Character == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _Character;
+                _Character = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "Character");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Character;
 
+        /// <summary>
+        /// 被屏蔽的角色（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// </summary>
         [Association("BlockedByList")]
-        public AccountInfo BlockedAccount
+        public CharacterInfo BlockedCharacter
         {
-            get { return _BlockedAccount; }
+            get { return _BlockedCharacter; }
             set
             {
-                if (_BlockedAccount == value) return;
+                if (_BlockedCharacter == value) return;
 
-                var oldValue = _BlockedAccount;
-                _BlockedAccount = value;
+                var oldValue = _BlockedCharacter;
+                _BlockedCharacter = value;
 
-                OnChanged(oldValue, value, "BlockedAccount");
+                OnChanged(oldValue, value, "BlockedCharacter");
             }
         }
-        private AccountInfo _BlockedAccount;
+        private CharacterInfo _BlockedCharacter;
 
         public string BlockedName
         {
@@ -55,8 +61,8 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
-            BlockedAccount = null;
+            Character = null;
+            BlockedCharacter = null;
 
             base.OnDeleted();
         }

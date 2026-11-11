@@ -392,7 +392,7 @@ namespace Server.Envir.Events
                     return $"Group:{groupLeaderIndex}";
 
                 case EventTrackingType.Guild:
-                    var guildMember = player.Character.Account.GuildMember;
+                    var guildMember = player.Character.GuildMember;
                     if (guildMember == null)
                         return null;
                     return $"Guild:{guildMember.Guild.GuildName}";

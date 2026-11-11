@@ -1,4 +1,4 @@
-using Library.SystemModels;
+﻿using Library.SystemModels;
 using MirDB;
 
 namespace Server.DBModels
@@ -6,19 +6,22 @@ namespace Server.DBModels
     [UserObject]
     public sealed class GameStoreFavourite : DBObject
     {
+        /// <summary>
+        /// 收藏角色（2026-11-11 起商城收藏从账号下沉到角色）。
+        /// </summary>
         [Association("StoreFavourites")]
-        public AccountInfo Account
+        public CharacterInfo Character
         {
-            get => _Account;
+            get => _Character;
             set
             {
-                if (_Account == value) return;
-                AccountInfo oldValue = _Account;
-                _Account = value;
-                OnChanged(oldValue, value, "Account");
+                if (_Character == value) return;
+                CharacterInfo oldValue = _Character;
+                _Character = value;
+                OnChanged(oldValue, value, "Character");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Character;
 
         public StoreInfo StoreInfo
         {
@@ -35,7 +38,7 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
+            Character = null;
             StoreInfo = null;
             base.OnDeleted();
         }

@@ -21,7 +21,7 @@ namespace Server.Envir.Commands.Command.Admin
             CharacterInfo character = vals.Length < 3 ? player.Character : SEnvir.GetCharacter(vals[1]);
             if (character == null)
                 throw new UserCommandException(string.Format("找不到玩家：{0}", vals[1]));
-            if (player.Character.Account.GuildMember != null)
+            if (player.Character.GuildMember != null)
                 throw new UserCommandException(string.Format("{0} 已经加入了行会。", character.CharacterName));
 
             var guildName = vals.Length < 3 ? vals[1] : vals[2];
@@ -33,7 +33,7 @@ namespace Server.Envir.Commands.Command.Admin
             GuildInfo newGuild = CreateGuildFrom(guildName);
             GuildMemberInfo leaderRole = CreateLeaderRole();
             leaderRole.Guild = newGuild;
-            leaderRole.Account = character.Account;
+            leaderRole.Character = character;
             player.SendGuildInfo();
         }
 

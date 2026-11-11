@@ -441,7 +441,7 @@ namespace Server.Models
 
                         if (player.Companion.LevelInfo.MaxExperience > 0)
                         {
-                            int highest = player.Character.Account.Companions.Max(x => x.Level);
+                            int highest = player.Character.Companions.Max(x => x.Level);
 
                             if (highest <= player.Companion.UserCompanion.Level)
                                 highest = 1;
@@ -568,9 +568,13 @@ namespace Server.Models
                         {
                             if (SEnvir.ConquestWars.Any(war => war.Map == CurrentMap))
                             {
-                                player.Character.Account.HuntGold.Amount += 1;
+                                UserCurrency huntGold = player.Character.HuntGold;
 
-                                player.CurrencyChanged(player.Character.Account.HuntGold);
+                                if (huntGold == null) continue;
+
+                                huntGold.Amount += 1;
+
+                                player.CurrencyChanged(huntGold);
 
                                 continue;
                             }

@@ -10,8 +10,8 @@ namespace Server.Envir.Commands.Command.Player
 
         public override void Action(PlayerObject player)
         {
-            player.Character.Account.AllowGroupRecall = !player.Character.Account.AllowGroupRecall;
-            player.Connection.ReceiveChatWithObservers(con => player.Character.Account.AllowGroupRecall ? con.Language.GroupRecallEnabled : con.Language.GroupRecallDisabled, MessageType.System);
+            player.Character.AllowGroupRecall = !player.Character.AllowGroupRecall;
+            player.Connection.ReceiveChatWithObservers(con => player.Character.AllowGroupRecall ? con.Language.GroupRecallEnabled : con.Language.GroupRecallDisabled, MessageType.System);
         }
     }
 }

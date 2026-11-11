@@ -707,6 +707,7 @@ namespace Server.Models
             {
                 Item = item,
                 Account = Character.Account,
+                Character = this.Character,
                 Owners = GroupMembers.Where(x => GroupLoot.Share.Members.Contains(x.ObjectID)).Select(x => x.Character.Account).ToHashSet(),
                 GuildTaxPaid = true,
                 MonsterDrop = true,

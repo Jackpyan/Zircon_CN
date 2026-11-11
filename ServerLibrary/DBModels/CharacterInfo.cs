@@ -1,10 +1,12 @@
 ﻿using Library;
 using Library.SystemModels;
 using MirDB;
+using Server.Envir;
 using Server.Models;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 
 namespace Server.DBModels
 {
@@ -705,8 +707,215 @@ namespace Server.DBModels
         }
         private UserDiscipline _Discipline;
 
+        /// <summary>
+        /// 角色所在的行会席位（2026-11-11 起行会 + 职位 + 贡献度下沉到角色）。
+        /// <para>
+        /// 之前席位挂在账号上，同账号的多个角色只能占一个席位；现在每个角色各有自己的席位。
+        /// </para>
+        /// </summary>
+        [Association("Member")]
+        public GuildMemberInfo GuildMember { get; set; }
+
+        /// <summary>退会 / 被踢后的冷却截止时间（行会相关，跟着角色走）。</summary>
+        public DateTime GuildTime
+        {
+            get { return _GuildTime; }
+            set
+            {
+                if (_GuildTime == value) return;
+
+                var oldValue = _GuildTime;
+                _GuildTime = value;
+
+                OnChanged(oldValue, value, "GuildTime");
+            }
+        }
+        private DateTime _GuildTime;
+
+        /// <summary>
+        /// 角色级货币（2026-11-11 起金币 / 狩猎币从账号下沉到角色）。
+        /// 充值元宝 <see cref="CurrencyType.GameGold"/> 仍在 <see cref="AccountInfo.Currencies"/>。
+        /// </summary>
+        [Association("Currencies")]
+        public DBBindingList<UserCurrency> Currencies { get; set; }
+
+        /// <summary>角色金币。没有时返回 null（迁移补齐前的老角色可能出现）。</summary>
+        /// <remarks>
+        /// 必须是 <see cref="IgnorePropertyAttribute"/>：这是只读表达式属性，
+        /// MirDB 会把「DBObject 类型的属性」当成关联字段去持久化并在加载时反查赋值，
+        /// 少了这个标记加载旧库会抛「Property set method not found」。
+        /// </remarks>
+        [IgnoreProperty]
+        public UserCurrency Gold => Currencies?.FirstOrDefault(x => x.Info?.Type == CurrencyType.Gold);
+
+        /// <summary>角色狩猎币。</summary>
+        [IgnoreProperty]
+        public UserCurrency HuntGold => Currencies?.FirstOrDefault(x => x.Info?.Type == CurrencyType.HuntGold);
+
+        /// <summary>
+        /// 角色坐骑（2026-11-11 起从账号下沉到角色）。
+        /// <para>
+        /// 之前坐骑挂在账号上，同账号 4 个角色共用一匹；现在每个角色各有一匹。
+        /// </para>
+        /// </summary>
+        public HorseType Horse
+        {
+            get { return _Horse; }
+            set
+            {
+                if (_Horse == value) return;
+
+                var oldValue = _Horse;
+                _Horse = value;
+
+                OnChanged(oldValue, value, "Horse");
+            }
+        }
+        private HorseType _Horse;
+
+        /// <summary>是否允许被邀请组队（2026-11-11 起从账号下沉到角色）。</summary>
+        public bool AllowGroup
+        {
+            get { return _AllowGroup; }
+            set
+            {
+                if (_AllowGroup == value) return;
+
+                var oldValue = _AllowGroup;
+                _AllowGroup = value;
+
+                OnChanged(oldValue, value, "AllowGroup");
+            }
+        }
+        private bool _AllowGroup;
+
+        /// <summary>是否允许被交易（2026-11-11 起从账号下沉到角色）。</summary>
+        public bool AllowTrade
+        {
+            get { return _AllowTrade; }
+            set
+            {
+                if (_AllowTrade == value) return;
+
+                var oldValue = _AllowTrade;
+                _AllowTrade = value;
+
+                OnChanged(oldValue, value, "AllowTrade");
+            }
+        }
+        private bool _AllowTrade;
+
+        /// <summary>是否允许被邀请入行会（2026-11-11 起从账号下沉到角色）。</summary>
+        public bool AllowGuild
+        {
+            get { return _AllowGuild; }
+            set
+            {
+                if (_AllowGuild == value) return;
+
+                var oldValue = _AllowGuild;
+                _AllowGuild = value;
+
+                OnChanged(oldValue, value, "AllowGuild");
+            }
+        }
+        private bool _AllowGuild;
+
+        /// <summary>是否允许被组召回（2026-11-11 起从账号下沉到角色）。</summary>
+        public bool AllowGroupRecall
+        {
+            get { return _AllowGroupRecall; }
+            set
+            {
+                if (_AllowGroupRecall == value) return;
+
+                var oldValue = _AllowGroupRecall;
+                _AllowGroupRecall = value;
+
+                OnChanged(oldValue, value, "AllowGroupRecall");
+            }
+        }
+        private bool _AllowGroupRecall;
+
+        /// <summary>
+        /// 角色的宠物名册（2026-11-11 起从账号下沉到角色）。
+        /// </summary>
+        [Association("Companions", true)]
+        public DBBindingList<UserCompanion> Companions { get; set; }
+
+        /// <summary>
+        /// 角色的宠物外观解锁（2026-11-11 起从账号下沉到角色）。
+        /// </summary>
+        [Association("CompanionUnlocks", true)]
+        public DBBindingList<UserCompanionUnlock> CompanionUnlocks { get; set; }
+
+        /// <summary>
+        /// 角色的邮件（2026-11-11 起从账号下沉到角色）。
+        /// </summary>
+        [Association("Mail", true)]
+        public DBBindingList<MailInfo> Mail { get; set; }
+
+        /// <summary>
+        /// 角色的寄售（2026-11-11 起从账号下沉到角色）。
+        /// </summary>
+        [Association("Auctions", true)]
+        public DBBindingList<AuctionInfo> Auctions { get; set; }
+
+        /// <summary>
+        /// 本角色屏蔽的角色名单（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// </summary>
+        [Association("BlockingList", true)]
+        public DBBindingList<BlockInfo> BlockingList { get; set; }
+
+        /// <summary>
+        /// 屏蔽本角色的角色名单（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// </summary>
+        [Association("BlockedByList", true)]
+        public DBBindingList<BlockInfo> BlockedByList { get; set; }
+
+        /// <summary>
+        /// 本角色的商城购买记录（2026-11-11 起商城记录从账号下沉到角色）。
+        /// </summary>
+        [Association("StoreSales", true)]
+        public DBBindingList<GameStoreSale> StoreSales { get; set; }
+
+        /// <summary>
+        /// 本角色的商城收藏（2026-11-11 起商城记录从账号下沉到角色）。
+        /// </summary>
+        [Association("StoreFavourites", true)]
+        public DBBindingList<GameStoreFavourite> StoreFavourites { get; set; }
+
         [Association("Items", true)]
         public DBBindingList<UserItem> Items { get; set; }
+
+        /// <summary>
+        /// 角色仓库（2026-11-11 起从账号下沉到角色）。
+        /// <para>
+        /// identity 用 <c>"Storage"</c> 而不是 <c>"Items"</c>：MirDB 里同一个子类型
+        /// （<see cref="UserItem"/>）不能挂在同一个父类型的两个 identity 相同的集合下，
+        /// 背包已经占了 <c>"Items"</c>。
+        /// </para>
+        /// </summary>
+        [Association("Storage", true)]
+        public DBBindingList<UserItem> Storage { get; set; }
+
+        /// <summary>
+        /// 仓库格数（2026-11-11 起从账号下沉到角色）。
+        /// </summary>
+        public int StorageSize
+        {
+            get { return _StorageSize; }
+            set
+            {
+                if (_StorageSize == value) return;
+
+                var oldValue = _StorageSize;
+                _StorageSize = value;
+
+                OnChanged(oldValue, value, "StorageSize");
+            }
+        }
+        private int _StorageSize;
 
         [Association("BeltLinks", true)]
         public DBBindingList<CharacterBeltLink> BeltLinks { get; set; }
@@ -948,6 +1157,53 @@ namespace Server.DBModels
         }
         private bool _FiltersPickupNonWhite;
 
+        /// <summary>
+        /// 假人累计击杀数（2026-11-11 新增，跨重启持久化）。
+        /// <para>
+        /// 真人角色永远是 0 —— 这个字段只给 AI 假人用，让后台「假人档案」能显示历史战绩，
+        /// 而不是只看本次进程的快照（重启就归零）。
+        /// </para>
+        /// <para>
+        /// ⚠ MirDB 按**声明顺序**序列化，新增字段必须放在类的最后一个属性位置 —— 这里就是最后一个。
+        /// </para>
+        /// </summary>
+        public int BotKills
+        {
+            get { return _BotKills; }
+            set
+            {
+                if (_BotKills == value) return;
+
+                var oldValue = _BotKills;
+                _BotKills = value;
+
+                OnChanged(oldValue, value, "BotKills");
+            }
+        }
+        private int _BotKills;
+
+        /// <summary>
+        /// 假人累计在线秒数（2026-11-11 新增，跨重启持久化）。
+        /// <para>
+        /// 每次下线时把本次在线时长累加进来；真人角色永远是 0。
+        /// ⚠ 同 <see cref="BotKills"/>，必须放在类的最后一个属性位置。
+        /// </para>
+        /// </summary>
+        public long BotOnlineSeconds
+        {
+            get { return _BotOnlineSeconds; }
+            set
+            {
+                if (_BotOnlineSeconds == value) return;
+
+                var oldValue = _BotOnlineSeconds;
+                _BotOnlineSeconds = value;
+
+                OnChanged(oldValue, value, "BotOnlineSeconds");
+            }
+        }
+        private long _BotOnlineSeconds;
+
         public Dictionary<RequiredClass, int> CurrentRank = new();
         public Dictionary<RequiredClass, int> RankChange = new();
 
@@ -964,7 +1220,40 @@ namespace Server.DBModels
             foreach (var item in removeList)
                 Items.Remove(item);
 
+            // 仓库同样要清掉「物品模板已不存在」的脏数据（2026-11-11 仓库下沉到角色后接过来）。
+            var removeStorageList = new List<UserItem>();
+
+            foreach (var item in Storage)
+            {
+                if (item.Info == null)
+                    removeStorageList.Add(item);
+            }
+
+            foreach (var item in removeStorageList)
+                Storage.Remove(item);
+
             base.OnLoaded();
+
+            // 老库里角色的仓库格数是 0（仓库格数之前挂在账号上），这里补齐默认值。
+            if (StorageSize == 0)
+                StorageSize = Globals.StorageSize;
+
+            // 狩猎币上限 buff 之前挂在账号上，这里按角色补齐（老库迁移不到就重建一条）。
+            BuffInfo huntGoldBuff = Buffs.FirstOrDefault(x => x.Type == BuffType.HuntGold);
+            if (huntGoldBuff == null)
+            {
+                huntGoldBuff = SEnvir.BuffInfoList.CreateNewObject();
+                huntGoldBuff.Character = this;
+                huntGoldBuff.Type = BuffType.HuntGold;
+                huntGoldBuff.TickFrequency = TimeSpan.FromMinutes(1);
+                huntGoldBuff.RemainingTime = TimeSpan.MaxValue;
+            }
+
+            huntGoldBuff.Stats = new Stats { [Stat.AvailableHuntGoldCap] = 15 };
+
+            // 老库里角色没有货币记录（2026-11-11 之前金币挂在账号上），这里补齐空壳。
+            // 真正的余额搬运由 <see cref="UserCurrency"/> 的加载期迁移负责（两边做的是累加，不会重复计数）。
+            AddDefaultCurrencies();
         }
 
         protected override void OnDeleted()
@@ -1001,18 +1290,46 @@ namespace Server.DBModels
             HermitStats = new Stats();
 
             Observable = true;
+
+            StorageSize = Globals.StorageSize;
+
+            // 狩猎币上限 buff（2026-11-11 起从账号下沉到角色，与角色级狩猎币配套）。
+            BuffInfo buff = SEnvir.BuffInfoList.CreateNewObject();
+
+            buff.Character = this;
+            buff.Type = BuffType.HuntGold;
+            buff.TickFrequency = TimeSpan.FromMinutes(1);
+            buff.Stats = new Stats { [Stat.AvailableHuntGoldCap] = 15 };
+            buff.RemainingTime = TimeSpan.MaxValue;
+
+            AddDefaultCurrencies();
         }
 
-        /*  protected override void OnLoaded()
-          {
-              base.OnLoaded();
+        /// <summary>
+        /// 补齐角色级货币（金币 / 狩猎币 / 声望点 / 贡献点）。
+        /// 充值元宝 GameGold 是账号级的，不在这里建。
+        /// </summary>
+        private void AddDefaultCurrencies()
+        {
+            if (Session == null) return;
 
-              if (LastStats == null)
-                  LastStats = new Stats();
+            var currencyInfos = Session.GetCollection<CurrencyInfo>().Binding;
 
-              if (HermitStats == null)
-                  HermitStats = new Stats();
-          }*/
+            if (currencyInfos == null || currencyInfos.Count == 0) return;
+
+            foreach (var currency in currencyInfos)
+            {
+                if (currency.Type == CurrencyType.GameGold) continue;
+
+                var userCurrency = Currencies.FirstOrDefault(x => x.Info == currency);
+
+                if (userCurrency != null) continue;
+
+                userCurrency = Session.GetCollection<UserCurrency>().CreateNewObject();
+                userCurrency.Character = this;
+                userCurrency.Info = currency;
+            }
+        }
 
         public override string ToString()
         {

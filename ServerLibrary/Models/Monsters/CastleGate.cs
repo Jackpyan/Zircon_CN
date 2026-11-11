@@ -166,7 +166,7 @@ namespace Server.Models.Monsters
 
                         if (distance > 4) continue;
 
-                        if (player.Connection?.Account.GuildMember?.Guild != Guild) continue;
+                        if (player.Character.GuildMember?.Guild != Guild) continue;
 
                         OpenDoor();
                         CloseTime = SEnvir.Now.AddSeconds(10);

@@ -431,6 +431,26 @@ namespace Library
         public List<ClientFriendInfo> Friends { get; set; }
 
         public List<ClientUserItem> Items { get; set; }
+
+        /// <summary>
+        /// 角色仓库（2026-11-11 起仓库从账号下沉到角色）。
+        /// <para>
+        /// 之前仓库挂在账号上，登录时由 <c>S.Login.Items</c> 一次性下发。
+        /// 现在每个角色有自己的仓库，必须在**选定角色进入游戏时**随 <c>StartInformation</c> 下发，
+        /// 否则客户端拿到的会是上一个角色的仓库。
+        /// </para>
+        /// </summary>
+        public List<ClientUserItem> Storage { get; set; }
+
+        /// <summary>
+        /// 角色的屏蔽名单（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// <para>
+        /// 之前在登录时由 <c>S.Login.BlockList</c> 一次性下发（那时是账号级的），
+        /// 现在每个角色各有各的名单，必须在选定角色进入游戏时随 <c>StartInformation</c> 下发。
+        /// </para>
+        /// </summary>
+        public List<ClientBlockInfo> BlockList { get; set; }
+
         public List<ClientBeltLink> BeltLinks { get; set; }
         public List<ClientAutoPotionLink> AutoPotionLinks { get; set; }
         public List<ClientUserMilestone> Milestones { get; set; }

@@ -536,7 +536,7 @@ namespace Client.Scenes.Views
                 Visible = false,
                 Parent = this,
                 Text = "[?]",
-                Hint = $"角色名称。\n允许使用字符：a-z A-Z 0-9。\n长度：{Globals.MinCharacterNameLength} 至 {Globals.MaxCharacterNameLength} 个字符。\n可以使用同一账号曾用过的角色名称。",
+                Hint = $"角色名称。\n允许使用字符：a-z A-Z 0-9 与常用汉字。\n长度：含汉字 2 至 {CharacterNameRules.MaxChineseNameLength} 个字符；纯字母数字 {Globals.MinCharacterNameLength} 至 {Globals.MaxCharacterNameLength} 个字符。\n可以使用同一账号曾用过的角色名称。",
             };
             CharacterNameHelpLabel.Location = new Point(CharacterNameTextBox.Location.X + CharacterNameTextBox.Size.Width + 2, (CharacterNameTextBox.Size.Height - CharacterNameHelpLabel.Size.Height) / 2 + CharacterNameTextBox.Location.Y);
 

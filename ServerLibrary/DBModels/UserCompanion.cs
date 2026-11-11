@@ -8,21 +8,32 @@ namespace Server.DBModels
     [UserObject]
     public sealed class UserCompanion : DBObject
     {
+        /// <summary>
+        /// 宠物名册的归属角色（2026-11-11 起宠物名册从账号下沉到角色）。
+        /// <para>
+        /// 与 <see cref="Character"/> 区分开：
+        /// <list type="bullet">
+        /// <item><c>Owner</c>（identity <c>"Companions"</c>）= 这只宠物登记在**谁的名册**里；</item>
+        /// <item><c>Character</c>（identity <c>"Companion"</c>）= 这只宠物当前被**哪个角色带在身上</c>。</item>
+        /// </list>
+        /// 两者正常是同一个角色；宠物被「寄存」时 <c>Character</c> 会置空但 <c>Owner</c> 保留。
+        /// </para>
+        /// </summary>
         [Association("Companions")]
-        public AccountInfo Account
+        public CharacterInfo Owner
         {
-            get { return _Account; }
+            get { return _Owner; }
             set
             {
-                if (_Account == value) return;
+                if (_Owner == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _Owner;
+                _Owner = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "Owner");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Owner;
 
         [Association("Companion")]
         public CharacterInfo Character
@@ -228,7 +239,7 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
+            Owner = null;
             Character = null;
             Info = null;
 
@@ -262,7 +273,7 @@ namespace Server.DBModels
 
         public override string ToString()
         {
-            return Account?.EMailAddress ?? string.Empty;
+            return Owner?.Account?.EMailAddress ?? string.Empty;
         }
     }
 }

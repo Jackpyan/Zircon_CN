@@ -26,6 +26,13 @@ namespace Server.DBModels
         }
         private QuestInfo _QuestInfo;
 
+        /// <summary>
+        /// 任务归属角色（2026-11-11 起任务从账号下沉到角色）。
+        /// <para>
+        /// 之前 <c>QuestType.Account</c> 的账号任务挂在 <see cref="AccountInfo.Quests"/> 上，
+        /// 同账号 4 个角色共享进度；现在所有任务（含账号任务）都挂角色。
+        /// </para>
+        /// </summary>
         [Association("Quests")]
         public CharacterInfo Character
         {
@@ -41,22 +48,6 @@ namespace Server.DBModels
             }
         }
         private CharacterInfo _Character;
-
-        [Association("Quests")]
-        public AccountInfo Account
-        {
-            get { return _Account; }
-            set
-            {
-                if (_Account == value) return;
-
-                var oldValue = _Account;
-                _Account = value;
-
-                OnChanged(oldValue, value, "Account");
-            }
-        }
-        private AccountInfo _Account;
 
         public bool Completed
         {
@@ -145,7 +136,6 @@ namespace Server.DBModels
         {
             QuestInfo = null;
             Character = null;
-            Account = null;
 
             for (int i = Tasks.Count - 1; i >= 0; i--)
                 Tasks[i].Delete();

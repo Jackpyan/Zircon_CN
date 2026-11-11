@@ -9,21 +9,27 @@ namespace Server.DBModels
     [UserObject]
     public sealed class MailInfo : DBObject
     {
+        /// <summary>
+        /// 收件角色（2026-11-11 起邮件从账号下沉到角色）。
+        /// <para>
+        /// 之前邮件挂在账号上，同账号 4 个角色都能收到同一封信；现在只有收件角色能收到。
+        /// </para>
+        /// </summary>
         [Association("Mail")]
-        public AccountInfo Account
+        public CharacterInfo Character
         {
-            get { return _Account; }
+            get { return _Character; }
             set
             {
-                if (_Account == value) return;
+                if (_Character == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _Character;
+                _Character = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "Character");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _Character;
 
         public string Sender
         {
@@ -122,7 +128,7 @@ namespace Server.DBModels
 
         protected override void OnDeleted()
         {
-            Account = null;
+            Character = null;
 
             base.OnDeleted();
         }
@@ -151,7 +157,7 @@ namespace Server.DBModels
 
         public override string ToString()
         {
-            return Account?.EMailAddress ?? string.Empty;
+            return Character?.Account?.EMailAddress ?? string.Empty;
         }
     }
 }

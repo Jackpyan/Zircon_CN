@@ -21,6 +21,16 @@
     <ProjectReference Include="..\Plugin.Abstractions\Plugin.Abstractions.csproj" />
   </ItemGroup>
 
+  <!--
+    假人数据文件模板：首次构建/发布时复制到输出目录的 Bots/ 下。
+    PreserveNewest = 运营改过的名单不会被下一次构建冲掉；删掉输出目录里的文件会从模板恢复。
+  -->
+  <ItemGroup>
+    <None Update="Bots\*.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <PropertyGroup>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

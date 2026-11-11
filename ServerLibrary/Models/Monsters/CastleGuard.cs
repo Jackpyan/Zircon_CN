@@ -78,7 +78,7 @@ namespace Server.Models.Monsters
                 case ObjectType.Player:
                     PlayerObject player = (PlayerObject)ob;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }
@@ -101,7 +101,7 @@ namespace Server.Models.Monsters
                 case ObjectType.Player:
                     PlayerObject player = (PlayerObject)ob;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }
@@ -111,9 +111,9 @@ namespace Server.Models.Monsters
         {
             var target = (PlayerObject)Target;
 
-            if (target.Character.Account.GuildMember?.Guild.Castle != null) return;
+            if (target.Character.GuildMember?.Guild.Castle != null) return;
 
-            if (War.Participants.Count > 0 && !War.Participants.Contains(target.Character.Account.GuildMember.Guild)) return;
+            if (War.Participants.Count > 0 && !War.Participants.Contains(target.Character.GuildMember.Guild)) return;
 
             Direction = Functions.DirectionFromPoint(CurrentLocation, Target.CurrentLocation);
             Broadcast(new S.ObjectRangeAttack { ObjectID = ObjectID, Direction = Direction, Location = CurrentLocation, Targets = new List<uint> { Target.ObjectID } });
@@ -136,7 +136,7 @@ namespace Server.Models.Monsters
 
             var playerAttacker = (PlayerObject)attacker;
 
-            var attackerGuild = playerAttacker.Character.Account.GuildMember?.Guild;
+            var attackerGuild = playerAttacker.Character.GuildMember?.Guild;
 
             if (attackerGuild == Guild) return 0;
 

@@ -100,9 +100,9 @@ namespace Server.Models
 
                 foreach (GuildMemberInfo member in ownerGuild.Members)
                 {
-                    if (member.Account.Connection?.Player == null) continue; //Offline
+                    if (member.OnlinePlayer == null) continue; //Offline
 
-                    member.Account.Connection.Enqueue(new S.GuildConquestDate { Index = Castle.Index, WarTime = warTime, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildConquestDate { Index = Castle.Index, WarTime = warTime, ObserverPacket = false });
                 }
             }
 
@@ -112,9 +112,9 @@ namespace Server.Models
 
                 foreach (GuildMemberInfo member in participant.Members)
                 {
-                    if (member.Account.Connection?.Player == null) continue; //Offline
+                    if (member.OnlinePlayer == null) continue; //Offline
 
-                    member.Account.Connection.Enqueue(new S.GuildConquestDate { Index = Castle.Index, WarTime = TimeSpan.MinValue, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildConquestDate { Index = Castle.Index, WarTime = TimeSpan.MinValue, ObserverPacket = false });
                 }
             }
         }
@@ -125,7 +125,7 @@ namespace Server.Models
             {
                 //if (!Castle.CastleRegion.PointList.Contains(player.CurrentLocation)) continue;
 
-                if (player.Character.Account.GuildMember?.Guild?.Castle == Castle) continue;
+                if (player.Character.GuildMember?.Guild?.Castle == Castle) continue;
 
                 player.Teleport(Castle.AttackSpawnRegion, null, 0);
             }
@@ -184,7 +184,7 @@ namespace Server.Models
                 user.WarStartDate = StartTime;
                 user.CastleName = Castle.Name;
 
-                user.GuildName = character.Account.GuildMember?.Guild.GuildName ?? "No Guild.";
+                user.GuildName = character.GuildMember?.Guild.GuildName ?? "No Guild.";
                 user.CharacterName = character.CharacterName;
                 user.Class = character.Class;
                 user.Level = character.Level;

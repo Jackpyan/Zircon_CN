@@ -242,21 +242,29 @@ namespace Server.DBModels
         }
         private CharacterInfo _Character;
 
-        [Association("Items")]
-        public AccountInfo Account
+        /// <summary>
+        /// 角色仓库的持有者（2026-11-11 起仓库从账号下沉到角色）。
+        /// <para>
+        /// 之前用 <c>Account</c>（identity <c>"Items"</c>）表示「在账号仓库里」，
+        /// 同账号 4 个角色共用一份仓库。现在每个角色有自己的仓库，用独立 identity <c>"Storage"</c>，
+        /// 避免和背包的 <c>"Items"</c> 撞车（同一个 UserItem 类型不能挂到同一个父类型的两个同名集合下）。
+        /// </para>
+        /// </summary>
+        [Association("Storage")]
+        public CharacterInfo StorageOwner
         {
-            get { return _Account; }
+            get { return _StorageOwner; }
             set
             {
-                if (_Account == value) return;
+                if (_StorageOwner == value) return;
 
-                var oldValue = _Account;
-                _Account = value;
+                var oldValue = _StorageOwner;
+                _StorageOwner = value;
 
-                OnChanged(oldValue, value, "Account");
+                OnChanged(oldValue, value, "StorageOwner");
             }
         }
-        private AccountInfo _Account;
+        private CharacterInfo _StorageOwner;
 
         [Association("Items")]
         public GuildInfo Guild
@@ -417,8 +425,8 @@ namespace Server.DBModels
 
             switch (propertyName)
             {
-                case "Account":
-                    if (Account != null)
+                case "StorageOwner":
+                    if (StorageOwner != null)
                     {
                         Character = null;
                         Refine = null;
@@ -432,7 +440,7 @@ namespace Server.DBModels
                 case "Character":
                     if (Character != null)
                     {
-                        Account = null;
+                        StorageOwner = null;
                         Refine = null;
                         Auction = null;
                         Mail = null;
@@ -444,7 +452,7 @@ namespace Server.DBModels
                 case "Refine":
                     if (Refine != null)
                     {
-                        Account = null;
+                        StorageOwner = null;
                         Character = null;
                         Auction = null;
                         Mail = null;
@@ -456,7 +464,7 @@ namespace Server.DBModels
                 case "Auction":
                     if (Auction != null)
                     {
-                        Account = null;
+                        StorageOwner = null;
                         Character = null;
                         Refine = null;
                         Mail = null;
@@ -468,7 +476,7 @@ namespace Server.DBModels
                 case "Mail":
                     if (Mail != null)
                     {
-                        Account = null;
+                        StorageOwner = null;
                         Character = null;
                         Refine = null;
                         Auction = null;
@@ -481,7 +489,7 @@ namespace Server.DBModels
                     if (Guild != null)
                     {
                         Character = null;
-                        Account = null;
+                        StorageOwner = null;
                         Refine = null;
                         Auction = null;
                         Mail = null;
@@ -493,7 +501,7 @@ namespace Server.DBModels
                     if (Companion != null)
                     {
                         Character = null;
-                        Account = null;
+                        StorageOwner = null;
                         Refine = null;
                         Auction = null;
                         Mail = null;
@@ -505,7 +513,7 @@ namespace Server.DBModels
                     if (Socket != null)
                     {
                         Character = null;
-                        Account = null;
+                        StorageOwner = null;
                         Refine = null;
                         Auction = null;
                         Mail = null;
@@ -522,7 +530,7 @@ namespace Server.DBModels
             Info = null;
 
             Character = null;
-            Account = null;
+            StorageOwner = null;
             Guild = null;
             Companion = null;
             Refine = null;

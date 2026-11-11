@@ -210,6 +210,8 @@ builder.Services.AddSingleton<MapDataService>();
 builder.Services.AddSingleton<MapImageService>();
 builder.Services.AddSingleton<RuntimeDataService>();
 builder.Services.AddSingleton<OrphanDiagnosticService>();
+// AI 假人后台门面：只读快照 + 命令投递（不建后台线程，调度本身在游戏主循环里跑）
+builder.Services.AddSingleton<BotAdminService>();
 
 WebApplication app = builder.Build();
 

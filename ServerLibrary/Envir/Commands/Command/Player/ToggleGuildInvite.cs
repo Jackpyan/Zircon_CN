@@ -11,8 +11,8 @@ namespace Server.Envir.Commands.Command.Player
 
         public override void Action(PlayerObject player)
         {
-            player.Character.Account.AllowGuild = !player.Character.Account.AllowGuild;
-            player.Connection.ReceiveChat(player.Character.Account.AllowGuild ?
+            player.Character.AllowGuild = !player.Character.AllowGuild;
+            player.Connection.ReceiveChat(player.Character.AllowGuild ?
                 player.Connection.Language.GuildInviteEnabled :
                 player.Connection.Language.GuildInviteDisabled, MessageType.System);
         }

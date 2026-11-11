@@ -1554,6 +1554,9 @@ namespace Server.Envir
             SetLifecycleState(ServerLifecycleState.Running);
             StartupCompletion?.TrySetResult(true);
 
+            // AI 假人调度器：只建 Session，是否真的上线由 Config.BotEnabled + 水位决定。
+            Bots.BotRoster.Start();
+
             int count = 0, loopCount = 0;
             DateTime nextCount = Now.AddSeconds(1), UserCountTime = Now.AddMinutes(5), EventTimerTime = Now.AddMinutes(1), saveTime;
             long previousTotalSent = 0, previousTotalReceived = 0;
@@ -1608,6 +1611,10 @@ namespace Server.Envir
 
                     for (int i = Players.Count - 1; i >= 0; i--)
                         Players[i].StartProcess();
+
+                    // 假人调度：推进每个假人的上线/下线阶段，并按水位增减在线数。
+                    // 必须放在玩家 Process 之后 —— 新投递的伪连接要到下一帧才被主循环收编。
+                    Bots.BotRoster.Process();
 
                     TotalBytesSent = DBytesSent + bytesSent;
                     TotalBytesReceived = DBytesReceived + bytesReceived;
@@ -1770,9 +1777,9 @@ namespace Server.Envir
                                 foreach (GuildMemberInfo member in guild.Members)
                                 {
                                     member.DailyContribution = 0;
-                                    if (member.Account.Connection?.Player == null) continue;
+                                    if (member.OnlinePlayer == null) continue;
 
-                                    member.Account.Connection.Enqueue(new S.GuildDayReset { ObserverPacket = false });
+                                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildDayReset { ObserverPacket = false });
                                 }
                             }
 
@@ -1807,6 +1814,9 @@ namespace Server.Envir
 
             DateTime shutdownStart = Time.Now;
             LogShutdown("开始停服：关闭 Web 服务与网络");
+
+            // 假人必须先正常下线（Disconnect → CleanUp → StopGame），否则等级装备不落库。
+            Bots.BotRoster.Stop();
 
             WebServer.StopWebServer();
             StopNetwork();
@@ -1959,7 +1969,7 @@ namespace Server.Envir
 
                 if (referral != null)
                 {
-                    referral.HuntGold.Amount += payment.GameGoldAmount / 10;
+                    referral.GrantHuntGold(payment.GameGoldAmount / 10);
 
                     if (referral.Connection != null)
                     {
@@ -2057,10 +2067,10 @@ namespace Server.Envir
                 if (warInfo.Duration > TimeSpan.Zero) continue;
 
                 foreach (GuildMemberInfo member in warInfo.Guild1.Members)
-                    member.Account.Connection?.Player?.Enqueue(new S.GuildWarFinished { GuildName = warInfo.Guild2.GuildName });
+                    member.OnlinePlayer?.Enqueue(new S.GuildWarFinished { GuildName = warInfo.Guild2.GuildName });
 
                 foreach (GuildMemberInfo member in warInfo.Guild2.Members)
-                    member.Account.Connection?.Player?.Enqueue(new S.GuildWarFinished { GuildName = warInfo.Guild1.GuildName });
+                    member.OnlinePlayer?.Enqueue(new S.GuildWarFinished { GuildName = warInfo.Guild1.GuildName });
 
                 warInfo.Guild1 = null;
                 warInfo.Guild2 = null;
@@ -3491,6 +3501,24 @@ namespace Server.Envir
                 return;
             }
 
+            // AI 假人账号不对外开放登录（2026-11-11）。
+            //
+            // 为什么必须拦：假人密码是写死在源码里的固定值（BotProfile 里 hnt01@mir3.local / Bot#01Locked），
+            // 任何人登录都会触发顶号保护把假人踢下线，调度器再拉起，反复循环白耗服务端资源；
+            // 连错 5 次还会把账号 Banned，而 BotFactory.EnsureAccount 之前不会解封 → 该序号从此上不了线。
+            //
+            // 注意 con.IsBot：假人自己上线走的也是这条登录路径（复用真人的 Login/StartGame 全链路），
+            // 所以只拦「外部连接登假人号」，不能把假人自己挡在门外。
+            //
+            // 返回 AccountNotExists 而不是新增结果码：不泄露「这个账号存在、只是被特殊对待」，客户端文案也不用改。
+            if (!admin && account.IsBot && !con.IsBot)
+            {
+                Log($"[假人账号登录拦截] 外部连接尝试登录假人账号：{account.EMailAddress}，IP 地址：{con.IPAddress}");
+
+                con.Enqueue(new S.Login { Result = LoginResult.AccountNotExists });
+                return;
+            }
+
             if (!account.Activated)
             {
                 con.Enqueue(new S.Login { Result = LoginResult.AccountNotActivated });
@@ -3585,8 +3613,11 @@ namespace Server.Envir
                 Result = LoginResult.Success,
                 Characters = account.GetSelectInfo(),
 
-                Items = account.Items.Select(x => x.ToClientInfo()).ToList(),
-                BlockList = account.BlockingList.Select(x => x.ToClientInfo()).ToList(),
+                // 仓库与屏蔽名单都是角色级的（2026-11-11 起从账号下沉到角色），
+                // 登录时还没选定角色，这里不再下发；客户端在选定角色进入游戏时
+                // 分别从 StartInformation.Storage / StartInformation.BlockList 取。
+                Items = new List<ClientUserItem>(),
+                BlockList = new List<ClientBlockInfo>(),
 
                 Address = $"{Config.BuyAddress}?Key={account.Key}&Character=",
 
@@ -3713,11 +3744,13 @@ namespace Server.Envir
             {
                 int maxLevel = refferal.HighestLevel();
 
-                if (maxLevel >= 50) account.HuntGold.Amount = 500;
-                else if (maxLevel >= 40) account.HuntGold.Amount = 300;
-                else if (maxLevel >= 30) account.HuntGold.Amount = 200;
-                else if (maxLevel >= 20) account.HuntGold.Amount = 100;
-                else if (maxLevel >= 10) account.HuntGold.Amount = 50;
+                // 狩猎币已下沉到角色（2026-11-11），建号时角色还不存在 → 先挂账，
+                // 等该账号第一个角色上线时补发（见 AccountInfo.PendingHuntGold）。
+                if (maxLevel >= 50) account.PendingHuntGold = 500;
+                else if (maxLevel >= 40) account.PendingHuntGold = 300;
+                else if (maxLevel >= 30) account.PendingHuntGold = 200;
+                else if (maxLevel >= 20) account.PendingHuntGold = 100;
+                else if (maxLevel >= 10) account.PendingHuntGold = 50;
             }
 
 
@@ -4220,17 +4253,24 @@ namespace Server.Envir
             con.Enqueue(new S.StartGame { Result = StartGameResult.NotFound });
         }
 
-        public static bool IsBlocking(AccountInfo account1, AccountInfo account2)
+        /// <summary>
+        /// 两个角色之间是否互相屏蔽（2026-11-11 起屏蔽从账号下沉到角色）。
+        /// <para>
+        /// 屏蔽名单挂在角色上，所以「甲屏蔽乙」只影响甲与乙这两个角色，
+        /// 乙同账号的其它角色照常聊天。
+        /// </para>
+        /// </summary>
+        public static bool IsBlocking(CharacterInfo character1, CharacterInfo character2)
         {
-            if (account1 == null || account2 == null || account1 == account2) return false;
+            if (character1 == null || character2 == null || character1 == character2) return false;
 
-            if (account1.TempAdmin || account2.TempAdmin) return false;
+            if (character1.Account?.TempAdmin == true || character2.Account?.TempAdmin == true) return false;
 
-            foreach (BlockInfo blockInfo in account1.BlockingList)
-                if (blockInfo.BlockedAccount == account2) return true;
+            foreach (BlockInfo blockInfo in character1.BlockingList)
+                if (blockInfo.BlockedCharacter == character2) return true;
 
-            foreach (BlockInfo blockInfo in account2.BlockingList)
-                if (blockInfo.BlockedAccount == account1) return true;
+            foreach (BlockInfo blockInfo in character2.BlockingList)
+                if (blockInfo.BlockedCharacter == character1) return true;
 
             return false;
         }
@@ -4684,7 +4724,7 @@ namespace Server.Envir
                         case InstanceType.Castle:
                             // 行会 / 城堡副本的冷却归行会：GetInstance 进入时查的也是 GuildCooldown。
                             var character = GetCharacter(user);
-                            var guildName = character?.Account?.GuildMember?.Guild.GuildName;
+                            var guildName = character?.GuildMember?.Guild.GuildName;
                             if (guildName != null && !instance.GuildCooldown.ContainsKey(guildName))
                                 instance.GuildCooldown.Add(guildName, cooldown);
                             break;

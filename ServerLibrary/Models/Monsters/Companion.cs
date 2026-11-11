@@ -397,7 +397,7 @@ namespace Server.Models.Monsters
         {
             item.Slot = -1;
             item.Character = null;
-            item.Account = null;
+            item.StorageOwner = null;
             item.Mail = null;
             item.Auction = null;
             item.Companion = null;

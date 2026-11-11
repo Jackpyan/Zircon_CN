@@ -26,6 +26,12 @@ namespace Server.Models
         public CharacterInfo Character;
         public SConnection Connection;
 
+        /// <summary>
+        /// AI 假人的大脑。真人恒为 null，<see cref="Process"/> 里那一行就是零开销。
+        /// 只在假人进图成功后由 BotRoster 挂上，下线前自动摘掉。
+        /// </summary>
+        public Server.Bots.BotBrain Bot;
+
         public override string Name
         {
             get { return Character.CharacterName; }
@@ -82,9 +88,14 @@ namespace Server.Models
             set { Character.OnlineState = value; }
         }
 
-        public UserCurrency Gold => Character.Account.Gold;
+        /// <summary>角色金币（2026-11-11 起按角色隔离，同账号不同角色各有一份）。</summary>
+        public UserCurrency Gold => Character.Gold;
+
+        /// <summary>充值元宝（账号级，同账号所有角色共有）。</summary>
         public UserCurrency GameGold => Character.Account.GameGold;
-        public UserCurrency HuntGold => Character.Account.HuntGold;
+
+        /// <summary>角色狩猎币。</summary>
+        public UserCurrency HuntGold => Character.HuntGold;
 
         public decimal Experience
         {
@@ -223,7 +234,7 @@ namespace Server.Models
             if (Character.CraftingLevel < 1)
                 Character.CraftingLevel = 1;
 
-            foreach (UserItem item in Character.Account.Items)
+            foreach (UserItem item in Character.Storage)
             {
                 if (item.Slot >= Globals.PartsStorageOffset)
                 {
@@ -248,7 +259,7 @@ namespace Server.Models
             ItemReviveTime = info.ItemReviveTime;
             ItemTime = SEnvir.Now;
 
-            Buffs.AddRange(Character.Account.Buffs);
+            // Buff 已全部下沉到角色（2026-11-11），运行时只装载角色自己的。
             Buffs.AddRange(Character.Buffs);
 
             AutoPotions.AddRange(Character.AutoPotionLinks);
@@ -322,10 +333,17 @@ namespace Server.Models
             }
         }
 
+        /// <summary>
+        /// 补齐货币：充值元宝挂账号，金币 / 狩猎币 / 声望点 / 贡献点挂角色。
+        /// 角色这一层由 <see cref="Server.DBModels.CharacterInfo.AddDefaultCurrencies"/> 在建号 / 加载时建好，
+        /// 这里只兜底补账号那一层。
+        /// </summary>
         private void AddDefaultCurrencies()
         {
             foreach (var currency in SEnvir.CurrencyInfoList.Binding)
             {
+                if (currency.Type != CurrencyType.GameGold) continue;
+
                 var userCurrency = Character.Account.Currencies.FirstOrDefault(x => x.Info == currency);
 
                 if (userCurrency == null)
@@ -333,6 +351,21 @@ namespace Server.Models
                     userCurrency = SEnvir.UserCurrencyList.CreateNewObject();
                     userCurrency.Account = Character.Account;
                     userCurrency.Info = currency;
+                }
+            }
+
+            // 账号建号时挂账的狩猎币（推荐奖励等）→ 在第一个角色上线时补发。
+            if (Character.Account.PendingHuntGold > 0)
+            {
+                long pending = Character.Account.PendingHuntGold;
+                Character.Account.PendingHuntGold = 0;
+
+                UserCurrency huntGold = HuntGold;
+
+                if (huntGold != null)
+                {
+                    huntGold.Amount += pending;
+                    HuntGoldChanged();
                 }
             }
         }
@@ -398,6 +431,15 @@ namespace Server.Models
             ProcessGroup();
 
             AutoPathService.Instance.Process(this);
+
+            // AI 假人没有客户端，没人帮它回 C.AutoPathMoveStarted，自动寻路会永远停在
+            // "等待移动开始"上（跨图走两步就不动了）。这里补上这个确认：
+            // 只在动作真的开始后（CanMove == false）才清，否则 AutoPath 会每帧重复下发 Move。
+            if (Bot != null && AutoPath != null && !CanMove)
+                AutoPathService.Instance.MoveStarted(this);
+
+            // AI 假人：真人这里恒为 null，零开销。
+            Bot?.Process();
         }
         public override void ProcessAction(DelayedAction action)
         {
@@ -949,8 +991,8 @@ namespace Server.Models
                 Name = Name,
                 Caption = ActiveMilestone?.Info.Title ?? Character.Caption,
                 CaptionOutlineColour = ActiveMilestone?.Info.OutlineColour ?? Color.Black,
-                GuildName = Character.Account.GuildMember?.Guild.GuildName,
-                GuildRank = Character.Account.GuildMember?.Rank,
+                GuildName = Character.GuildMember?.Guild.GuildName,
+                GuildRank = Character.GuildMember?.Rank,
                 NameColour = NameColour,
 
                 Level = Level,
@@ -985,8 +1027,8 @@ namespace Server.Models
                 TimeOfDay = SEnvir.TimeOfDay,
                 TimeOfDayLabel = SEnvir.GetDayCycleLabel(),
 
-                AllowGroup = Character.Account.AllowGroup,
-                AllowTrade = Character.Account.AllowTrade,
+                AllowGroup = Character.AllowGroup,
+                AllowTrade = Character.AllowTrade,
 
                 CurrentHP = DisplayHP,
                 CurrentMP = DisplayMP,
@@ -1001,12 +1043,22 @@ namespace Server.Models
                 Discipline = Character.Discipline?.ToClientInfo(),
 
                 Items = Character.Items.Select(x => x.ToClientInfo()).ToList(),
+                // 仓库：2026-11-11 起从账号下沉到角色，必须随角色一起下发（登录包里的那份已按角色分）。
+                Storage = Character.Storage.Select(x => x.ToClientInfo()).ToList(),
+                // 屏蔽名单同样是角色级的（2026-11-11 起从账号下沉到角色）。
+                BlockList = Character.BlockingList.Select(x => x.ToClientInfo()).ToList(),
                 BeltLinks = blinks,
                 AutoPotionLinks = alinks,
                 Milestones = GetClientUserMilestones(),
                 Magics = Character.Magics.Select(x => x.ToClientInfo()).ToList(),
                 Buffs = Buffs.Select(x => x.ToClientInfo()).ToList(),
-                Currencies = Character.Account.Currencies.Select(x => x.ToClientInfo(x.Info.Type == CurrencyType.GameGold && observer)).ToList(),
+                // 货币：充值元宝在账号上（金币等在角色上），两段合并下发。
+                // 客户端按 CurrencyInfo.Index 识别币种，不关心数据挂在哪一层，所以包结构不变、客户端零改动。
+                Currencies = Character.Account.Currencies
+                    .Where(x => x.Info != null)
+                    .Select(x => x.ToClientInfo(x.Info.Type == CurrencyType.GameGold && observer))
+                    .Concat(Character.Currencies.Where(x => x.Info != null).Select(x => x.ToClientInfo(false)))
+                    .ToList(),
 
                 Poison = Poison,
 
@@ -1027,13 +1079,13 @@ namespace Server.Models
 
                 Quests = Quests.Select(x => x.ToClientInfo()).ToList(),
 
-                CompanionUnlocks = Character.Account.CompanionUnlocks.Select(x => x.CompanionInfo.Index).ToList(),
+                CompanionUnlocks = Character.CompanionUnlocks.Select(x => x.CompanionInfo.Index).ToList(),
 
-                Companions = Character.Account.Companions.Select(x => x.ToClientInfo()).ToList(),
+                Companions = Character.Companions.Select(x => x.ToClientInfo()).ToList(),
 
                 Companion = Character.Companion?.Index ?? 0,
 
-                StorageSize = Character.Account.StorageSize,
+                StorageSize = Character.StorageSize,
 
                 FiltersClass = Character.FiltersClass,
                 FiltersRarity = Character.FiltersRarity,
@@ -1108,13 +1160,13 @@ namespace Server.Models
             CancelCrafting(false);
             Character.LastLogin = SEnvir.Now;
 
-            if (Character.Account.GuildMember != null)
+            if (Character.GuildMember != null)
             {
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    if (member == Character.Account.GuildMember || member.Account.Connection?.Player == null) continue;
+                    if (member == Character.GuildMember || member.OnlinePlayer == null) continue;
 
-                    member.Account.Connection.Enqueue(new S.GuildMemberOffline { Index = Character.Account.GuildMember.Index, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildMemberOffline { Index = Character.GuildMember.Index, ObserverPacket = false });
                 }
             }
 
@@ -1210,15 +1262,15 @@ namespace Server.Models
                 Enqueue(new S.InformMaxExperience { MaxExperience = MaxExperience });
             }
 
-            if (Character.Account.GuildMember != null)
+            if (Character.GuildMember != null)
             {
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    if (member == Character.Account.GuildMember || member.Account.Connection?.Player == null) continue;
+                    if (member == Character.GuildMember || member.OnlinePlayer == null) continue;
 
-                    member.Account.Connection.Enqueue(new S.GuildMemberOnline
+                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildMemberOnline
                     {
-                        Index = Character.Account.GuildMember.Index,
+                        Index = Character.GuildMember.Index,
                         Name = Name,
                         ObjectID = ObjectID,
                         ObserverPacket = false
@@ -1246,10 +1298,10 @@ namespace Server.Models
 
             SendConsignments();
 
-            Enqueue(new S.MailList { Mail = Character.Account.Mail.Select(x => x.ToClientInfo()).ToList() });
+            Enqueue(new S.MailList { Mail = Character.Mail.Select(x => x.ToClientInfo()).ToList() });
             Enqueue(new S.GameStoreData
             {
-                Favourites = Character.Account.StoreFavourites
+                Favourites = Character.StoreFavourites
                     .Where(x => x.StoreInfo != null)
                     .Select(x => x.StoreInfo.Index)
                     .ToList(),
@@ -1334,8 +1386,6 @@ namespace Server.Models
             con.Enqueue(new S.StartObserver
             {
                 StartInformation = GetStartInformation(true),
-
-                Items = Character.Account.Items.Select(x => x.ToClientInfo()).ToList(),
             });
 
             if (Level > 0)
@@ -1413,13 +1463,13 @@ namespace Server.Models
 
             con.ReceiveChatWithObservers(c => string.Format(c.Language.WelcomeObserver, Name), MessageType.Announcement);
 
-            if (Character.Account.GuildMember != null)
+            if (Character.GuildMember != null)
                 foreach (GuildWarInfo warInfo in SEnvir.GuildWarInfoList.Binding)
                 {
-                    if (warInfo.Guild1 == Character.Account.GuildMember.Guild)
+                    if (warInfo.Guild1 == Character.GuildMember.Guild)
                         con.Enqueue(new S.GuildWarStarted { GuildName = warInfo.Guild2.GuildName, Duration = warInfo.Duration });
 
-                    if (warInfo.Guild2 == Character.Account.GuildMember.Guild)
+                    if (warInfo.Guild2 == Character.GuildMember.Guild)
                         con.Enqueue(new S.GuildWarStarted { GuildName = warInfo.Guild1.GuildName, Duration = warInfo.Duration });
                 }
 
@@ -1737,7 +1787,7 @@ namespace Server.Models
 
                 SConnection con = SEnvir.GetConnectionByCharacter(parts[0]);
 
-                if (con == null || (con.Stage != GameStage.Observer && con.Stage != GameStage.Game) || SEnvir.IsBlocking(Character.Account, con.Account))
+                if (con == null || (con.Stage != GameStage.Observer && con.Stage != GameStage.Game) || SEnvir.IsBlocking(Character, con.ActiveCharacter))
                 {
                     Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CannotFindPlayer, parts[0]), MessageType.System, linkedItems);
                     return;
@@ -1770,7 +1820,7 @@ namespace Server.Models
 
                 foreach (PlayerObject member in GroupMembers)
                 {
-                    if (SEnvir.IsBlocking(Character.Account, member.Character.Account)) continue;
+                    if (SEnvir.IsBlocking(Character, member.Character)) continue;
 
                     if (member != this && SEnvir.Now < Character.Account.ChatBanExpiry) continue;
 
@@ -1779,17 +1829,17 @@ namespace Server.Models
             }
             else if (text.StartsWith("!~"))
             {
-                if (Character.Account.GuildMember == null) return;
+                if (Character.GuildMember == null) return;
 
                 text = $"{Name}: {text.Remove(0, 2)}";
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    if (member.Account.Connection == null) continue;
-                    if (member.Account.Connection.Stage != GameStage.Game && member.Account.Connection.Stage != GameStage.Observer) continue;
-                    if (SEnvir.IsBlocking(Character.Account, member.Account)) continue;
+                    if (member.OnlinePlayer?.Connection == null) continue;
+                    if (member.OnlinePlayer?.Connection.Stage != GameStage.Game && member.OnlinePlayer?.Connection.Stage != GameStage.Observer) continue;
+                    if (SEnvir.IsBlocking(Character, member.Character)) continue;
 
-                    member.Account.Connection.ReceiveChat(text, MessageType.Guild, linkedItems);
+                    member.OnlinePlayer?.Connection.ReceiveChat(text, MessageType.Guild, linkedItems);
                 }
             }
             else if (text.StartsWith("!@"))
@@ -1818,7 +1868,7 @@ namespace Server.Models
                     {
                         case GameStage.Game:
                         case GameStage.Observer:
-                            if (SEnvir.IsBlocking(Character.Account, con.Account)) continue;
+                            if (SEnvir.IsBlocking(Character, con.ActiveCharacter)) continue;
 
                             con.ReceiveChat(text, MessageType.Global, linkedItems);
                             break;
@@ -1850,12 +1900,12 @@ namespace Server.Models
                 {
                     if (player != this && SEnvir.Now < Character.Account.ChatBanExpiry) continue;
 
-                    if (!SEnvir.IsBlocking(Character.Account, player.Character.Account))
+                    if (!SEnvir.IsBlocking(Character, player.Character))
                         player.Connection.ReceiveChat(text, MessageType.Shout, linkedItems);
 
                     foreach (SConnection observer in player.Connection.Observers)
                     {
-                        if (SEnvir.IsBlocking(Character.Account, observer.Account)) continue;
+                        if (SEnvir.IsBlocking(Character, observer.ActiveCharacter)) continue;
 
                         observer.ReceiveChat(text, MessageType.Shout, linkedItems);
                     }
@@ -1908,7 +1958,7 @@ namespace Server.Models
 
                 foreach (SConnection target in Connection.Observers)
                 {
-                    if (SEnvir.IsBlocking(Character.Account, target.Account)) continue;
+                    if (SEnvir.IsBlocking(Character, target.ActiveCharacter)) continue;
 
                     target.ReceiveChat(text, MessageType.ObserverChat, linkedItems);
                 }
@@ -1922,12 +1972,12 @@ namespace Server.Models
 
                     if (player != this && SEnvir.Now < Character.Account.ChatBanExpiry) continue;
 
-                    if (!SEnvir.IsBlocking(Character.Account, player.Character.Account))
+                    if (!SEnvir.IsBlocking(Character, player.Character))
                         player.Connection.ReceiveChat(text, MessageType.Normal, linkedItems, ObjectID);
 
                     foreach (SConnection observer in player.Connection.Observers)
                     {
-                        if (SEnvir.IsBlocking(Character.Account, observer.Account)) continue;
+                        if (SEnvir.IsBlocking(Character, observer.ActiveCharacter)) continue;
 
                         observer.ReceiveChat(text, MessageType.Normal, linkedItems, ObjectID);
                     }
@@ -1957,7 +2007,7 @@ namespace Server.Models
 
                 SConnection target = SEnvir.GetConnectionByCharacter(parts[0]);
 
-                if (target == null || (target.Stage != GameStage.Observer && target.Stage != GameStage.Game) || SEnvir.IsBlocking(con.Account, target.Account))
+                if (target == null || (target.Stage != GameStage.Observer && target.Stage != GameStage.Game) || SEnvir.IsBlocking(con.ActiveCharacter, target.ActiveCharacter))
                 {
                     con.ReceiveChat(string.Format(con.Language.CannotFindPlayer, parts[0]), MessageType.System);
                     return;
@@ -1980,18 +2030,21 @@ namespace Server.Models
             }
             else if (text.StartsWith("!~"))
             {
-                if (con.Account.GuildMember == null) return;
+                // 行会聊天按**发送者角色**的行会（2026-11-11 行会下沉到角色）。
+                CharacterInfo sender = con.Player?.Character ?? con.Account?.LastCharacter;
 
-                text = string.Format("{0}: {1}", con.Account.LastCharacter.CharacterName, text.Remove(0, 2));
+                if (sender?.GuildMember == null) return;
 
-                foreach (GuildMemberInfo member in con.Account.GuildMember.Guild.Members)
+                text = string.Format("{0}: {1}", sender.CharacterName, text.Remove(0, 2));
+
+                foreach (GuildMemberInfo member in sender.GuildMember.Guild.Members)
                 {
-                    if (member.Account.Connection == null) continue;
-                    if (member.Account.Connection.Stage != GameStage.Game && member.Account.Connection.Stage != GameStage.Observer) continue;
+                    if (member.OnlinePlayer?.Connection == null) continue;
+                    if (member.OnlinePlayer?.Connection.Stage != GameStage.Game && member.OnlinePlayer?.Connection.Stage != GameStage.Observer) continue;
 
-                    if (SEnvir.IsBlocking(con.Account, member.Account)) continue;
+                    if (SEnvir.IsBlocking(con.ActiveCharacter, member.Character)) continue;
 
-                    member.Account.Connection.ReceiveChat(text, MessageType.Guild);
+                    member.OnlinePlayer?.Connection.ReceiveChat(text, MessageType.Guild);
                 }
             }
             else if (text.StartsWith("!@"))
@@ -2021,7 +2074,7 @@ namespace Server.Models
                     {
                         case GameStage.Game:
                         case GameStage.Observer:
-                            if (SEnvir.IsBlocking(con.Account, target.Account)) continue;
+                            if (SEnvir.IsBlocking(con.ActiveCharacter, target.ActiveCharacter)) continue;
 
                             target.ReceiveChat(text, MessageType.Global);
                             break;
@@ -2049,7 +2102,7 @@ namespace Server.Models
             }
             else
             {
-                if (SEnvir.IsBlocking(con.Account, Character.Account)) return;
+                if (SEnvir.IsBlocking(con.ActiveCharacter, Character)) return;
 
                 text = string.Format("(#){0}: {1}", con.Account.LastCharacter.CharacterName, text);
 
@@ -2057,7 +2110,7 @@ namespace Server.Models
 
                 foreach (SConnection target in Connection.Observers)
                 {
-                    if (SEnvir.IsBlocking(con.Account, target.Account)) continue;
+                    if (SEnvir.IsBlocking(con.ActiveCharacter, target.ActiveCharacter)) continue;
 
                     target.ReceiveChat(text, MessageType.ObserverChat);
                 }
@@ -2091,12 +2144,12 @@ namespace Server.Models
                 Ranking = ranking
             };
 
-            if (target.Account.GuildMember != null)
+            if (target.GuildMember != null)
             {
-                packet.GuildName = target.Account.GuildMember.Guild.GuildName;
-                packet.GuildRank = target.Account.GuildMember.Rank;
-                packet.GuildFlag = target.Account.GuildMember.Guild.Flag;
-                packet.GuildColour = target.Account.GuildMember.Guild.Colour;
+                packet.GuildName = target.GuildMember.Guild.GuildName;
+                packet.GuildRank = target.GuildMember.Rank;
+                packet.GuildFlag = target.GuildMember.Guild.Flag;
+                packet.GuildColour = target.GuildMember.Guild.Colour;
             }
 
             //if (target.Player != null)
@@ -2299,7 +2352,7 @@ namespace Server.Models
 
             AddBaseStats();
 
-            switch (Character.Account.Horse)
+            switch (Character.Horse)
             {
                 case HorseType.Brown:
                     Stats[Stat.BagWeight] += 50;
@@ -2359,7 +2412,7 @@ namespace Server.Models
                         items.Add(item.Info);
                 }
 
-                if (item.Info.ItemType == ItemType.HorseArmour && Character.Account.Horse == HorseType.None) continue;
+                if (item.Info.ItemType == ItemType.HorseArmour && Character.Horse == HorseType.None) continue;
 
                 Stats.Add(item.Info.Stats, item.Info.ItemType != ItemType.Weapon);
                 Stats.Add(item.Stats, item.Info.ItemType != ItemType.Weapon);
@@ -3303,7 +3356,7 @@ namespace Server.Models
 
             if (info == null) return;
 
-            if (info.Available || Character.Account.CompanionUnlocks.Any(x => x.CompanionInfo == info))
+            if (info.Available || Character.CompanionUnlocks.Any(x => x.CompanionInfo == info))
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CompanionAppearanceAlready, info.MonsterInfo.MonsterName), MessageType.System);
                 return;
@@ -3360,7 +3413,7 @@ namespace Server.Models
             result.Index = info.Index;
 
             UserCompanionUnlock unlock = SEnvir.UserCompanionUnlockList.CreateNewObject();
-            unlock.Account = Character.Account;
+            unlock.Character = Character;
             unlock.CompanionInfo = info;
         }
 
@@ -3377,7 +3430,7 @@ namespace Server.Models
 
             if (info == null) return;
 
-            if (!info.Available && Character.Account.CompanionUnlocks.All(x => x.CompanionInfo != info))
+            if (!info.Available && Character.CompanionUnlocks.All(x => x.CompanionInfo != info))
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.CompanionAppearanceAlready, MessageType.System);
                 return;
@@ -3410,7 +3463,7 @@ namespace Server.Models
 
             UserCompanion companion = SEnvir.UserCompanionList.CreateNewObject();
 
-            companion.Account = Character.Account;
+            companion.Owner = Character;
             companion.Info = info;
             companion.Level = 1;
             companion.Hunger = 100;
@@ -3468,7 +3521,7 @@ namespace Server.Models
 
             if (NPCPage.DialogType != NPCDialogType.CompanionManage) return;
 
-            UserCompanion info = Character.Account.Companions.FirstOrDefault(x => x.Index == index);
+            UserCompanion info = Character.Companions.FirstOrDefault(x => x.Index == index);
 
             if (info == null) return;
 
@@ -3493,7 +3546,7 @@ namespace Server.Models
 
             if (NPCPage.DialogType != NPCDialogType.CompanionManage) return;
 
-            UserCompanion info = Character.Account.Companions.FirstOrDefault(x => x.Index == index);
+            UserCompanion info = Character.Companions.FirstOrDefault(x => x.Index == index);
 
             if (info == null) return;
 
@@ -3511,7 +3564,7 @@ namespace Server.Models
                 Character.Companion = null;
             }
 
-            Character.Account.Companions.Remove(info);
+            Character.Companions.Remove(info);
 
             Enqueue(new S.CompanionRelease { Index = index });
 
@@ -3540,7 +3593,7 @@ namespace Server.Models
             if (Character.Companion == null) return;
 
             // Fix incase companion was removed from account but still linked to character
-            if (!Character.Account.Companions.Contains(Character.Companion))
+            if (!Character.Companions.Contains(Character.Companion))
             {
                 Character.Companion = null;
                 return;
@@ -3642,7 +3695,8 @@ namespace Server.Models
         {
             get
             {
-                return Character.Quests.Concat(Character.Account.Quests);
+                // 任务已全部下沉到角色（2026-11-11），账号任务不再与其它角色共享进度。
+                return Character.Quests;
             }
         }
 
@@ -3660,10 +3714,8 @@ namespace Server.Models
 
                 userQuest.QuestInfo = quest;
 
-                if (quest.QuestType == QuestType.Account)
-                    userQuest.Account = Character.Account;
-                else
-                    userQuest.Character = Character;
+                // 账号任务（QuestType.Account）也在 2026-11-11 下沉到角色，不再与同账号其它角色共享。
+                userQuest.Character = Character;
 
                 userQuest.DateTaken = SEnvir.Now;
 
@@ -3833,7 +3885,7 @@ namespace Server.Models
 
         public void MailGetItem(C.MailGetItem p)
         {
-            MailInfo mail = Character.Account.Mail.FirstOrDefault(x => x.Index == p.Index);
+            MailInfo mail = Character.Mail.FirstOrDefault(x => x.Index == p.Index);
 
             if (mail == null)
             {
@@ -3868,7 +3920,7 @@ namespace Server.Models
         }
         public void MailDelete(int index)
         {
-            MailInfo mail = Character.Account.Mail.FirstOrDefault(x => x.Index == index);
+            MailInfo mail = Character.Mail.FirstOrDefault(x => x.Index == index);
 
             if (mail == null)
             {
@@ -3906,21 +3958,23 @@ namespace Server.Models
                 return;
             }
 
-            AccountInfo account = SEnvir.GetCharacter(p.Recipient)?.Account;
+            // 收件人按**角色**定位：邮件是角色级的（2026-11-11 起从账号下沉到角色），
+            // 同名只认这一个角色，信也只进这个角色的信箱。
+            CharacterInfo recipientCharacter = SEnvir.GetCharacter(p.Recipient);
 
-            if (account == null || SEnvir.IsBlocking(Character.Account, account))
+            if (recipientCharacter == null || SEnvir.IsBlocking(Character, recipientCharacter))
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MailNotFound, p.Recipient), MessageType.System);
                 return;
             }
 
-            if (account == Character.Account && !Character.Account.TempAdmin)
+            if (recipientCharacter == Character && !Character.Account.TempAdmin)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.MailSelfMail, MessageType.System);
                 return;
             }
 
-            if (p.Links.Count > 0 && account.Mail.Sum(x => x.Items.Count) >= Globals.MaxMailStorage)
+            if (p.Links.Count > 0 && recipientCharacter.Mail.Sum(x => x.Items.Count) >= Globals.MaxMailStorage)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.MailStorageFull, MessageType.System);
                 return;
@@ -3983,14 +4037,14 @@ namespace Server.Models
                 item = fromArray[link.Slot];
 
                 if (item == null || link.Count > item.Count) return;
-                if (((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound || !item.Info.CanTrade) && !account.IsAdmin(true) && !Character.Account.IsAdmin(true)) return;
+                if (((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound || !item.Info.CanTrade) && !recipientCharacter.Account.IsAdmin(true) && !Character.Account.IsAdmin(true)) return;
                 if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) return;
                 //Success
             }
 
             MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
-            mail.Account = account;
+            mail.Character = recipientCharacter;
             mail.Sender = Name;
             mail.Subject = p.Subject;
             mail.Message = p.Message;
@@ -4055,8 +4109,8 @@ namespace Server.Models
 
             mail.HasItem = mail.Items.Count > 0;
 
-            if (account.Connection?.Player != null)
-                account.Connection.Enqueue(new S.MailNew
+            if (recipientCharacter.Account?.Connection?.Player != null)
+                recipientCharacter.Account.Connection.Enqueue(new S.MailNew
                 {
                     Mail = mail.ToClientInfo(),
                     ObserverPacket = false,
@@ -4077,9 +4131,9 @@ namespace Server.Models
         {
             Enqueue(new S.MarketPlaceConsign
             {
-                Consignments = Character.Account.Auctions
+                Consignments = Character.Auctions
                     .Where(x => x.Character == Character || x.Character == null || x.Character.Deleted)
-                    .Select(x => x.ToClientInfo(Character.Account)).ToList(),
+                    .Select(x => x.ToClientInfo(Character)).ToList(),
                 FeeRate = Config.MarketPlaceFeeRate,
                 FeeMinimum = Config.MarketPlaceFeeMinimum,
                 ObserverPacket = false,
@@ -4152,7 +4206,7 @@ namespace Server.Models
             int cost = Globals.CalcMarketPlaceFee(p.Price, p.Link.Count, Config.MarketPlaceFeeRate, Config.MarketPlaceFeeMinimum);
 
             // 名额按角色统计：同账号其它角色的上架不占本角色的额度
-            if (Character.Account.Auctions.Count(x => x.Character == Character) >= Character.Account.HighestLevel() * 3 + Character.Account.StorageSize - Globals.StorageSize)
+            if (Character.Auctions.Count(x => x.Character == Character) >= Character.Account.HighestLevel() * 3 + Character.StorageSize - Globals.StorageSize)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.ConsignLimit, MessageType.System);
                 return;
@@ -4160,30 +4214,30 @@ namespace Server.Models
 
             if (p.GuildFunds)
             {
-                if (Character.Account.GuildMember == null)
+                if (Character.GuildMember == null)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsGuild, MessageType.System);
                     return;
                 }
-                if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
+                if ((Character.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsPermission, MessageType.System);
                     return;
                 }
 
-                if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+                if (cost > Character.GuildMember.Guild.GuildFunds)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsCost, MessageType.System);
                     return;
                 }
 
-                Character.Account.GuildMember.Guild.GuildFunds -= cost;
-                Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+                Character.GuildMember.Guild.GuildFunds -= cost;
+                Character.GuildMember.Guild.DailyGrowth -= cost;
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
-                    member.Account.Connection?.ReceiveChat(string.Format(Connection.Language.ConsignGuildFundsUsed, Name, cost, item.Info.ItemName, result.Link.Count, p.Price), MessageType.System);
+                    member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection?.ReceiveChat(string.Format(Connection.Language.ConsignGuildFundsUsed, Name, cost, item.Info.ItemName, result.Link.Count, p.Price), MessageType.System);
                 }
             }
             else
@@ -4222,8 +4276,6 @@ namespace Server.Models
 
             AuctionInfo auction = SEnvir.AuctionInfoList.CreateNewObject();
 
-            auction.Account = Character.Account;
-
             auction.Price = p.Price;
             auction.ConsignDate = SEnvir.Now;
 
@@ -4235,7 +4287,7 @@ namespace Server.Models
 
             LogMilestone(MilestoneType.MarketConsign, auctionItem.Count, item: auctionItem.Info);
 
-            Enqueue(new S.MarketPlaceConsign { Consignments = new List<ClientMarketPlaceInfo> { auction.ToClientInfo(Character.Account) }, FeeRate = Config.MarketPlaceFeeRate, FeeMinimum = Config.MarketPlaceFeeMinimum, ObserverPacket = false });
+            Enqueue(new S.MarketPlaceConsign { Consignments = new List<ClientMarketPlaceInfo> { auction.ToClientInfo(Character) }, FeeRate = Config.MarketPlaceFeeRate, FeeMinimum = Config.MarketPlaceFeeMinimum, ObserverPacket = false });
             Connection.ReceiveChatWithObservers(con => con.Language.ConsignComplete, MessageType.System);
         }
         public void MarketPlaceCancelConsign(C.MarketPlaceCancelConsign p)
@@ -4244,7 +4296,7 @@ namespace Server.Models
 
             // 寄售按角色归属：同账号的其它角色不得取回/取消别人上架的东西
             // 自己的寄售，或角色已被删除的孤儿寄售（同账号可代取回）
-            AuctionInfo info = Character.Account.Auctions?.FirstOrDefault(x => x.Index == p.Index
+            AuctionInfo info = Character.Auctions?.FirstOrDefault(x => x.Index == p.Index
                 && (x.Character == Character || x.Character == null || x.Character.Deleted));
 
             if (info == null) return;
@@ -4277,7 +4329,7 @@ namespace Server.Models
             {
                 MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
-                mail.Account = Character.Account;
+                mail.Character = Character;
                 StringMessages mailLang = MailLanguage(Character.Account);
 
                 mail.Subject = mailLang.MarketPlaceListingCancelledSubject;
@@ -4326,7 +4378,7 @@ namespace Server.Models
                 return;
             }
 
-            if (info.Account == Character.Account && !Character.Account.TempAdmin)
+            if (info.Character == Character && !Character.Account.TempAdmin)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyOwnItem, MessageType.System);
                 return;
@@ -4345,30 +4397,30 @@ namespace Server.Models
 
             if (p.GuildFunds)
             {
-                if (Character.Account.GuildMember == null)
+                if (Character.GuildMember == null)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsGuild, MessageType.System);
                     return;
                 }
-                if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
+                if ((Character.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsPermission, MessageType.System);
                     return;
                 }
 
-                if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+                if (cost > Character.GuildMember.Guild.GuildFunds)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsCost, MessageType.System);
                     return;
                 }
 
-                Character.Account.GuildMember.Guild.GuildFunds -= cost;
-                Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+                Character.GuildMember.Guild.GuildFunds -= cost;
+                Character.GuildMember.Guild.DailyGrowth -= cost;
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
-                    member.Account.Connection?.ReceiveChat(string.Format(member.Account.Connection.Language.ConsignBuyGuildFundsUsed, Name, cost, info.Item.Info.ItemName, p.Count, info.Price), MessageType.System);
+                    member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection?.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.ConsignBuyGuildFundsUsed, Name, cost, info.Item.Info.ItemName, p.Count, info.Price), MessageType.System);
                 }
             }
             else
@@ -4398,12 +4450,12 @@ namespace Server.Models
 
             MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
-            mail.Account = info.Account;
+            mail.Character = info.Character;
 
             decimal taxRate = Config.MarketPlaceTaxRate;
             long tax = (long)(cost * taxRate);
 
-            StringMessages saleLang = MailLanguage(info.Account);
+            StringMessages saleLang = MailLanguage(info.Character?.Account);
 
             mail.Subject = saleLang.MarketPlaceListingSaleSubject;
             mail.Sender = saleLang.MarketPlaceSender;
@@ -4433,8 +4485,8 @@ namespace Server.Models
             gold.Slot = 0;
             mail.HasItem = true;
 
-            if (info.Account.Connection?.Player != null)
-                info.Account.Connection.Enqueue(new S.MailNew
+            if (info.Character?.Account?.Connection?.Player != null)
+                info.Character.Account.Connection.Enqueue(new S.MailNew
                 {
                     Mail = mail.ToClientInfo(),
                     ObserverPacket = false,
@@ -4447,7 +4499,7 @@ namespace Server.Models
             {
                 mail = SEnvir.MailInfoList.CreateNewObject();
 
-                mail.Account = Character.Account;
+                mail.Character = Character;
 
                 StringMessages buyLang = MailLanguage(Character.Account);
 
@@ -4490,8 +4542,8 @@ namespace Server.Models
             history.Average[0] = info.Price; //Only care about the price per transaction
 
 
-            if (info.Account.Connection?.Player != null)
-                info.Account.Connection.Enqueue(new S.MarketPlaceConsignChanged { Index = info.Index, Count = info.Item?.Count ?? 0, ObserverPacket = false, });
+            if (info.Character?.Account?.Connection?.Player != null)
+                info.Character.Account.Connection.Enqueue(new S.MarketPlaceConsignChanged { Index = info.Index, Count = info.Item?.Count ?? 0, ObserverPacket = false, });
 
             if (info.Item == null)
                 info.Delete();
@@ -4585,7 +4637,7 @@ namespace Server.Models
             GameStoreSale sale = SEnvir.GameStoreSaleList.CreateNewObject();
 
             sale.Item = info.Item;
-            sale.Account = Character.Account;
+            sale.Character = Character;
             sale.Count = p.Count;
             sale.Price = price;
             sale.HuntGold = p.UseHuntGold;
@@ -4598,13 +4650,13 @@ namespace Server.Models
             StoreInfo info = SEnvir.StoreInfoList.Binding.FirstOrDefault(x => x.Index == p.Index && x.Item != null);
             if (info == null) return;
 
-            GameStoreFavourite favourite = Character.Account.StoreFavourites.FirstOrDefault(x => x.StoreInfo == info);
+            GameStoreFavourite favourite = Character.StoreFavourites.FirstOrDefault(x => x.StoreInfo == info);
             bool favourited;
 
             if (favourite == null)
             {
                 favourite = SEnvir.GameStoreFavouriteList.CreateNewObject();
-                favourite.Account = Character.Account;
+                favourite.Character = Character;
                 favourite.StoreInfo = info;
                 favourited = true;
             }
@@ -4648,19 +4700,19 @@ namespace Server.Models
             CharacterInfo recipientCharacter = string.IsNullOrWhiteSpace(p.Recipient) ? null : SEnvir.GetCharacter(p.Recipient);
             AccountInfo recipient = recipientCharacter?.Account;
 
-            if (recipient == null || SEnvir.IsBlocking(Character.Account, recipient))
+            if (recipient == null || SEnvir.IsBlocking(Character, recipientCharacter))
             {
                 EnqueueGameShopGiftResult(GameStoreGiftResult.InvalidRecipient);
                 return;
             }
 
-            if (recipient == Character.Account && !Character.Account.TempAdmin)
+            if (recipientCharacter == Character && !Character.Account.TempAdmin)
             {
                 EnqueueGameShopGiftResult(GameStoreGiftResult.CannotGiftSelf);
                 return;
             }
 
-            if (recipient.Mail.Sum(x => x.Items.Count) >= Globals.MaxMailStorage)
+            if (recipientCharacter.Mail.Sum(x => x.Items.Count) >= Globals.MaxMailStorage)
             {
                 EnqueueGameShopGiftResult(GameStoreGiftResult.MailboxFull);
                 return;
@@ -4703,7 +4755,7 @@ namespace Server.Models
             }
 
             MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
-            mail.Account = recipient;
+            mail.Character = recipientCharacter;
             mail.Sender = Name;
             mail.Subject = "Cash Shop Gift";
             mail.Message = $"{Name} sent you a gift from the Cash Shop.";
@@ -4715,7 +4767,7 @@ namespace Server.Models
 
             GameStoreSale sale = SEnvir.GameStoreSaleList.CreateNewObject();
             sale.Item = info.Item;
-            sale.Account = Character.Account;
+            sale.Character = Character;
             sale.Count = p.Count;
             sale.Price = price;
             sale.HuntGold = p.UseHuntGold;
@@ -4792,9 +4844,9 @@ namespace Server.Models
 
                 MailInfo mail = SEnvir.MailInfoList.CreateNewObject();
 
-                StringMessages invalidLang = MailLanguage(info.Account);
+                StringMessages invalidLang = MailLanguage(info.Character?.Account);
 
-                mail.Account = info.Account;
+                mail.Character = info.Character;
                 mail.Subject = invalidLang.MarketPlaceListingCancelledSubject;
                 mail.Message = invalidLang.MarketPlaceListingInvalidatedMessage;
                 mail.Sender = invalidLang.SystemSender;
@@ -4802,7 +4854,7 @@ namespace Server.Models
                 item.Slot = 0;
                 mail.HasItem = true;
 
-                info.Account.Connection?.Player?.Enqueue(new S.MailNew
+                info.Character?.Account?.Connection?.Player?.Enqueue(new S.MailNew
                 {
                     Mail = mail.ToClientInfo(),
                     ObserverPacket = false,
@@ -4821,7 +4873,7 @@ namespace Server.Models
         {
             Enqueue(new S.GuildCreate { ObserverPacket = false });
 
-            if (Character.Account.GuildMember != null) return;
+            if (Character.GuildMember != null) return;
 
             if (string.IsNullOrWhiteSpace(p.Name)) return;
             if (p.Members < 0 || p.Members > 100) return;
@@ -4881,7 +4933,7 @@ namespace Server.Models
 
             GuildMemberInfo memberInfo = SEnvir.GuildMemberInfoList.CreateNewObject();
 
-            memberInfo.Account = Character.Account;
+            memberInfo.Character = Character;
             memberInfo.Guild = info;
             memberInfo.Rank = "会长";    // 原为英文 "Guild Leader"，客户端直接显示该字符串
             memberInfo.JoinDate = SEnvir.Now;
@@ -4920,9 +4972,9 @@ namespace Server.Models
         }
         public void GuildEditNotice(C.GuildEditNotice p)
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.EditNotice) != GuildPermission.EditNotice)
+            if ((Character.GuildMember.Permission & GuildPermission.EditNotice) != GuildPermission.EditNotice)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildNoticePermission, MessageType.System);
                 return;
@@ -4930,18 +4982,18 @@ namespace Server.Models
 
             if (p.Notice == null || p.Notice.Length > Globals.MaxGuildNoticeLength) return;
 
-            Character.Account.GuildMember.Guild.GuildNotice = p.Notice;
+            Character.GuildMember.Guild.GuildNotice = p.Notice;
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
             {
-                member.Account.Connection?.Player?.Enqueue(new S.GuildNoticeChanged { Notice = p.Notice, ObserverPacket = false });
+                member.OnlinePlayer?.Enqueue(new S.GuildNoticeChanged { Notice = p.Notice, ObserverPacket = false });
             }
         }
         public void GuildEditMember(C.GuildEditMember p)
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildEditMemberPermission, MessageType.System);
                 return;
@@ -4956,7 +5008,7 @@ namespace Server.Models
 
             if (p.Index > 0)
             {
-                GuildMemberInfo info = Character.Account.GuildMember.Guild.Members.FirstOrDefault(x => x.Index == p.Index);
+                GuildMemberInfo info = Character.GuildMember.Guild.Members.FirstOrDefault(x => x.Index == p.Index);
 
                 if (info == null)
                 {
@@ -4964,41 +5016,41 @@ namespace Server.Models
                     return;
                 }
 
-                if (info != Character.Account.GuildMember) //Don't Change ones own permission.
+                if (info != Character.GuildMember) //Don't Change ones own permission.
                     info.Permission = p.Permission;
                 info.Rank = p.Rank;
 
-                S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+                S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
                 update.Members.Add(info.ToClientInfo());
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                    member.Account.Connection?.Player?.Enqueue(update);
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                    member.OnlinePlayer?.Enqueue(update);
 
-                info.Account.Connection?.Player?.Broadcast(new S.GuildChanged { ObjectID = info.Account.Connection.Player.ObjectID, GuildName = info.Guild.GuildName, GuildRank = info.Rank });
+                info.OnlinePlayer?.Broadcast(new S.GuildChanged { ObjectID = info.OnlinePlayer.ObjectID, GuildName = info.Guild.GuildName, GuildRank = info.Rank });
             }
             else
             {
-                Character.Account.GuildMember.Guild.DefaultRank = p.Rank;
-                Character.Account.GuildMember.Guild.DefaultPermission = p.Permission;
+                Character.GuildMember.Guild.DefaultRank = p.Rank;
+                Character.GuildMember.Guild.DefaultPermission = p.Permission;
 
-                S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+                S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                    member.Account.Connection?.Player?.Enqueue(update);
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                    member.OnlinePlayer?.Enqueue(update);
             }
         }
         public void GuildKickMember(C.GuildKickMember p)
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildKickPermission, MessageType.System);
                 return;
             }
 
-            GuildMemberInfo info = Character.Account.GuildMember.Guild.Members.FirstOrDefault(x => x.Index == p.Index);
+            GuildMemberInfo info = Character.GuildMember.Guild.Members.FirstOrDefault(x => x.Index == p.Index);
 
             if (info == null)
             {
@@ -5006,20 +5058,26 @@ namespace Server.Models
                 return;
             }
 
-            if (info == Character.Account.GuildMember)
+            if (info == Character.GuildMember)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildKickSelf, MessageType.System);
                 return;
             }
 
             GuildInfo guild = info.Guild;
-            PlayerObject player = info.Account.Connection?.Player;
-            string memberName = info.Account.LastCharacter.CharacterName;
 
-            info.Account.GuildTime = SEnvir.Now.AddDays(1);
+            // 席位就是角色（2026-11-11 行会下沉到角色），名字直接取席位角色的名字。
+            CharacterInfo memberCharacter = info.Character;
+            string memberName = memberCharacter?.CharacterName ?? "（未知）";
+
+            PlayerObject player = info.OnlinePlayer;
+
+            // 冷却给**被踢的角色**（原代码给的是被踢者的账号）。
+            if (memberCharacter != null)
+                memberCharacter.GuildTime = SEnvir.Now.AddDays(1);
 
             info.Guild = null;
-            info.Account = null;
+            info.Character = null;
             info.Delete();
 
 
@@ -5034,12 +5092,12 @@ namespace Server.Models
 
             foreach (GuildMemberInfo member in guild.Members)
             {
-                if (member.Account.Connection?.Player == null) continue;
+                if (member.OnlinePlayer == null) continue;
 
-                member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildMemberKicked, memberName, Name), MessageType.System);
-                member.Account.Connection.Player.Enqueue(new S.GuildKick { Index = info.Index, ObserverPacket = false });
-                member.Account.Connection.Player.RemoveAllObjects();
-                member.Account.Connection.Player.ApplyGuildBuff();
+                member.OnlinePlayer?.Connection.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.GuildMemberKicked, memberName, Name), MessageType.System);
+                member.OnlinePlayer.Enqueue(new S.GuildKick { Index = info.Index, ObserverPacket = false });
+                member.OnlinePlayer.RemoveAllObjects();
+                member.OnlinePlayer.ApplyGuildBuff();
             }
 
         }
@@ -5047,9 +5105,9 @@ namespace Server.Models
         {
             Enqueue(new S.GuildTax { ObserverPacket = false });
 
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
@@ -5057,22 +5115,22 @@ namespace Server.Models
 
             if (p.Tax < 0 || p.Tax > 100) return;
 
-            Character.Account.GuildMember.Guild.GuildTax = p.Tax / 100M;
+            Character.GuildMember.Guild.GuildTax = p.Tax / 100M;
 
-            S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+            S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                member.Account.Connection?.Player?.Enqueue(update);
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                member.OnlinePlayer?.Enqueue(update);
         }
         public void GuildIncreaseMember(C.GuildIncreaseMember p)
         {
             Enqueue(new S.GuildIncreaseMember { ObserverPacket = false });
 
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            GuildInfo guild = Character.Account.GuildMember.Guild;
+            GuildInfo guild = Character.GuildMember.Guild;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
@@ -5093,26 +5151,26 @@ namespace Server.Models
             guild.GuildFunds -= Globals.GuildMemberCost;
             guild.DailyGrowth -= Globals.GuildMemberCost;
 
-            Character.Account.GuildMember.Guild.MemberLimit++;
+            Character.GuildMember.Guild.MemberLimit++;
 
-            S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+            S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                member.Account.Connection?.Player?.Enqueue(update);
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                member.OnlinePlayer?.Enqueue(update);
         }
         public void GuildIncreaseStorage(C.GuildIncreaseStorage p)
         {
             Enqueue(new S.GuildIncreaseStorage { ObserverPacket = false });
 
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
-            GuildInfo guild = Character.Account.GuildMember.Guild;
+            GuildInfo guild = Character.GuildMember.Guild;
             if (guild.StorageSize >= 500)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildStorageLimit, MessageType.System);
@@ -5127,20 +5185,20 @@ namespace Server.Models
 
             guild.GuildFunds -= Globals.GuildStorageCost;
             guild.DailyGrowth -= Globals.GuildStorageCost;
-            Character.Account.GuildMember.Guild.StorageSize++;
+            Character.GuildMember.Guild.StorageSize++;
 
-            S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+            S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                member.Account.Connection?.Player?.Enqueue(update);
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                member.OnlinePlayer?.Enqueue(update);
         }
         public void GuildInviteMember(C.GuildInviteMember p)
         {
             Enqueue(new S.GuildInviteMember { ObserverPacket = false });
 
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
+            if ((Character.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildInvitePermission, MessageType.System);
                 return;
@@ -5154,7 +5212,7 @@ namespace Server.Models
                 return;
             }
 
-            if (player.Character.Account.GuildMember != null)
+            if (player.Character.GuildMember != null)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteGuild, player.Name), MessageType.System);
                 return;
@@ -5166,40 +5224,40 @@ namespace Server.Models
                 return;
             }
 
-            if (SEnvir.IsBlocking(Character.Account, player.Character.Account))
+            if (SEnvir.IsBlocking(Character, player.Character))
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
                 return;
             }
-            if (!player.Character.Account.AllowGuild)
+            if (!player.Character.AllowGuild)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
-                player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInvitedNotAllowed, Character.CharacterName, Character.Account.GuildMember.Guild.GuildName), MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInvitedNotAllowed, Character.CharacterName, Character.GuildMember.Guild.GuildName), MessageType.System);
                 return;
             }
 
 
-            if (Character.Account.GuildMember.Guild.Members.Count >= Character.Account.GuildMember.Guild.MemberLimit)
+            if (Character.GuildMember.Guild.Members.Count >= Character.GuildMember.Guild.MemberLimit)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteRoom, player.Name), MessageType.System);
                 return;
             }
 
             player.GuildInvitation = this;
-            player.Enqueue(new S.GuildInvite { Name = Name, GuildName = Character.Account.GuildMember.Guild.GuildName, ObserverPacket = false });
+            player.Enqueue(new S.GuildInvite { Name = Name, GuildName = Character.GuildMember.Guild.GuildName, ObserverPacket = false });
         }
         public void GuildWar(string guildName)
         {
             S.GuildWar result = new S.GuildWar { ObserverPacket = false };
             Enqueue(result);
 
-            if (Character.Account.GuildMember == null)
+            if (Character.GuildMember == null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildNoGuild, MessageType.System);
                 return;
             }
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.StartWar) != GuildPermission.StartWar)
+            if ((Character.GuildMember.Permission & GuildPermission.StartWar) != GuildPermission.StartWar)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildWarPermission, MessageType.System);
                 return;
@@ -5213,21 +5271,21 @@ namespace Server.Models
                 return;
             }
 
-            if (guild == Character.Account.GuildMember.Guild)
+            if (guild == Character.GuildMember.Guild)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildWarOwnGuild, MessageType.System);
                 result.Success = true;
                 return;
             }
 
-            if (SEnvir.GuildWarInfoList.Binding.Any(x => (x.Guild1 == guild && x.Guild2 == Character.Account.GuildMember.Guild) ||
-                                                         (x.Guild2 == guild && x.Guild1 == Character.Account.GuildMember.Guild)))
+            if (SEnvir.GuildWarInfoList.Binding.Any(x => (x.Guild1 == guild && x.Guild2 == Character.GuildMember.Guild) ||
+                                                         (x.Guild2 == guild && x.Guild1 == Character.GuildMember.Guild)))
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildAlreadyWar, guild.GuildName), MessageType.System);
                 return;
             }
 
-            if (Globals.GuildWarCost > Character.Account.GuildMember.Guild.GuildFunds)
+            if (Globals.GuildWarCost > Character.GuildMember.Guild.GuildFunds)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildWarCost, MessageType.System);
                 return;
@@ -5235,47 +5293,47 @@ namespace Server.Models
 
             result.Success = true;
 
-            Character.Account.GuildMember.Guild.GuildFunds -= Globals.GuildWarCost;
-            Character.Account.GuildMember.Guild.DailyGrowth -= Globals.GuildWarCost;
+            Character.GuildMember.Guild.GuildFunds -= Globals.GuildWarCost;
+            Character.GuildMember.Guild.DailyGrowth -= Globals.GuildWarCost;
 
             GuildWarInfo warInfo = SEnvir.GuildWarInfoList.CreateNewObject();
 
-            warInfo.Guild1 = Character.Account.GuildMember.Guild;
+            warInfo.Guild1 = Character.GuildMember.Guild;
             warInfo.Guild2 = guild;
             warInfo.Duration = TimeSpan.FromHours(2);
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
             {
-                member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -Globals.GuildWarCost, ObserverPacket = false });
-                member.Account.Connection?.Player?.Enqueue(new S.GuildWarStarted { GuildName = guild.GuildName, Duration = warInfo.Duration });
+                member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -Globals.GuildWarCost, ObserverPacket = false });
+                member.OnlinePlayer?.Enqueue(new S.GuildWarStarted { GuildName = guild.GuildName, Duration = warInfo.Duration });
             }
 
             foreach (GuildMemberInfo member in guild.Members)
             {
-                member.Account.Connection?.Player?.Enqueue(new S.GuildWarStarted { GuildName = Character.Account.GuildMember.Guild.GuildName, Duration = warInfo.Duration });
+                member.OnlinePlayer?.Enqueue(new S.GuildWarStarted { GuildName = Character.GuildMember.Guild.GuildName, Duration = warInfo.Duration });
             }
         }
         public void GuildConquest(int index)
         {
-            if (Character.Account.GuildMember == null)
+            if (Character.GuildMember == null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildNoGuild, MessageType.System);
                 return;
             }
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildWarPermission, MessageType.System);
                 return;
             }
 
-            if (Character.Account.GuildMember.Guild.Castle != null)
+            if (Character.GuildMember.Guild.Castle != null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestCastle, MessageType.System);
                 return;
             }
 
-            if (Character.Account.GuildMember.Guild.Conquest != null)
+            if (Character.GuildMember.Guild.Conquest != null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestExists, MessageType.System);
                 return;
@@ -5313,7 +5371,7 @@ namespace Server.Models
                 date = date.AddTicks(TimeSpan.TicksPerDay);
 
             UserConquest conquest = SEnvir.UserConquestList.CreateNewObject();
-            conquest.Guild = Character.Account.GuildMember.Guild;
+            conquest.Guild = Character.GuildMember.Guild;
             conquest.Castle = castle;
             conquest.WarDate = date;
 
@@ -5323,61 +5381,61 @@ namespace Server.Models
             {
                 foreach (GuildMemberInfo member in ownerGuild.Members)
                 {
-                    if (member.Account.Connection?.Player == null) continue; //Offline
+                    if (member.OnlinePlayer == null) continue; //Offline
 
-                    member.Account.Connection.ReceiveChat(member.Account.Connection.Language.GuildConquestSuccess, MessageType.System);
-                    member.Account.Connection.Enqueue(new S.GuildConquestDate { Index = castle.Index, WarTime = (date + castle.StartTime) - SEnvir.Now, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection.ReceiveChat(member.OnlinePlayer?.Connection.Language.GuildConquestSuccess, MessageType.System);
+                    member.OnlinePlayer?.Connection.Enqueue(new S.GuildConquestDate { Index = castle.Index, WarTime = (date + castle.StartTime) - SEnvir.Now, ObserverPacket = false });
                 }
             }
 
             //Send War Date to guild.
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
             {
-                if (member.Account.Connection?.Player == null) continue; //Offline
+                if (member.OnlinePlayer == null) continue; //Offline
 
-                member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildConquestDate, castle.Name), MessageType.System);
-                member.Account.Connection.Enqueue(new S.GuildConquestDate { Index = castle.Index, WarTime = (date + castle.StartTime) - SEnvir.Now, ObserverPacket = false });
+                member.OnlinePlayer?.Connection.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.GuildConquestDate, castle.Name), MessageType.System);
+                member.OnlinePlayer?.Connection.Enqueue(new S.GuildConquestDate { Index = castle.Index, WarTime = (date + castle.StartTime) - SEnvir.Now, ObserverPacket = false });
             }
         }
 
         public void GuildColour(Color colour)
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
-            Character.Account.GuildMember.Guild.Colour = colour;
+            Character.GuildMember.Guild.Colour = colour;
 
-            if (Character.Account.GuildMember.Guild.Castle != null)
+            if (Character.GuildMember.Guild.Castle != null)
             {
-                var castle = Character.Account.GuildMember.Guild.Castle;
+                var castle = Character.GuildMember.Guild.Castle;
                 var map = SEnvir.GetMap(castle.Map);
                 map.RefreshFlags();
 
                 SEnvir.Broadcast(new S.GuildCastleInfo
                 {
                     Index = castle.Index,
-                    Owner = Character.Account.GuildMember.Guild.GuildName,
-                    Flag = Character.Account.GuildMember.Guild.Flag,
-                    Colour = Character.Account.GuildMember.Guild.Colour
+                    Owner = Character.GuildMember.Guild.GuildName,
+                    Flag = Character.GuildMember.Guild.Flag,
+                    Colour = Character.GuildMember.Guild.Colour
                 });
             }
 
-            S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+            S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                member.Account.Connection?.Player?.Enqueue(update);
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                member.OnlinePlayer?.Enqueue(update);
         }
 
         public void GuildFlag(int flag)
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
@@ -5385,39 +5443,39 @@ namespace Server.Models
 
             if (flag < 0 || flag > 9) return;
 
-            Character.Account.GuildMember.Guild.Flag = flag;
+            Character.GuildMember.Guild.Flag = flag;
 
-            if (Character.Account.GuildMember.Guild.Castle != null)
+            if (Character.GuildMember.Guild.Castle != null)
             {
-                var castle = Character.Account.GuildMember.Guild.Castle;
+                var castle = Character.GuildMember.Guild.Castle;
                 var map = SEnvir.GetMap(castle.Map);
                 map.RefreshFlags();
 
                 SEnvir.Broadcast(new S.GuildCastleInfo
                 {
                     Index = castle.Index,
-                    Owner = Character.Account.GuildMember.Guild.GuildName,
-                    Flag = Character.Account.GuildMember.Guild.Flag,
-                    Colour = Character.Account.GuildMember.Guild.Colour
+                    Owner = Character.GuildMember.Guild.GuildName,
+                    Flag = Character.GuildMember.Guild.Flag,
+                    Colour = Character.GuildMember.Guild.Colour
                 });
             }
 
-            S.GuildUpdate update = Character.Account.GuildMember.Guild.GetUpdatePacket();
+            S.GuildUpdate update = Character.GuildMember.Guild.GetUpdatePacket();
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                member.Account.Connection?.Player?.Enqueue(update);
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                member.OnlinePlayer?.Enqueue(update);
         }
 
         public void GuildToggleCastleGates()
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if (Character.Account.GuildMember.Guild.Castle == null)
+            if (Character.GuildMember.Guild.Castle == null)
             {
                 return;
             }
 
-            var castle = Character.Account.GuildMember.Guild.Castle;
+            var castle = Character.GuildMember.Guild.Castle;
 
             var castleRegion = castle.CastleRegion;
             var map = SEnvir.GetMap(castleRegion.Map);
@@ -5438,35 +5496,35 @@ namespace Server.Models
                 {
                     gate.CloseDoor();
 
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                        member.Account.Connection?.ReceiveChat(con => string.Format(con.Language.GuildGateClosed, castle.Name, gate.MonsterInfo.MonsterName), MessageType.System);
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                        member.Connection?.ReceiveChat(con => string.Format(con.Language.GuildGateClosed, castle.Name, gate.MonsterInfo.MonsterName), MessageType.System);
                 }
                 else
                 {
                     gate.OpenDoor();
 
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
-                        member.Account.Connection?.ReceiveChat(con => string.Format(con.Language.GuildGateOpened, castle.Name, gate.MonsterInfo.MonsterName), MessageType.System);
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
+                        member.OnlinePlayer?.Connection?.ReceiveChat(con => string.Format(con.Language.GuildGateOpened, castle.Name, gate.MonsterInfo.MonsterName), MessageType.System);
                 }
             }
         }
 
         public void GuildRepairCastleGates()
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if (Character.Account.GuildMember.Guild.Castle == null)
+            if (Character.GuildMember.Guild.Castle == null)
             {
                 return;
             }
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildCastleRepairPermission, MessageType.System);
                 return;
             }
 
-            var castle = Character.Account.GuildMember.Guild.Castle;
+            var castle = Character.GuildMember.Guild.Castle;
             var castleRegion = castle.CastleRegion;
             var map = SEnvir.GetMap(castleRegion.Map);
             if (map == null) return;
@@ -5491,18 +5549,18 @@ namespace Server.Models
                 }
             }
 
-            if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+            if (cost > Character.GuildMember.Guild.GuildFunds)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGatesCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGatesCost, cost - Character.GuildMember.Guild.GuildFunds), MessageType.System);
                 return;
             }
 
-            Character.Account.GuildMember.Guild.GuildFunds -= cost;
-            Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+            Character.GuildMember.Guild.GuildFunds -= cost;
+            Character.GuildMember.Guild.DailyGrowth -= cost;
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
             {
-                member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
             }
 
             foreach (var gate in castle.Gates)
@@ -5524,20 +5582,20 @@ namespace Server.Models
 
         public void GuildRepairCastleGuards()
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
-            if (Character.Account.GuildMember.Guild.Castle == null)
+            if (Character.GuildMember.Guild.Castle == null)
             {
                 return;
             }
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildCastleRepairPermission, MessageType.System);
                 return;
             }
 
-            var castle = Character.Account.GuildMember.Guild.Castle;
+            var castle = Character.GuildMember.Guild.Castle;
             var castleRegion = castle.CastleRegion;
             var map = SEnvir.GetMap(castleRegion.Map);
             if (map == null) return;
@@ -5562,18 +5620,18 @@ namespace Server.Models
                 }
             }
 
-            if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+            if (cost > Character.GuildMember.Guild.GuildFunds)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGuardsCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGuardsCost, cost - Character.GuildMember.Guild.GuildFunds), MessageType.System);
                 return;
             }
 
-            Character.Account.GuildMember.Guild.GuildFunds -= cost;
-            Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+            Character.GuildMember.Guild.GuildFunds -= cost;
+            Character.GuildMember.Guild.DailyGrowth -= cost;
 
-            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
             {
-                member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
             }
 
             foreach (var guard in castle.Guards)
@@ -5599,31 +5657,31 @@ namespace Server.Models
 
             if (GuildInvitation == null) return;
 
-            if (Character.Account.GuildMember != null)
+            if (Character.GuildMember != null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildJoinGuild, MessageType.System);
                 return;
             }
 
-            if (Character.Account.GuildTime > SEnvir.Now)
+            if (Character.GuildTime > SEnvir.Now)
             {
-                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinTime, Functions.ToString(Character.Account.GuildTime - SEnvir.Now, true)), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinTime, Functions.ToString(Character.GuildTime - SEnvir.Now, true)), MessageType.System);
                 return;
             }
 
-            if (GuildInvitation.Character.Account.GuildMember == null)
+            if (GuildInvitation.Character.GuildMember == null)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinGuild, GuildInvitation.Name), MessageType.System);
                 return;
             }
 
-            if ((GuildInvitation.Character.Account.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
+            if ((GuildInvitation.Character.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinPermission, GuildInvitation.Name), MessageType.System);
                 return;
             }
 
-            if (GuildInvitation.Character.Account.GuildMember.Guild.Members.Count >= GuildInvitation.Character.Account.GuildMember.Guild.MemberLimit)
+            if (GuildInvitation.Character.GuildMember.Guild.Members.Count >= GuildInvitation.Character.GuildMember.Guild.MemberLimit)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinNoRoom, GuildInvitation.Name), MessageType.System);
                 return;
@@ -5631,11 +5689,11 @@ namespace Server.Models
 
             GuildMemberInfo memberInfo = SEnvir.GuildMemberInfoList.CreateNewObject();
 
-            memberInfo.Account = Character.Account;
-            memberInfo.Guild = GuildInvitation.Character.Account.GuildMember.Guild;
-            memberInfo.Rank = GuildInvitation.Character.Account.GuildMember.Guild.DefaultRank;
+            memberInfo.Character = Character;
+            memberInfo.Guild = GuildInvitation.Character.GuildMember.Guild;
+            memberInfo.Rank = GuildInvitation.Character.GuildMember.Guild.DefaultRank;
             memberInfo.JoinDate = SEnvir.Now;
-            memberInfo.Permission = GuildInvitation.Character.Account.GuildMember.Guild.DefaultPermission;
+            memberInfo.Permission = GuildInvitation.Character.GuildMember.Guild.DefaultPermission;
 
             SendGuildInfo();
             Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinWelcome, Name), MessageType.System);
@@ -5649,13 +5707,13 @@ namespace Server.Models
 
             foreach (GuildMemberInfo member in memberInfo.Guild.Members)
             {
-                if (member == memberInfo || member.Account.Connection?.Player == null) continue;
+                if (member == memberInfo || member.OnlinePlayer == null) continue;
 
-                member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildMemberJoined, GuildInvitation.Name, Name), MessageType.System);
-                member.Account.Connection.Player.Enqueue(update);
+                member.OnlinePlayer?.Connection.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.GuildMemberJoined, GuildInvitation.Name, Name), MessageType.System);
+                member.OnlinePlayer.Enqueue(update);
 
-                member.Account.Connection.Player.AddAllObjects();
-                member.Account.Connection.Player.ApplyGuildBuff();
+                member.OnlinePlayer.AddAllObjects();
+                member.OnlinePlayer.ApplyGuildBuff();
             }
 
             LogMilestone(MilestoneType.GuildJoin, 1);
@@ -5666,15 +5724,15 @@ namespace Server.Models
 
         public void GuildLeave()
         {
-            if (Character.Account.GuildMember == null)
+            if (Character.GuildMember == null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildLeaveNoGuild, MessageType.System);
                 return;
             }
 
-            GuildMemberInfo info = Character.Account.GuildMember;
+            GuildMemberInfo info = Character.GuildMember;
 
-            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) == GuildPermission.Leader && info.Guild.Members.Count > 1 && info.Guild.Members.FirstOrDefault(x => x.Index != info.Index && (x.Permission & GuildPermission.Leader) == GuildPermission.Leader) == null)
+            if ((Character.GuildMember.Permission & GuildPermission.Leader) == GuildPermission.Leader && info.Guild.Members.Count > 1 && info.Guild.Members.FirstOrDefault(x => x.Index != info.Index && (x.Permission & GuildPermission.Leader) == GuildPermission.Leader) == null)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.GuildLeaveFailed, MessageType.System);
                 return;
@@ -5684,11 +5742,11 @@ namespace Server.Models
             int index = info.Index;
 
             info.Guild = null;
-            info.Account = null;
+            info.Character = null;
             info.Delete();
 
             if (!guild.StarterGuild)
-                Character.Account.GuildTime = SEnvir.Now.AddDays(1);
+                Character.GuildTime = SEnvir.Now.AddDays(1);
 
             Connection.ReceiveChatWithObservers(con => con.Language.GuildLeave, MessageType.System);
             Enqueue(new S.GuildInfo { ObserverPacket = false });
@@ -5698,12 +5756,12 @@ namespace Server.Models
 
             foreach (GuildMemberInfo member in guild.Members)
             {
-                if (member.Account.Connection?.Player == null) continue;
+                if (member.OnlinePlayer == null) continue;
 
-                member.Account.Connection.Player.Enqueue(new S.GuildKick { Index = index, ObserverPacket = false });
-                member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildMemberLeave, Name), MessageType.System);
-                member.Account.Connection.Player.RemoveAllObjects();
-                member.Account.Connection.Player.ApplyGuildBuff();
+                member.OnlinePlayer.Enqueue(new S.GuildKick { Index = index, ObserverPacket = false });
+                member.OnlinePlayer?.Connection.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.GuildMemberLeave, Name), MessageType.System);
+                member.OnlinePlayer.RemoveAllObjects();
+                member.OnlinePlayer.ApplyGuildBuff();
             }
 
             ApplyCastleBuff();
@@ -5716,19 +5774,19 @@ namespace Server.Models
             {
                 if (conquest.Map != CurrentMap) continue;
 
-                if (Character.Account.GuildMember == null || player.Character.Account.GuildMember == null) return true;
+                if (Character.GuildMember == null || player.Character.GuildMember == null) return true;
 
-                return Character.Account.GuildMember.Guild != player.Character.Account.GuildMember.Guild;
+                return Character.GuildMember.Guild != player.Character.GuildMember.Guild;
             }
 
-            if (player.Character.Account.GuildMember == null) return false;
-            if (Character.Account.GuildMember == null) return false;
+            if (player.Character.GuildMember == null) return false;
+            if (Character.GuildMember == null) return false;
 
 
             foreach (GuildWarInfo warInfo in SEnvir.GuildWarInfoList.Binding)
             {
-                if (warInfo.Guild1 == Character.Account.GuildMember.Guild && warInfo.Guild2 == player.Character.Account.GuildMember.Guild) return true;
-                if (warInfo.Guild2 == Character.Account.GuildMember.Guild && warInfo.Guild1 == player.Character.Account.GuildMember.Guild) return true;
+                if (warInfo.Guild1 == Character.GuildMember.Guild && warInfo.Guild2 == player.Character.GuildMember.Guild) return true;
+                if (warInfo.Guild2 == Character.GuildMember.Guild && warInfo.Guild1 == player.Character.GuildMember.Guild) return true;
             }
 
             return false;
@@ -5736,31 +5794,31 @@ namespace Server.Models
 
         public void SendGuildInfo()
         {
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
             S.GuildInfo result = new S.GuildInfo
             {
-                Guild = Character.Account.GuildMember.Guild.ToClientInfo(),
+                Guild = Character.GuildMember.Guild.ToClientInfo(),
                 ObserverPacket = false,
             };
 
-            result.Guild.UserIndex = Character.Account.GuildMember.Index;
+            result.Guild.UserIndex = Character.GuildMember.Index;
 
             Enqueue(result);
 
             foreach (GuildWarInfo warInfo in SEnvir.GuildWarInfoList.Binding)
             {
-                if (warInfo.Guild1 == Character.Account.GuildMember.Guild)
+                if (warInfo.Guild1 == Character.GuildMember.Guild)
                     Enqueue(new S.GuildWarStarted { GuildName = warInfo.Guild2.GuildName, Duration = warInfo.Duration });
 
-                if (warInfo.Guild2 == Character.Account.GuildMember.Guild)
+                if (warInfo.Guild2 == Character.GuildMember.Guild)
                     Enqueue(new S.GuildWarStarted { GuildName = warInfo.Guild1.GuildName, Duration = warInfo.Duration });
             }
 
             //Send War Date to guild.
             foreach (CastleInfo castle in SEnvir.CastleInfoList.Binding)
             {
-                UserConquest conquest = SEnvir.UserConquestList.Binding.FirstOrDefault(x => x.Castle == castle && (x.Guild == Character.Account.GuildMember.Guild || x.Castle == Character.Account.GuildMember.Guild.Castle));
+                UserConquest conquest = SEnvir.UserConquestList.Binding.FirstOrDefault(x => x.Castle == castle && (x.Guild == Character.GuildMember.Guild || x.Castle == Character.GuildMember.Guild.Castle));
 
                 TimeSpan warTime = TimeSpan.MinValue;
                 if (conquest != null)
@@ -5772,11 +5830,11 @@ namespace Server.Models
 
         public void JoinStarterGuild()
         {
-            if (Character.Account.GuildMember != null) return;
+            if (Character.GuildMember != null) return;
 
             GuildMemberInfo memberInfo = SEnvir.GuildMemberInfoList.CreateNewObject();
 
-            memberInfo.Account = Character.Account;
+            memberInfo.Character = Character;
             memberInfo.Guild = SEnvir.StarterGuild;
             memberInfo.Rank = SEnvir.StarterGuild.DefaultRank;
             memberInfo.JoinDate = SEnvir.Now;
@@ -5795,12 +5853,12 @@ namespace Server.Models
 
             foreach (GuildMemberInfo member in memberInfo.Guild.Members)
             {
-                if (member == memberInfo || member.Account.Connection?.Player == null) continue;
+                if (member == memberInfo || member.OnlinePlayer == null) continue;
 
-                member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildMemberJoined, SEnvir.StarterGuild, Name), MessageType.System);
-                member.Account.Connection.Player.Enqueue(update);
+                member.OnlinePlayer?.Connection.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.GuildMemberJoined, SEnvir.StarterGuild, Name), MessageType.System);
+                member.OnlinePlayer.Enqueue(update);
 
-                member.Account.Connection.Player.AddAllObjects();
+                member.OnlinePlayer.AddAllObjects();
             }
 
             ApplyCastleBuff();
@@ -5813,7 +5871,7 @@ namespace Server.Models
 
         public void GroupSwitch(bool allowGroup)
         {
-            if (Character.Account.AllowGroup == allowGroup) return;
+            if (Character.AllowGroup == allowGroup) return;
 
             if (GroupMembers != null && GroupMembers.Any(x => x.CurrentMap.Instance != null))
             {
@@ -5824,9 +5882,9 @@ namespace Server.Models
                 return;
             }
 
-            Character.Account.AllowGroup = allowGroup;
+            Character.AllowGroup = allowGroup;
 
-            Enqueue(new S.GroupSwitch { Allow = Character.Account.AllowGroup });
+            Enqueue(new S.GroupSwitch { Allow = Character.AllowGroup });
 
             if (GroupMembers != null)
                 GroupLeave();
@@ -5918,7 +5976,7 @@ namespace Server.Models
                 return;
             }
 
-            if (!player.Character.Account.AllowGroup || SEnvir.IsBlocking(Character.Account, player.Character.Account))
+            if (!player.Character.AllowGroup || SEnvir.IsBlocking(Character, player.Character))
             {
                 Connection.ReceiveChat(string.Format(Connection.Language.GroupInviteNotAllowed, name), MessageType.System);
 
@@ -5964,7 +6022,7 @@ namespace Server.Models
 
         public void GroupRequest(string groupLeader)
         {
-            if (GroupMembers != null || !Character.Account.AllowGroup)
+            if (GroupMembers != null || !Character.AllowGroup)
             {
                 return;
             }
@@ -5994,7 +6052,7 @@ namespace Server.Models
                 return;
             }
 
-            if (!leader.Character.Account.AllowGroup || SEnvir.IsBlocking(leader.Character.Account, Character.Account))
+            if (!leader.Character.AllowGroup || SEnvir.IsBlocking(leader.Character, Character))
             {
                 Connection.ReceiveChat(string.Format(Connection.Language.GroupInviteNotAllowed, groupLeader), MessageType.System);
 
@@ -6352,7 +6410,7 @@ namespace Server.Models
 
             item.Slot = -1;
             item.Character = null;
-            item.Account = null;
+            item.StorageOwner = null;
             item.Mail = null;
             item.Auction = null;
             item.Companion = null;
@@ -7049,7 +7107,7 @@ namespace Server.Models
                             break;
                         case 17: //Storage Increase
 
-                            int size = Character.Account.StorageSize + 10;
+                            int size = Character.StorageSize + 10;
 
                             if (size >= Storage.Length)
                             {
@@ -7057,8 +7115,8 @@ namespace Server.Models
                                 return;
                             }
 
-                            Character.Account.StorageSize = size;
-                            Enqueue(new S.StorageSize { Size = Character.Account.StorageSize });
+                            Character.StorageSize = size;
+                            Enqueue(new S.StorageSize { Size = Character.StorageSize });
                             break;
                         case 18: //Football Whistle
                             if (item.Info.Stats[Stat.MapSummoning] > 0 && CurrentMap.HasSafeZone)
@@ -7736,12 +7794,12 @@ namespace Server.Models
 
                     fromArray = Storage;
 
-                    if (p.FromSlot >= Character.Account.StorageSize) return;
+                    if (p.FromSlot >= Character.StorageSize) return;
                     break;
                 case GridType.GuildStorage:
-                    if (Character.Account.GuildMember == null) return;
+                    if (Character.GuildMember == null) return;
 
-                    if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
+                    if ((Character.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
                     {
                         Connection.ReceiveChatWithObservers(con => con.Language.GuildStoragePermission, MessageType.System);
                         return;
@@ -7753,9 +7811,9 @@ namespace Server.Models
                         return;
                     }
 
-                    fromArray = Character.Account.GuildMember.Guild.Storage;
+                    fromArray = Character.GuildMember.Guild.Storage;
 
-                    if (p.FromSlot >= Character.Account.GuildMember.Guild.StorageSize) return;
+                    if (p.FromSlot >= Character.GuildMember.Guild.StorageSize) return;
                     break;
                 case GridType.CompanionInventory:
                     if (Companion == null) return;
@@ -7810,12 +7868,12 @@ namespace Server.Models
 
                     toArray = Storage;
 
-                    if (p.ToSlot >= Character.Account.StorageSize) return;
+                    if (p.ToSlot >= Character.StorageSize) return;
                     break;
                 case GridType.GuildStorage:
-                    if (Character.Account.GuildMember == null) return;
+                    if (Character.GuildMember == null) return;
 
-                    if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
+                    if ((Character.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
                     {
                         Connection.ReceiveChatWithObservers(con => con.Language.GuildStoragePermission, MessageType.System);
                         return;
@@ -7827,9 +7885,9 @@ namespace Server.Models
                         return;
                     }
 
-                    toArray = Character.Account.GuildMember.Guild.Storage;
+                    toArray = Character.GuildMember.Guild.Storage;
 
-                    if (p.ToSlot >= Character.Account.GuildMember.Guild.StorageSize) return;
+                    if (p.ToSlot >= Character.GuildMember.Guild.StorageSize) return;
                     break;
                 case GridType.CompanionInventory:
                     if (Companion == null) return;
@@ -7993,9 +8051,9 @@ namespace Server.Models
                             ObserverPacket = false
                         };
 
-                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                         {
-                            PlayerObject player = member.Account.Connection?.Player;
+                            PlayerObject player = member.OnlinePlayer;
 
                             if (player == null || player == this) continue;
 
@@ -8025,9 +8083,9 @@ namespace Server.Models
                             ObserverPacket = false
                         };
 
-                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                         {
-                            PlayerObject player = member.Account.Connection?.Player;
+                            PlayerObject player = member.OnlinePlayer;
 
                             if (player == null || player == this) continue;
 
@@ -8094,13 +8152,13 @@ namespace Server.Models
                     if (toItem == null) break;
 
                     toItem.Slot = p.FromSlot;
-                    toItem.Account = Character.Account;
+                    toItem.StorageOwner = Character;
                     break;
                 case GridType.Storage:
                     if (toItem == null) break;
 
                     toItem.Slot = p.FromSlot;
-                    toItem.Account = Character.Account;
+                    toItem.StorageOwner = Character;
                     break;
                 case GridType.GuildStorage:
                     if (p.ToGrid == GridType.GuildStorage)
@@ -8140,9 +8198,9 @@ namespace Server.Models
                         };
                     }
 
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                     {
-                        PlayerObject player = member.Account.Connection?.Player;
+                        PlayerObject player = member.OnlinePlayer;
 
                         if (player == null || player == this) continue;
 
@@ -8178,15 +8236,15 @@ namespace Server.Models
                     break;
                 case GridType.PartsStorage:
                     fromItem.Slot = p.ToSlot + Globals.PartsStorageOffset;
-                    fromItem.Account = Character.Account;
+                    fromItem.StorageOwner = Character;
                     break;
                 case GridType.Storage:
                     fromItem.Slot = p.ToSlot;
-                    fromItem.Account = Character.Account;
+                    fromItem.StorageOwner = Character;
                     break;
                 case GridType.GuildStorage:
                     fromItem.Slot = p.ToSlot;
-                    fromItem.Guild = Character.Account.GuildMember.Guild;
+                    fromItem.Guild = Character.GuildMember.Guild;
 
                     if (p.FromGrid == GridType.GuildStorage) break; //Already Handled
 
@@ -8207,9 +8265,9 @@ namespace Server.Models
                         ObserverPacket = false
                     };
 
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                     {
-                        PlayerObject player = member.Account.Connection?.Player;
+                        PlayerObject player = member.OnlinePlayer;
 
                         if (player == null || player == this) continue;
 
@@ -8256,7 +8314,7 @@ namespace Server.Models
             int length = array.Length;
 
             if (p.Grid == GridType.Storage)
-                length = Math.Min(array.Length, Character.Account.StorageSize);
+                length = Math.Min(array.Length, Character.StorageSize);
 
             List<UserItem> items = new();
 
@@ -8336,10 +8394,10 @@ namespace Server.Models
                             newItem.Character = Character;
                             break;
                         case GridType.PartsStorage:
-                            newItem.Account = Character.Account;
+                            newItem.StorageOwner = Character;
                             break;
                         case GridType.Storage:
-                            newItem.Account = Character.Account;
+                            newItem.StorageOwner = Character;
                             break;
                     }
 
@@ -8556,11 +8614,11 @@ namespace Server.Models
                     array = Storage;
                     break;
                 case GridType.GuildStorage:
-                    if (Character.Account.GuildMember == null) return;
+                    if (Character.GuildMember == null) return;
 
-                    if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage) return;
+                    if ((Character.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage) return;
 
-                    array = Character.Account.GuildMember.Guild.Storage;
+                    array = Character.GuildMember.Guild.Storage;
                     break;
                 case GridType.CompanionInventory:
                     if (Companion == null) return;
@@ -8582,16 +8640,16 @@ namespace Server.Models
                 length = Math.Min(array.Length, Companion.Stats[Stat.CompanionInventory]);
 
             if (p.Grid == GridType.Storage)
-                length = Math.Min(array.Length, Character.Account.StorageSize);
+                length = Math.Min(array.Length, Character.StorageSize);
 
             if (p.Grid == GridType.GuildStorage)
-                length = Math.Min(array.Length, Character.Account.GuildMember.Guild.StorageSize);
+                length = Math.Min(array.Length, Character.GuildMember.Guild.StorageSize);
 
             for (int i = 0; i < length; i++)
             {
                 if (array[i] != null) continue;
 
-                if (p.Grid == GridType.GuildStorage && i >= Character.Account.GuildMember.Guild.StorageSize) break;
+                if (p.Grid == GridType.GuildStorage && i >= Character.GuildMember.Guild.StorageSize) break;
 
 
                 result.Success = true;
@@ -8611,20 +8669,20 @@ namespace Server.Models
                         newItem.Character = Character;
                         break;
                     case GridType.PartsStorage:
-                        newItem.Account = Character.Account;
+                        newItem.StorageOwner = Character;
                         break;
                     case GridType.Storage:
-                        newItem.Account = Character.Account;
+                        newItem.StorageOwner = Character;
                         break;
                     case GridType.CompanionInventory:
                         newItem.Companion = Companion.UserCompanion;
                         break;
                     case GridType.GuildStorage:
-                        newItem.Guild = Character.Account.GuildMember.Guild;
+                        newItem.Guild = Character.GuildMember.Guild;
 
-                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                         {
-                            PlayerObject player = member.Account.Connection?.Player;
+                            PlayerObject player = member.OnlinePlayer;
 
                             if (player == null || player == this) continue;
 
@@ -8735,6 +8793,7 @@ namespace Server.Models
             ItemObject ob = new ItemObject
             {
                 Item = dropItem,
+                Character = this.Character,
             };
 
             if ((fromItem.Flags & UserItemFlags.Bound) == UserItemFlags.Bound)
@@ -8770,6 +8829,7 @@ namespace Server.Models
             ItemObject ob = new ItemObject
             {
                 Item = dropItem,
+                Character = this.Character,
             };
 
             ob.Spawn(CurrentMap, cell.Location);
@@ -9716,7 +9776,7 @@ namespace Server.Models
         {
             BuffRemove(BuffType.Castle);
 
-            if (Character.Account.GuildMember?.Guild.Castle == null) return;
+            if (Character.GuildMember?.Guild.Castle == null) return;
 
             Stats stats = new Stats();
 
@@ -9730,11 +9790,11 @@ namespace Server.Models
         {
             BuffRemove(BuffType.Guild);
 
-            if (Character.Account.GuildMember == null) return;
+            if (Character.GuildMember == null) return;
 
             Stats stats = new Stats();
 
-            if (Character.Account.GuildMember.Guild.StarterGuild)
+            if (Character.GuildMember.Guild.StarterGuild)
             {
                 if (Level < 50)
                 {
@@ -9749,19 +9809,19 @@ namespace Server.Models
                     stats[Stat.GoldRate] -= 50;
                 }
             }
-            else if (Character.Account.GuildMember.Guild.Members.Count <= 15)
+            else if (Character.GuildMember.Guild.Members.Count <= 15)
             {
                 stats[Stat.ExperienceRate] += 30;
                 stats[Stat.DropRate] += 30;
                 stats[Stat.GoldRate] += 30;
             }
-            else if (Character.Account.GuildMember.Guild.Members.Count <= 30)
+            else if (Character.GuildMember.Guild.Members.Count <= 30)
             {
                 stats[Stat.ExperienceRate] += 23;
                 stats[Stat.DropRate] += 23;
                 stats[Stat.GoldRate] += 23;
             }
-            else if (Character.Account.GuildMember.Guild.Members.Count <= 45)
+            else if (Character.GuildMember.Guild.Members.Count <= 45)
             {
                 stats[Stat.ExperienceRate] += 18;
                 stats[Stat.DropRate] += 18;
@@ -9776,13 +9836,13 @@ namespace Server.Models
 
             if (stats.Count == 0) return;
 
-            if (!Character.Account.GuildMember.Guild.StarterGuild && GroupMembers != null)
+            if (!Character.GuildMember.Guild.StarterGuild && GroupMembers != null)
             {
                 foreach (PlayerObject member in GroupMembers)
                 {
-                    if (member.Character.Account.GuildMember != null && member.Character.Account.GuildMember.Guild.StarterGuild) continue;
+                    if (member.Character.GuildMember != null && member.Character.GuildMember.Guild.StarterGuild) continue;
 
-                    if (member.Character.Account.GuildMember?.Guild != Character.Account.GuildMember.Guild) return;
+                    if (member.Character.GuildMember?.Guild != Character.GuildMember.Guild) return;
                 }
             }
 
@@ -9842,10 +9902,8 @@ namespace Server.Models
             currentBuff.ItemIndex = info.Index;
             currentBuff.RemainingTime = info.Stats[Stat.Duration] > 0 ? TimeSpan.FromSeconds(info.Stats[Stat.Duration]) : TimeSpan.MaxValue;
 
-            if (info.RequiredAmount == 0 && info.RequiredClass == RequiredClass.All)
-                currentBuff.Account = Character.Account;
-            else
-                currentBuff.Character = Character;
+            // Buff 已全部下沉到角色（2026-11-11），通用物品 buff 也不再与同账号其它角色共享。
+            currentBuff.Character = Character;
 
             currentBuff.Pause = InSafeZone;
             Buffs.Add(currentBuff);
@@ -10044,7 +10102,7 @@ namespace Server.Models
                 return;
             }
 
-            if (SEnvir.IsBlocking(Character.Account, player.Character.Account))
+            if (SEnvir.IsBlocking(Character, player.Character))
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
                 return;
@@ -10063,7 +10121,7 @@ namespace Server.Models
             }
 
 
-            if (!player.Character.Account.AllowTrade)
+            if (!player.Character.AllowTrade)
             {
                 Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
                 player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeNotAllowed, Character.CharacterName), MessageType.System);
@@ -10626,20 +10684,20 @@ namespace Server.Models
 
                 if (p.GuildFunds)
                 {
-                    if (Character.Account.GuildMember == null)
+                    if (Character.GuildMember == null)
                     {
                         Connection.ReceiveChatWithObservers(con => con.Language.NPCFundsGuild, MessageType.System);
                         return;
                     }
-                    if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMerchant) != GuildPermission.FundsMerchant)
+                    if ((Character.GuildMember.Permission & GuildPermission.FundsMerchant) != GuildPermission.FundsMerchant)
                     {
                         Connection.ReceiveChatWithObservers(con => con.Language.NPCFundsPermission, MessageType.System);
                         return;
                     }
 
-                    if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+                    if (cost > Character.GuildMember.Guild.GuildFunds)
                     {
-                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCFundsCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCFundsCost, cost - Character.GuildMember.Guild.GuildFunds), MessageType.System);
                         return;
                     }
                 }
@@ -10682,13 +10740,13 @@ namespace Server.Models
 
                 if (p.GuildFunds)
                 {
-                    Character.Account.GuildMember.Guild.GuildFunds -= cost;
-                    Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+                    Character.GuildMember.Guild.GuildFunds -= cost;
+                    Character.GuildMember.Guild.DailyGrowth -= cost;
 
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                     {
-                        member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
-                        member.Account.Connection?.ReceiveChat(string.Format(member.Account.Connection.Language.NPCFundsBuy, Name, cost, item.Info.ItemName, item.Count), MessageType.System);
+                        member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                        member.OnlinePlayer?.Connection?.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.NPCFundsBuy, Name, cost, item.Info.ItemName, item.Count), MessageType.System);
                     }
                 }
                 else
@@ -12080,10 +12138,10 @@ namespace Server.Models
                         array = Storage;
                         break;
                     case GridType.GuildStorage:
-                        if (Character.Account.GuildMember == null) return;
-                        if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage) return;
+                        if (Character.GuildMember == null) return;
+                        if ((Character.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage) return;
 
-                        array = Character.Account.GuildMember.Guild.Storage;
+                        array = Character.GuildMember.Guild.Storage;
                         break;
                     case GridType.CompanionInventory:
                         if (Companion == null) return;
@@ -12150,20 +12208,20 @@ namespace Server.Models
 
             if (p.GuildFunds)
             {
-                if (Character.Account.GuildMember == null)
+                if (Character.GuildMember == null)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.NPCRepairGuild, MessageType.System);
                     return;
                 }
-                if ((Character.Account.GuildMember.Permission & GuildPermission.FundsRepair) != GuildPermission.FundsRepair)
+                if ((Character.GuildMember.Permission & GuildPermission.FundsRepair) != GuildPermission.FundsRepair)
                 {
                     Connection.ReceiveChatWithObservers(con => con.Language.NPCRepairPermission, MessageType.System);
                     return;
                 }
 
-                if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+                if (cost > Character.GuildMember.Guild.GuildFunds)
                 {
-                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCRepairGuildCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCRepairGuildCost, cost - Character.GuildMember.Guild.GuildFunds), MessageType.System);
                     return;
                 }
             }
@@ -12193,7 +12251,7 @@ namespace Server.Models
                         array = Storage;
                         break;
                     case GridType.GuildStorage:
-                        array = Character.Account.GuildMember.Guild.Storage;
+                        array = Character.GuildMember.Guild.Storage;
                         break;
                     case GridType.CompanionInventory:
                         array = Companion.Inventory;
@@ -12225,13 +12283,13 @@ namespace Server.Models
 
             if (p.GuildFunds)
             {
-                Character.Account.GuildMember.Guild.GuildFunds -= cost;
-                Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+                Character.GuildMember.Guild.GuildFunds -= cost;
+                Character.GuildMember.Guild.DailyGrowth -= cost;
 
-                foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                 {
-                    member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
-                    member.Account.Connection?.ReceiveChat(string.Format(member.Account.Connection.Language.NPCRepairGuildResult, Name, cost, count), MessageType.System);
+                    member.OnlinePlayer?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+                    member.OnlinePlayer?.Connection?.ReceiveChat(string.Format(member.OnlinePlayer?.Connection.Language.NPCRepairGuildResult, Name, cost, count), MessageType.System);
                 }
             }
             else
@@ -14466,8 +14524,7 @@ namespace Server.Models
                                     if (item.UserTask == null) continue;
 
                                     if (!item.UserTask.Completed &&
-                                        ((item.UserTask.Quest.Character != null && item.UserTask.Quest.Character == Character) ||
-                                        (item.UserTask.Quest.Account != null && item.UserTask.Quest.Account == Character.Account))) continue;
+                                        item.UserTask.Quest.Character != null && item.UserTask.Quest.Character == Character) continue;
 
                                     items.Remove(item);
                                     item.Delete();
@@ -14544,7 +14601,7 @@ namespace Server.Models
                 return;
             }
 
-            if (Character.Account.Horse == HorseType.None)
+            if (Character.Horse == HorseType.None)
             {
                 Connection.ReceiveChatWithObservers(con => con.Language.HorseOwner, MessageType.System);
 
@@ -14563,7 +14620,7 @@ namespace Server.Models
             ActionTime = SEnvir.Now + Globals.TurnTime;
 
             if (Horse == HorseType.None)
-                Horse = Character.Account.Horse;
+                Horse = Character.Horse;
             else
                 Horse = HorseType.None;
 
@@ -14583,12 +14640,12 @@ namespace Server.Models
 
         public void GiveHorse(HorseType horse)
         {
-            Character.Account.Horse = horse;
+            Character.Horse = horse;
 
             RemoveMount();
             RefreshStats();
 
-            if (Character.Account.Horse != HorseType.None)
+            if (Character.Horse != HorseType.None)
                 Mount();
         }
 
@@ -16756,17 +16813,17 @@ namespace Server.Models
             {
                 if (AtWar(attacker))
                 {
-                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                    foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                     {
-                        if (member.Account.Connection == null) continue;
+                        if (member.OnlinePlayer?.Connection == null) continue;
 
-                        member.Account.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
+                        member.OnlinePlayer?.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.GuildMember.Guild.GuildName), MessageType.System);
                     }
-                    foreach (GuildMemberInfo member in attacker.Character.Account.GuildMember.Guild.Members)
+                    foreach (GuildMemberInfo member in attacker.Character.GuildMember.Guild.Members)
                     {
-                        if (member.Account.Connection == null) continue;
+                        if (member.OnlinePlayer?.Connection == null) continue;
 
-                        member.Account.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
+                        member.OnlinePlayer?.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.GuildMember.Guild.GuildName), MessageType.System);
                     }
                 }
                 else
@@ -16982,6 +17039,7 @@ namespace Server.Models
                         ItemObject ob = new ItemObject
                         {
                             Item = dropItem,
+                            Character = this.Character,
                         };
 
                         ob.Spawn(CurrentMap, cell.Location);
@@ -17000,9 +17058,9 @@ namespace Server.Models
         {
             if (player == null) return false;
 
-            if (Character.Account.GuildMember == null || player.Character.Account.GuildMember == null) return false;
+            if (Character.GuildMember == null || player.Character.GuildMember == null) return false;
 
-            return Character.Account.GuildMember.Guild == player.Character.Account.GuildMember.Guild;
+            return Character.GuildMember.Guild == player.Character.GuildMember.Guild;
         }
 
         public void CheckBrown(MapObject ob)
@@ -17134,7 +17192,7 @@ namespace Server.Models
                 Name = Name,
                 Caption = ActiveMilestone?.Info.Title ?? Character.Caption,
                 CaptionOutlineColour = ActiveMilestone?.Info.OutlineColour ?? Color.Black,
-                GuildName = Character.Account.GuildMember?.Guild.GuildName,
+                GuildName = Character.GuildMember?.Guild.GuildName,
                 NameColour = NameColour,
                 Location = CurrentLocation,
                 Direction = Direction,
@@ -17433,10 +17491,10 @@ namespace Server.Models
                     break;
                 case InstanceType.Guild:
                     {
-                        if (Character.Account.GuildMember == null)
+                        if (Character.GuildMember == null)
                             return (null, InstanceResult.NotInGuild);
 
-                        if (instance.GuildCooldown.TryGetValue(Character.Account.GuildMember.Guild.GuildName, out DateTime cooldown))
+                        if (instance.GuildCooldown.TryGetValue(Character.GuildMember.Guild.GuildName, out DateTime cooldown))
                         {
                             if (cooldown > SEnvir.Now)
                             {
@@ -17444,16 +17502,16 @@ namespace Server.Models
                             }
                         }
 
-                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                         {
-                            if (member.Account.Connection?.Player?.CurrentMap.Instance == instance)
+                            if (member.OnlinePlayer?.CurrentMap.Instance == instance)
                             {
-                                var sequence = member.Account.Connection.Player.CurrentMap.InstanceSequence;
+                                var sequence = member.OnlinePlayer.CurrentMap.InstanceSequence;
 
                                 if (CheckInstanceFreeSpace(instance, sequence))
                                 {
                                     if (!checkOnly)
-                                        instance.GuildCooldown.Remove(Character.Account.GuildMember.Guild.GuildName);
+                                        instance.GuildCooldown.Remove(Character.GuildMember.Guild.GuildName);
 
                                     return (sequence, InstanceResult.Success);
                                 }
@@ -17467,7 +17525,7 @@ namespace Server.Models
                             if (CheckInstanceFreeSpace(instance, instance.UserRecord[Name]))
                             {
                                 if (!checkOnly)
-                                    instance.GuildCooldown.Remove(Character.Account.GuildMember.Guild.GuildName);
+                                    instance.GuildCooldown.Remove(Character.GuildMember.Guild.GuildName);
 
                                 return (instance.UserRecord[Name], InstanceResult.Success);
                             }
@@ -17476,28 +17534,28 @@ namespace Server.Models
                     break;
                 case InstanceType.Castle:
                     {
-                        if (Character.Account.GuildMember == null)
+                        if (Character.GuildMember == null)
                             return (null, InstanceResult.NotInGuild);
 
-                        if (Character.Account.GuildMember.Guild.Castle == null)
+                        if (Character.GuildMember.Guild.Castle == null)
                             return (null, InstanceResult.NotInCastle);
 
-                        if (instance.GuildCooldown.TryGetValue(Character.Account.GuildMember.Guild.GuildName, out DateTime cooldown))
+                        if (instance.GuildCooldown.TryGetValue(Character.GuildMember.Guild.GuildName, out DateTime cooldown))
                         {
                             if (cooldown > SEnvir.Now)
                                 return (null, InstanceResult.GuildCooldown);
                         }
 
-                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        foreach (GuildMemberInfo member in Character.GuildMember.Guild.Members)
                         {
-                            if (member.Account.Connection?.Player?.CurrentMap.Instance == instance)
+                            if (member.OnlinePlayer?.CurrentMap.Instance == instance)
                             {
-                                var sequence = member.Account.Connection.Player.CurrentMap.InstanceSequence;
+                                var sequence = member.OnlinePlayer.CurrentMap.InstanceSequence;
 
                                 if (CheckInstanceFreeSpace(instance, sequence))
                                 {
                                     if (!checkOnly)
-                                        instance.GuildCooldown.Remove(Character.Account.GuildMember.Guild.GuildName);
+                                        instance.GuildCooldown.Remove(Character.GuildMember.Guild.GuildName);
 
                                     return (sequence, InstanceResult.Success);
                                 }
@@ -17511,7 +17569,7 @@ namespace Server.Models
                             if (CheckInstanceFreeSpace(instance, instance.UserRecord[Name]))
                             {
                                 if (!checkOnly)
-                                    instance.GuildCooldown.Remove(Character.Account.GuildMember.Guild.GuildName);
+                                    instance.GuildCooldown.Remove(Character.GuildMember.Guild.GuildName);
 
                                 return (instance.UserRecord[Name], InstanceResult.Success);
                             }
@@ -17686,7 +17744,7 @@ namespace Server.Models
                     break;
                 case InstanceResult.GuildCooldown:
                     {
-                        var cooldown = instance.GuildCooldown[Character.Account.GuildMember.Guild.GuildName].ToLocalTime();
+                        var cooldown = instance.GuildCooldown[Character.GuildMember.Guild.GuildName].ToLocalTime();
                         Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceGuildCooldown, cooldown), MessageType.System);
                     }
                     break;
@@ -17716,12 +17774,20 @@ namespace Server.Models
                 return null;
             }
 
-            return Character.Account.Currencies.First(x => x.Info == info);
+            return GetCurrency(info);
         }
 
+        /// <summary>
+        /// 取货币对象。充值元宝在账号上，其余币种在角色上（2026-11-11 起金币按角色隔离）。
+        /// </summary>
         public UserCurrency GetCurrency(CurrencyInfo info)
         {
-            return Character.Account.Currencies.First(x => x.Info == info);
+            if (info == null) return null;
+
+            if (info.Type == CurrencyType.GameGold)
+                return Character.Account.Currencies.FirstOrDefault(x => x.Info == info);
+
+            return Character.Currencies.FirstOrDefault(x => x.Info == info);
         }
 
         #endregion

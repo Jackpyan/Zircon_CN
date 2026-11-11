@@ -116,15 +116,15 @@ namespace Server.Models.Monsters
 
             var target = (PlayerObject)Target;
 
-            if (target.Character.Account.GuildMember == null) return;
+            if (target.Character.GuildMember == null) return;
 
-            if (target.Character.Account.GuildMember.Guild.Castle != null) return;
+            if (target.Character.GuildMember.Guild.Castle != null) return;
 
-            if (War.Participants.Count > 0 && !War.Participants.Contains(target.Character.Account.GuildMember.Guild)) return;
+            if (War.Participants.Count > 0 && !War.Participants.Contains(target.Character.GuildMember.Guild)) return;
 
             if (Contester == null)
             {
-                Contester = target.Character.Account.GuildMember.Guild;
+                Contester = target.Character.GuildMember.Guild;
 
                 //Start 30 seconds timer
                 ContesterTime = SEnvir.Now.Add(ContesterDelay);
@@ -147,17 +147,17 @@ namespace Server.Models.Monsters
 
                     if (distance > ViewRange) continue;
 
-                    if (player.Character.Account.GuildMember == null) continue;
-                    if (War.Participants.Count > 0 && !War.Participants.Contains(player.Character.Account.GuildMember.Guild)) return;
+                    if (player.Character.GuildMember == null) continue;
+                    if (War.Participants.Count > 0 && !War.Participants.Contains(player.Character.GuildMember.Guild)) return;
 
                     //if guild near, add to timer
-                    if (player.Character.Account.GuildMember.Guild != Contester)
+                    if (player.Character.GuildMember.Guild != Contester)
                     {
                         //Another guild near flag - reset contest time
                         ContesterTime = SEnvir.Now.Add(ContesterDelay);
 
                         foreach (SConnection con in SEnvir.Connections)
-                            con.ReceiveChat(string.Format(con.Language.ConquestPreventingFlag, player.Character.Account.GuildMember.Guild.GuildName, Contester.GuildName, War.Castle.Name), MessageType.System);
+                            con.ReceiveChat(string.Format(con.Language.ConquestPreventingFlag, player.Character.GuildMember.Guild.GuildName, Contester.GuildName, War.Castle.Name), MessageType.System);
 
                         return;
                     }
@@ -254,7 +254,7 @@ namespace Server.Models.Monsters
                 case ObjectType.Player:
                     PlayerObject player = (PlayerObject)ob;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }
@@ -277,7 +277,7 @@ namespace Server.Models.Monsters
                 case ObjectType.Player:
                     PlayerObject player = (PlayerObject)ob;
 
-                    return player.Character.Account.GuildMember?.Guild.Castle != War.Castle;
+                    return player.Character.GuildMember?.Guild.Castle != War.Castle;
                 default:
                     throw new NotImplementedException();
             }

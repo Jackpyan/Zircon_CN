@@ -18,6 +18,16 @@ namespace Server.Models
 
         public UserItem Item { get; set; }
         public AccountInfo Account { get; set; } //Use account instead of playerobject incase disconnection
+
+        /// <summary>
+        /// 持有者角色（2026-11-11 行会下沉到角色后，行会税按**角色**的行会算）。
+        /// <para>
+        /// 掉落时由创建点显式赋值；仓库物品在阶段 C（仓库下沉到角色）之前拿不到角色，
+        /// 此时不缴行会税。
+        /// </para>
+        /// </summary>
+        public CharacterInfo Character { get; set; }
+
         public HashSet<AccountInfo> Owners { get; set; }
         public bool GuildTaxPaid { get; set; }
 
@@ -51,6 +61,7 @@ namespace Server.Models
 
             Item = null;
             Account = null;
+            Character = null;
             Owners = null;
         }
 
@@ -64,9 +75,9 @@ namespace Server.Models
 
                 if (Config.DropVisibleOtherPlayers)
                 {
-                    var isSameGuild = Account.GuildMember != null
-                        && ob.Character.Account.GuildMember != null
-                        && Account.GuildMember.Guild == ob.Character.Account.GuildMember.Guild;
+                    var isSameGuild = Character?.GuildMember != null
+                        && ob.Character.GuildMember != null
+                        && Character.GuildMember.Guild == ob.Character.GuildMember.Guild;
 
                     var isSameGroup = ob.GroupMembers != null
                         && Account.Connection?.Player.GroupMembers == ob.GroupMembers;
@@ -121,7 +132,7 @@ namespace Server.Models
                 if (taxableAmount > 0)
                 {
                     Item.Count -= taxableAmount;
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.DistributeGroupCurrency(TakeItem());
@@ -135,7 +146,7 @@ namespace Server.Models
                 if (taxableAmount > 0)
                 {
                     Item.Count -= taxableAmount;
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.AddGroupLoot(TakeItem());
@@ -150,7 +161,7 @@ namespace Server.Models
                 {
                     Item.Count -= taxableAmount;
 
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.GainItem(TakeItem());
@@ -177,7 +188,7 @@ namespace Server.Models
                 if (taxableAmount > 0)
                 {
                     Item.Count -= taxableAmount;
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.CompanionOwner.DistributeGroupCurrency(TakeItem());
@@ -189,7 +200,7 @@ namespace Server.Models
                 if (taxableAmount > 0)
                 {
                     Item.Count -= taxableAmount;
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.CompanionOwner.AddGroupLoot(TakeItem());
@@ -202,7 +213,7 @@ namespace Server.Models
                 {
                     Item.Count -= taxableAmount;
 
-                    Account.GuildMember.Contribute(taxableAmount);
+                    Character?.GuildMember?.Contribute(taxableAmount);
                 }
 
                 ob.GainItem(TakeItem());
@@ -245,8 +256,7 @@ namespace Server.Models
         private bool CanAccessQuestItem(PlayerObject ob)
         {
             if (Item?.UserTask != null &&
-                ((Item.UserTask.Quest.Character != null && Item.UserTask.Quest.Character != ob.Character) ||
-                 (Item.UserTask.Quest.Account != null && Item.UserTask.Quest.Account != ob.Character.Account))) return false;
+                Item.UserTask.Quest.Character != null && Item.UserTask.Quest.Character != ob.Character) return false;
 
             return Item == null || (Item.Flags & UserItemFlags.QuestItem) != UserItemFlags.QuestItem || Account == ob.Character.Account;
         }
@@ -258,7 +268,7 @@ namespace Server.Models
 
         private long GetGuildTax()
         {
-            return GuildTaxPaid ? 0 : Account?.GuildMember?.Guild?.CalculateGuildTax(Item) ?? 0;
+            return GuildTaxPaid ? 0 : Character?.GuildMember?.Guild?.CalculateGuildTax(Item) ?? 0;
         }
 
         private bool CanShareGroupDrop(PlayerObject ob)
