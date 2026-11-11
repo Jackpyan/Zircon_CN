@@ -4,6 +4,7 @@ using Server.DBModels;
 using Server.Envir;
 using Server.Models;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using C = Library.Network.ClientPackets;
 
@@ -31,7 +32,15 @@ namespace Server.Bots
             return true;
         }
 
-        /// <summary>拾取地面物品。距离由引擎校验，太远会自动走一步再捡（引擎内部逻辑）。</summary>
+        /// <summary>
+        /// 拾取地面物品。距离由引擎校验，太远会自动走一步再捡（引擎内部逻辑）。
+        /// <para>
+        /// 返回值是**引擎的真实结果**，不是「我发了个请求」。
+        /// 背包满时引擎的 <c>PickUpItem</c> 会返回 false、物品留在地上 ——
+        /// 如果这里无条件返回 true，假人会以为捡到了，下一拍又找到同一个东西再捡，
+        /// 陷入「捡了 48 格 → 背包满 → 永远重复捡同一个」的假死循环（P1 修的硬伤之一）。
+        /// </para>
+        /// </summary>
         public static bool TryPickUp(PlayerObject player, ItemObject item)
         {
             if (player == null || item == null) return false;
@@ -39,7 +48,9 @@ namespace Server.Bots
 
             player.PickUp(item.ObjectID, new Point(item.CurrentLocation.X, item.CurrentLocation.Y));
 
-            return true;
+            // 引擎的 <c>TakeItem()</c> 成功时会把 <c>Item</c> 置空并 Despawn，
+            // 所以「Item 变 null」就是真的捡走了 —— 背包格数没变不代表没捡到（货币直接进 UserCurrency）。
+            return item.Item == null;
         }
 
         /// <summary>回城复活（死亡后调用）。</summary>
@@ -156,6 +167,40 @@ namespace Server.Bots
                 Amount = amount,
                 GuildFunds = false,
             });
+
+            return true;
+        }
+
+        /// <summary>
+        /// 在当前 NPC 页里卖东西（真人走 <c>C.NPCSell</c>）。
+        /// <para>
+        /// 引擎会校验：物品必须可卖（<c>CanSell</c>）、不能是绑定/结婚/垃圾物，
+        /// 而且 <c>NPCPage.Types</c> 里必须包含该物品的 <c>ItemType</c> ——
+        /// 也就是说**卖武器得去姜先生、卖首饰得去艾米、卖药得去大卫**，
+        /// 每个商店只收自己那几类。卖错地方会被引擎静默拒绝。
+        /// </para>
+        /// </summary>
+        public static bool TrySell(PlayerObject player, List<CellLinkInfo> links)
+        {
+            if (player?.NPCPage == null || links == null || links.Count == 0) return false;
+
+            player.NPCSell(links);
+
+            return true;
+        }
+
+        /// <summary>
+        /// 在当前 NPC 页里修理装备（真人走 <c>C.NPCRepair</c>）。
+        /// <para>
+        /// 引擎会校验 <c>NPCPage.DialogType == NPCDialogType.Repair</c>，
+        /// 修理页按装备格逐件报价。
+        /// </para>
+        /// </summary>
+        public static bool TryRepair(PlayerObject player, List<CellLinkInfo> links)
+        {
+            if (player?.NPCPage == null || links == null || links.Count == 0) return false;
+
+            player.NPCRepair(new C.NPCRepair { Links = links });
 
             return true;
         }

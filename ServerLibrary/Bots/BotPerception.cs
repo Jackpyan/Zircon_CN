@@ -1,5 +1,6 @@
-using Library;
+﻿using Library;
 using Library.SystemModels;
+using Server.DBModels;
 using Server.Models;
 using Server.Models.Monsters;
 using System.Collections.Generic;
@@ -67,7 +68,13 @@ namespace Server.Bots
             return best;
         }
 
-        /// <summary>找一件地上的掉落物（就近）。</summary>
+        /// <summary>
+        /// 找一件地上的掉落物（就近）。
+        /// <para>
+        /// P1：加了 <see cref="IsWorthPickingUp"/> 筛选 —— 原先见什么捡什么，
+        /// 会把垃圾塞满 48 格背包导致假人卡死在拾取态。
+        /// </para>
+        /// </summary>
         public static ItemObject FindNearestLoot(PlayerObject player, int radius)
         {
             Map map = player?.CurrentMap;
@@ -85,6 +92,8 @@ namespace Server.Bots
                 int distance = BotNavigator.Distance(player.CurrentLocation, item.CurrentLocation);
 
                 if (distance > radius || distance >= bestDistance) continue;
+
+                if (!IsWorthPickingUp(item)) continue;
 
                 best = item;
                 bestDistance = distance;
@@ -126,6 +135,75 @@ namespace Server.Bots
                 if (player.Inventory[i] != null) count++;
 
             return count;
+        }
+
+        /// <summary>背包剩余空格子数。</summary>
+        public static int FreeInventorySlots(PlayerObject player)
+        {
+            if (player?.Inventory == null) return 0;
+
+            int free = 0;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+                if (player.Inventory[i] == null) free++;
+
+            return free;
+        }
+
+        /// <summary>
+        /// 判断一个掉落物值不值得捡。
+        /// <para>
+        /// P1 修的硬伤：原先 <c>FindNearestLoot</c> 不做任何筛选，见什么捡什么 ——
+        /// 垃圾、任务物品、绑定物全都往 48 格背包里塞，塞满后假人就卡死在拾取态。
+        /// 这里的规则是「能卖钱 / 能用 / 是药」才捡，其余留在地上（真人也捡不了，掉了也不心疼）。
+        /// </para>
+        /// <para>
+        /// 货币（<see cref="ItemType.Currency"/>）必须捡：它不进背包、直接进
+        /// <c>UserCurrency</c>，是假人唯一的金币收入来源。
+        /// </para>
+        /// </summary>
+        public static bool IsWorthPickingUp(ItemObject item)
+        {
+            if (item?.Item?.Info == null) return false;
+
+            UserItem userItem = item.Item;
+
+            // 绑定的不能卖（卖掉会被引擎拒绝），捡了只是占格。
+            if ((userItem.Flags & UserItemFlags.Bound) == UserItemFlags.Bound) return false;
+
+            // 任务物品不捡。
+            if ((userItem.Flags & UserItemFlags.QuestItem) == UserItemFlags.QuestItem) return false;
+
+            switch (userItem.Info.ItemType)
+            {
+                // 货币直接进角色货币表，不占背包格 —— 必须捡。
+                case ItemType.Currency:
+                    return true;
+
+                // 药要捡：回城买药要钱、要时间，路上捡到的先用着。
+                case ItemType.Consumable:
+                case ItemType.Meat:
+                    return true;
+
+                // 装备要捡：P1-4 会自动换上更好的，穿不上的还能卖钱。
+                case ItemType.Weapon:
+                case ItemType.Armour:
+                case ItemType.Helmet:
+                case ItemType.Necklace:
+                case ItemType.Bracelet:
+                case ItemType.Ring:
+                case ItemType.Shoes:
+                case ItemType.Shield:
+                case ItemType.Costume:
+                case ItemType.Emblem:
+                case ItemType.SocketGem:
+                    return true;
+
+                default:
+                    // 其余（矿石、书、卷轴、花、宠物食粮…）价值低或用不上，
+                    // 捡了只占格子；假人不做炼矿、不做读书这类玩法。
+                    return false;
+            }
         }
 
         /// <summary>血量百分比（0~100）。</summary>
@@ -232,6 +310,224 @@ namespace Server.Bots
                 if (!SellsPotion(button.DestinationPage)) continue;
 
                 return button.ButtonID;
+            }
+
+            return -1;
+        }
+
+        #endregion
+
+        #region 挖取（Harvest）
+
+        /// <summary>
+        /// 找一具「可以挖」的尸体。
+        /// <para>
+        /// **关键机制**：鸡、猪、牛这类怪（<c>MonsterInfo.AI</c> = 1/2/3）的掉落
+        /// **不会直接掉在地上**，而是留在尸体里 —— 引擎的 <c>Drop</c> 里有
+        /// <c>if (!NeedHarvest) return;</c>，需挖的怪只把掉落记进
+        /// <c>Drops[账号]</c>。玩家必须走过去对尸体发 <c>C.Harvest</c> 才能拿到。
+        /// </para>
+        /// <para>
+        /// 所以假人光靠捡地上掉落物是拿不到鸡猪牛身上的东西的 ——
+        /// 必须补上挖取，否则假人的背包永远是空的、卖货与换装两条链路都是死的。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindHarvestableCorpse(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            MonsterObject best = null;
+            int bestDistance = int.MaxValue;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+
+                // 必须是「需挖取」的怪，且身上还挂着属于这个账号的掉落。
+                if (!monster.NeedHarvest) continue;
+                if (monster.Drops == null) continue;
+
+                if (!monster.Drops.TryGetValue(player.Character?.Account, out List<UserItem> items)) continue;
+                if (items == null || items.Count == 0) continue;
+
+                int distance = BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation);
+
+                if (distance > radius || distance >= bestDistance) continue;
+
+                best = monster;
+                bestDistance = distance;
+            }
+
+            return best;
+        }
+
+        #endregion
+
+        #region 商店与修理铺
+
+        /// <summary>
+        /// 「这个 NPC 收不收这类东西 / 修不修装备」的缓存。
+        /// 按 NPCInfo 引用做 key（Index 在建号前可能是 0）。125 个 NPC 是静态数据，缓存终身有效。
+        /// </summary>
+        private static readonly Dictionary<NPCInfo, HashSet<ItemType>> TraderCache = new Dictionary<NPCInfo, HashSet<ItemType>>();
+        private static readonly Dictionary<NPCInfo, bool> RepairCache = new Dictionary<NPCInfo, bool>();
+
+        /// <summary>
+        /// 在当前地图上找收 <paramref name="itemType"/> 这类东西的商人。
+        /// <para>
+        /// P1-2 卖货用。关键点：**每个商店只收自己那几类东西** ——
+        /// 实测「姜先生」只收 Weapon/Ore、「艾米」只收 Necklace/Bracelet/Ring、
+        /// 「琳达」只收 Armour/Helmet/Shoes、「伦纳德」只收 Torch/Poison/Amulet/Scroll/DarkStone。
+        /// 卖错地方引擎会静默拒绝（<c>NPCPage.Types.Any(x => x.ItemType == item.Info.ItemType)</c>），
+        /// 所以必须按类型找对应商店。
+        /// </para>
+        /// </summary>
+        public static NPCObject FindTrader(Map map, ItemType itemType)
+        {
+            if (map?.NPCs == null) return null;
+
+            foreach (NPCObject npc in map.NPCs)
+            {
+                if (npc?.NPCInfo == null) continue;
+
+                if (AcceptsType(npc.NPCInfo, itemType)) return npc;
+            }
+
+            return null;
+        }
+
+        /// <summary>在当前地图上找修理铺。</summary>
+        public static NPCObject FindRepairShop(Map map)
+        {
+            if (map?.NPCs == null) return null;
+
+            foreach (NPCObject npc in map.NPCs)
+            {
+                if (npc?.NPCInfo == null) continue;
+
+                if (HasRepairPage(npc.NPCInfo)) return npc;
+            }
+
+            return null;
+        }
+
+        /// <summary>这个 NPC 收不收这类东西（查它入口页一层按钮的目标页）。</summary>
+        public static bool AcceptsType(NPCInfo npc, ItemType itemType)
+        {
+            if (npc == null) return false;
+
+            if (!TraderCache.TryGetValue(npc, out HashSet<ItemType> types))
+            {
+                types = CollectAcceptedTypes(npc);
+                TraderCache[npc] = types;
+            }
+
+            return types.Contains(itemType);
+        }
+
+        /// <summary>这个 NPC 有没有修理页。</summary>
+        public static bool HasRepairPage(NPCInfo npc)
+        {
+            if (npc == null) return false;
+
+            if (RepairCache.TryGetValue(npc, out bool cached)) return cached;
+
+            bool result = FindRepairPage(npc.EntryPage) != null || HasRepairButton(npc.EntryPage);
+
+            RepairCache[npc] = result;
+
+            return result;
+        }
+
+        /// <summary>在当前页里找修理页（当前页本身就是修理页时返回它）。</summary>
+        public static NPCPage FindRepairPage(NPCPage page)
+        {
+            if (page == null) return null;
+
+            if (page.DialogType == NPCDialogType.Repair) return page;
+
+            return null;
+        }
+
+        private static bool HasRepairButton(NPCPage page)
+        {
+            if (page?.Buttons == null) return false;
+
+            foreach (NPCButton button in page.Buttons)
+            {
+                if (button.DestinationPage?.DialogType == NPCDialogType.Repair) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>找出这个 NPC 的所有买卖页收货类型（入口页 + 一层按钮的目标页）。</summary>
+        private static HashSet<ItemType> CollectAcceptedTypes(NPCInfo npc)
+        {
+            HashSet<ItemType> types = new HashSet<ItemType>();
+
+            void Collect(NPCPage page)
+            {
+                if (page == null) return;
+
+                if (page.DialogType == NPCDialogType.BuySell && page.Types != null)
+                {
+                    foreach (NPCType type in page.Types)
+                    {
+                        if (type?.ItemType == null) continue;
+
+                        types.Add(type.ItemType);
+                    }
+                }
+            }
+
+            Collect(npc.EntryPage);
+
+            if (npc.EntryPage?.Buttons != null)
+            {
+                foreach (NPCButton button in npc.EntryPage.Buttons)
+                    Collect(button.DestinationPage);
+            }
+
+            return types;
+        }
+
+        /// <summary>
+        /// 在 NPC 的入口页里找出「通往收 <paramref name="itemType"/> 的买卖页」的按钮号。
+        /// 返回 -1 表示这个 NPC 不收这类东西。
+        /// </summary>
+        public static int FindTradeButton(NPCInfo npc, ItemType itemType)
+        {
+            if (npc?.EntryPage?.Buttons == null) return -1;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                NPCPage target = button.DestinationPage;
+
+                if (target?.DialogType != NPCDialogType.BuySell) continue;
+                if (target.Types == null) continue;
+
+                foreach (NPCType type in target.Types)
+                {
+                    if (type?.ItemType != itemType) continue;
+
+                    return button.ButtonID;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>在 NPC 的入口页里找出「通往修理页」的按钮号，返回 -1 表示没有。</summary>
+        public static int FindRepairButton(NPCInfo npc)
+        {
+            if (npc?.EntryPage?.Buttons == null) return -1;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                if (button.DestinationPage?.DialogType == NPCDialogType.Repair) return button.ButtonID;
             }
 
             return -1;
