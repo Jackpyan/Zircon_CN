@@ -125,6 +125,33 @@ namespace Server.Bots
         private DateTime _travelDebugTime;
         private int _emptyHunts;
 
+        /// <summary>
+        /// 跨图中的「回城中转」：本图没有六合圣石，先回主城再用石头传送。
+        /// <para>
+        /// 为什么需要它：假人一旦离开主城（A* 走到通道/沙漠土城这类中途图），
+        /// 就没法再传送了 —— 这些图**没有六合石**，只能继续 A* 逐格走，
+        /// 于是被沿途的怪打死 → 复活 → 再走。D5 实测 死 441 / 杀 599，
+        /// 11 个假人困在起点 225/9/8 到潘夜村[6] 的长途上，六合石传送 0 次。
+        /// </para>
+        /// <para>
+        /// 置位后 <see cref="ProcessTeleport"/> 不再找石头，而是先回主城；
+        /// 回到主城立即清位，交回正常传送流程（主城必有石头）。
+        /// </para>
+        /// </summary>
+        private bool _teleportViaHome;
+
+        /// <summary>连续几次回城中转失败（没卷 / 走不回去 / 没绑定主城）。</summary>
+        private int _returnHomeFailStreak;
+
+        /// <summary>
+        /// 回城中转的退避冷却。
+        /// 没有它会出现「回城 → 主城石头传不了 → 跑远 → 又回城」的烧卷空转。
+        /// </summary>
+        private DateTime _returnHomeCooldown;
+
+        /// <summary>累计回城中转次数（D5 量化：长途跨图有没有真的走上传送而不是腿儿着）。</summary>
+        public int ReturnHomeForTeleportCount { get; private set; }
+
         /// <summary>上次同步技能时的等级。升级时补技能（法师 7 级火球、道士 13 级火符）。</summary>
         private int _syncedLevel = -1;
         /// <summary>后台「立即补给」投递的一次性请求。</summary>
@@ -624,6 +651,9 @@ namespace Server.Bots
             if (BotActions.TryTownRevive(_player))
                 BotLog.Info(Profile.Seq, "已回城复活");
 
+            // 复活即回主城，中转的意义已经由「人回到主城」实现了 —— 清位，重新选图。
+            _teleportViaHome = false;
+
             EnterState(BotState.Idle, "复活后待机", TimeSpan.FromSeconds(SEnvir.Random.Next(3, 8)));
         }
 
@@ -645,6 +675,17 @@ namespace Server.Bots
 
             if (current?.Info == null) return false;
 
+            // ① 本图没有六合圣石 → 先回主城中转。
+            //
+            // 为什么必须放在挑目标图之前：假人一旦离开主城，就再也传不了 ——
+            // 「南方通道 / 沙漠土城 / 诺玛村落」这些中途图**根本没有六合石**，
+            // 于是在那里只能 A* 逐格走，一路被怪打死 → 复活 → 再走，形成活锁。
+            // D5 实测：11 个假人困在 225/9/8 → 潘夜村[6] 的长途上，传送 0 次、死 441 / 杀 599。
+            //
+            // 回城后 _teleportViaHome 立即清位，下一次决策就在主城用石头直达目标图。
+            if (BotPerception.FindTeleportStone(current) == null && TryStartReturnHomeForTeleport())
+                return true;
+
             // 白名单（Config.BotHuntMaps）同样约束跨图目标：不填 = 不限制，填了就只在这些图之间流动。
             BotOptions options = Options;
 
@@ -658,41 +699,67 @@ namespace Server.Bots
                 .Take(12)
                 .ToList();
 
-            // 第一轮只挑没满的图；第二轮放开容量（宁可超员也别让人卡在城里不动）。
+            // 两轮 × 两个阶段：
+            //   轮 0 = 只挑没满的图；轮 1 = 放开容量（宁可超员也别让人卡在城里不动）。
+            //   阶段 A = 能直达传送的图；阶段 B = 只能 A* 走过去的图。
+            //
+            // **阶段 A 必须先整体扫完**：2026-11-12 实测，沙漠土城的六合石只有
+            // 「失乐园 / 沙巴克城 / 诺玛村庄」三个按钮，**没有潘夜村**。
+            // 原来的写法是「候选 #1 传不过去就地 A* 并 return」，于是假人放着
+            // 能免费传送的失乐园不去，硬走 A* 去潘夜村，路上被打死 ——
+            // 白名单 {1,5,6} 里明明有一张能直达的图。
             for (int pass = 0; pass < 2; pass++)
-            foreach (RespawnInfo candidate in candidates)
             {
-                MapInfo map = candidate.Region.Map;
+                // 阶段 A：优先挑「六合石能直达」的图（不走路，也就不会被路上的怪打死）。
+                foreach (RespawnInfo candidate in candidates)
+                {
+                    MapInfo map = candidate.Region.Map;
 
-                if (pass == 0 && CountBotsOnMap(map) >= MapCapacity) continue;
+                    if (pass == 0 && CountBotsOnMap(map) >= MapCapacity) continue;
 
-                // 懒加载：地图没加载时区域点列表是空的，必须先 GetMap 触发一次。
-                if (SEnvir.GetMap(map) == null) continue;
+                    // 懒加载：地图没加载时区域点列表是空的，必须先 GetMap 触发一次。
+                    if (SEnvir.GetMap(map) == null) continue;
 
-                List<Point> points = candidate.Region.PointList;
+                    List<Point> points = candidate.Region.PointList;
 
-                if (points == null || points.Count == 0) continue;
+                    if (points == null || points.Count == 0) continue;
 
-                Point point = points[SEnvir.Random.Next(points.Count)];
+                    if (TryStartTeleport(map, points[SEnvir.Random.Next(points.Count)])) return true;
+                }
 
-                // ① 优先用主城的「六合圣石」传送：不走路，也就不会被路上的怪打死。
-                //    （A* 跨图只能穿北方通道这类刷怪图，低级假人会陷入「打死→复活→再走」的活锁）
-                if (TryStartTeleport(map, point)) return true;
+                // 阶段 B：一张能直达的都没有（本图没石头 / 没直达按钮）→ A* 逐格跨图。
+                foreach (RespawnInfo candidate in candidates)
+                {
+                    MapInfo map = candidate.Region.Map;
 
-                // ② 传送不可用（没石头 / 没直达按钮 / 钱不够）→ 退回 A* 逐格跨图
-                if (!AutoPathService.Instance.TryStart(_player, map, point)) continue;
+                    if (pass == 0 && CountBotsOnMap(map) >= MapCapacity) continue;
 
-                _travelMap = map;
-                _travelPoint = point;
-                _travelFailures = 0;
-                _emptyHunts = 0;
+                    if (SEnvir.GetMap(map) == null) continue;
 
-                BotLog.Info(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），跨图去 {2}（{3},{4}）",
-                    current.Info.Description, _player.Level, map.Description, point.X, point.Y));
+                    List<Point> points = candidate.Region.PointList;
 
-                EnterState(BotState.Travel, string.Format("跨图前往 {0}", map.Description), TimeSpan.FromMinutes(5));
+                    if (points == null || points.Count == 0) continue;
 
-                return true;
+                    Point point = points[SEnvir.Random.Next(points.Count)];
+
+                    if (!AutoPathService.Instance.TryStart(_player, map, point)) continue;
+
+                    _travelMap = map;
+                    _travelPoint = point;
+                    _travelFailures = 0;
+                    _emptyHunts = 0;
+
+                    BotLog.Warn(Profile.Seq, string.Format(
+                        "跨图(A*)：{0}[{1}] → {2}[{3}]，白名单 {{{4}}}，当前图六合石={5}",
+                        current.Info.Description, current.Info.Index,
+                        map.Description, map.Index,
+                        string.Join(",", options.HuntMaps),
+                        BotPerception.FindTeleportStone(current) != null ? "有" : "无"));
+
+                    EnterState(BotState.Travel, string.Format("跨图前往 {0}", map.Description), TimeSpan.FromMinutes(5));
+
+                    return true;
+                }
             }
 
             return false;
@@ -763,6 +830,7 @@ namespace Server.Bots
             _travelMap = null;
             _travelFailures = 0;
             _emptyHunts = 0;
+            _teleportViaHome = false;
 
             BotLog.Info(Profile.Seq, detail);
 
@@ -781,6 +849,15 @@ namespace Server.Bots
         /// </summary>
         private void ProcessTeleport()
         {
+            // ★ 回城中转优先于一切：本图没有六合石，先回主城再说。
+            //   放在 _travelMap 判空之前 —— 中转阶段是「先回家、回家后重新选图」，
+            //   此刻还没有目标图（_travelMap == null 是正常状态，不是错误）。
+            if (_teleportViaHome)
+            {
+                ProcessReturnHomeForTeleport();
+                return;
+            }
+
             if (_travelMap == null)
             {
                 EnterState(BotState.Idle, "没有传送目标", TimeSpan.FromSeconds(5));
@@ -793,6 +870,7 @@ namespace Server.Bots
                 _travelMap = null;
                 _emptyHunts = 0;
                 _blockedCount = 0;
+                _teleportViaHome = false;
 
                 EnterState(BotState.GoHunt, "传送到达，开始找怪", TimeSpan.FromSeconds(HuntTimeoutSeconds));
                 return;
@@ -877,6 +955,7 @@ namespace Server.Bots
 
             _blockedCount = 0;
             _travelFailures = 0;
+            _teleportViaHome = false;
 
             BotLog.Info(Profile.Seq, reason);
 
@@ -888,6 +967,142 @@ namespace Server.Bots
             }
 
             FinishTravel(reason + "，放弃跨图");
+        }
+
+        /// <summary>
+        /// 装备「先回主城、再用六合石传送」这次中转。
+        /// <para>
+        /// 触发条件（缺一不可）：
+        /// ① 有绑定主城，且人不在主城；
+        /// ② 主城**真的有**六合石（否则回去也是白烧一张卷）；
+        /// ③ 不在退避冷却里（上一次中转刚失败过）。
+        /// </para>
+        /// <para>
+        /// 返回 true = 已切到 <see cref="BotState.Teleport"/>，调用方直接 return。
+        /// 返回 false = 中转不可用，调用方继续走 A* 逐格跨图（保持原有降级路径）。
+        /// </para>
+        /// </summary>
+        private bool TryStartReturnHomeForTeleport()
+        {
+            if (SEnvir.Now < _returnHomeCooldown) return false;
+
+            MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
+
+            if (home == null) return false;
+
+            Map current = _player.CurrentMap;
+
+            // 已经在主城还回不去 —— 主城自己没石头的话，中转这条路本来就不成立。
+            if (current?.Info == null || current.Info == home) return false;
+
+            Map homeMap = SEnvir.GetMap(home);
+
+            if (homeMap == null || BotPerception.FindTeleportStone(homeMap) == null) return false;
+
+            _teleportViaHome = true;
+
+            // 目标图作废：回城后按当时的等级 / 拥挤度重新选，别死守一个可能已经不合适的目标。
+            _travelMap = null;
+            _travelPoint = default;
+            _travelFailures = 0;
+            _emptyHunts = 0;
+            _blockedCount = 0;
+
+            ReturnHomeForTeleportCount++;
+
+            int scrolls = BotActions.CountTownScroll(_player);
+
+            BotLog.Warn(Profile.Seq, string.Format(
+                "跨图中转：{0}[{1}] 没有六合石，先回 {2}[{3}] 再传送（回城卷 {4} 张）",
+                current.Info.Description, current.Info.Index,
+                home.Description, home.Index, scrolls));
+
+            // 5 分钟：用卷只要 1 秒，但没卷时要走回去（跨图 AutoPath 实测 60 秒+）。
+            EnterState(BotState.Teleport,
+                string.Format("回 {0} 中转，再用六合石传送", home.Description), TimeSpan.FromMinutes(5));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 中转的第一个阶段：不管用什么办法，先把自己弄回主城。
+        /// 到主城后清掉 <see cref="_teleportViaHome"/>，下一帧交回 <see cref="ProcessTeleport"/> 找石头。
+        /// </summary>
+        private void ProcessReturnHomeForTeleport()
+        {
+            MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
+
+            if (home == null)
+            {
+                AbortReturnHome("角色没有绑定主城");
+                return;
+            }
+
+            // ① 已经回到主城：交回正常传送流程（主城必有六合石）。
+            if (_player.CurrentMap?.Info == home)
+            {
+                if (_player.AutoPath != null)
+                    AutoPathService.Instance.Cancel(_player);
+
+                _teleportViaHome = false;
+                _blockedCount = 0;
+                _travelFailures = 0;
+
+                BotLog.Warn(Profile.Seq, string.Format("已回到 {0}，改用六合石传送", home.Description));
+
+                LastDetail = string.Format("已回到 {0}，准备用六合石传送", home.Description);
+                return;
+            }
+
+            // ② 优先用回城卷瞬移：1 秒回城，而走图要 60 秒以上，还可能在路上被打死。
+            if (TryReturnHomeByScroll(home))
+            {
+                LastDetail = string.Format("用回城卷回 {0} 中转", home.Description);
+                return;
+            }
+
+            // ③ 没卷 / 本图禁止回城（幽灵船、副本）→ 走回去。
+            //    方向是朝安全区，通常穿过的是低级图，比继续往高级图走安全得多。
+            if (_player.AutoPath != null)
+            {
+                LastDetail = string.Format("走回 {0} 中转（到城后再用六合石传送）", home.Description);
+                return;
+            }
+
+            if (!AutoPathService.Instance.TryStart(_player, home, HomePoint(home)))
+            {
+                AbortReturnHome(string.Format("回 {0} 的路线规划失败（等级/道具限制）", home.Description));
+                return;
+            }
+
+            LastDetail = string.Format("走回 {0} 中转", home.Description);
+        }
+
+        /// <summary>
+        /// 放弃中转：清标记 + 退避 + 退回练级。
+        /// <para>
+        /// **退避不能省**：没有它会出现「回城失败 → 立刻再选图 → 又触发回城中转」的烧卷空转，
+        /// 一卷 500 金币，假人会在几分钟内把家底烧光。
+        /// </para>
+        /// </summary>
+        private void AbortReturnHome(string reason)
+        {
+            _teleportViaHome = false;
+            _returnHomeFailStreak++;
+
+            int seconds = Math.Min(300, 60 << Math.Min(_returnHomeFailStreak - 1, 3));
+
+            _returnHomeCooldown = SEnvir.Now.AddSeconds(seconds);
+
+            AutoPathService.Instance.Cancel(_player);
+
+            _travelMap = null;
+            _travelFailures = 0;
+
+            BotLog.Warn(Profile.Seq, string.Format(
+                "回城中转放弃：{0}（{1} 秒内不再尝试，累计 {2} 次）", reason, seconds, _returnHomeFailStreak));
+
+            EnterState(BotState.Idle, reason + "，先在本图练级", TimeSpan.FromSeconds(30));
         }
 
         /// <summary>能不能用传送石去目标图（有石头 + 有直达按钮 + 钱够）。</summary>
@@ -911,7 +1126,12 @@ namespace Server.Bots
             _emptyHunts = 0;
             _blockedCount = 0;
 
-            BotLog.Info(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），传送去 {2}（花费 {3}）",
+            // 能直接传就别再走中转分支（中转标记可能从上一次补给打断里残留）。
+            _teleportViaHome = false;
+
+            // 用 Warn 而不是 Info：生产配置 BotLogLevel=2（Warn），Info 会被整体过滤，
+            // 而「这次跨图到底走的是传送还是腿儿着」是判断跨图机制有没有生效的唯一线索。
+            BotLog.Warn(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），传送去 {2}（花费 {3}）",
                 _player.CurrentMap.Info.Description, _player.Level, map.Description,
                 cost > 0 ? cost.ToString() : "免费"));
 

@@ -264,6 +264,9 @@ namespace Server.Bots
         /// </summary>
         private static readonly Dictionary<NPCInfo, bool> TeleportStoneCache = new Dictionary<NPCInfo, bool>();
 
+        /// <summary>地图 → 这张图上的六合石（只缓存命中，见 <see cref="FindTeleportStone"/>）。</summary>
+        private static readonly Dictionary<Map, NPCObject> TeleportStoneMapCache = new Dictionary<Map, NPCObject>();
+
         /// <summary>
         /// 在当前地图上找**传送 NPC**（本服叫「六合圣石」，每个主城一个）。
         /// <para>
@@ -276,11 +279,22 @@ namespace Server.Bots
         {
             if (map?.NPCs == null) return null;
 
+            // 找到了就记住：每个假人每次决策都要问一次，遍历整张图的 NPC 不便宜
+            // （D5 有 30 个假人 × 每秒 2~5 次决策）。
+            // **只缓存命中，不缓存 null**：地图的 NPC 列表可能是懒加载的，
+            // 缓存了「没有石头」会让这张图永远找不到石头。
+            if (TeleportStoneMapCache.TryGetValue(map, out NPCObject cached) && cached != null)
+                return cached;
+
             foreach (NPCObject npc in map.NPCs)
             {
                 if (npc?.NPCInfo == null) continue;
 
-                if (IsTeleportStone(npc.NPCInfo)) return npc;
+                if (!IsTeleportStone(npc.NPCInfo)) continue;
+
+                TeleportStoneMapCache[map] = npc;
+
+                return npc;
             }
 
             return null;
@@ -300,26 +314,16 @@ namespace Server.Bots
 
             if (TeleportStoneCache.TryGetValue(npc, out bool cached)) return cached;
 
-            bool result = false;
+            bool result = HasTeleportTarget(npc.EntryPage, 0);
 
-            if (npc.EntryPage?.Buttons != null)
+            if (!result && npc.EntryPage?.Buttons != null)
             {
                 foreach (NPCButton button in npc.EntryPage.Buttons)
                 {
-                    NPCPage dest = button.DestinationPage;
+                    if (!HasTeleportTarget(button.DestinationPage, 0)) continue;
 
-                    if (dest?.Actions == null) continue;
-
-                    foreach (NPCAction action in dest.Actions)
-                    {
-                        if (action.ActionType != NPCActionType.Teleport) continue;
-                        if (action.MapParameter1 == null) continue;
-
-                        result = true;
-                        break;
-                    }
-
-                    if (result) break;
+                    result = true;
+                    break;
                 }
             }
 
@@ -329,9 +333,58 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 从按钮的目标页开始，沿 <see cref="NPCPage.SuccessPage"/> 链往下走（最多 6 层）。
+        /// <para>
+        /// **为什么必须串链**：引擎的 <c>NPCObject.NPCCall</c> 是「执行本页动作 → Say 为空就跳
+        /// SuccessPage 继续」，所以动作可以挂在链上任意一页。
+        /// </para>
+        /// <para>
+        /// 六合圣石的真实结构就是两段：
+        /// <c>入口页 → 按钮「失乐园 10K」→ 页[TakeGold 10000] → SuccessPage「传送至失乐园」[Teleport]</c>。
+        /// 只看按钮直达页会得出「这颗石头不会传送」——D5 里 30 个假人因此一次都没传送过，
+        /// 全走 A* 逐格跨图，被沿途的怪打成活锁（死 441 / 杀 599）。
+        /// </para>
+        /// </summary>
+        private static IEnumerable<NPCPage> PageChain(NPCPage start)
+        {
+            for (int guard = 0; start != null && guard < 6; guard++)
+            {
+                yield return start;
+
+                start = start.SuccessPage;
+            }
+        }
+
+        /// <summary>
+        /// 这条页链里有没有「传送到 <paramref name="targetMapIndex"/>」的动作。
+        /// <paramref name="targetMapIndex"/> = 0 表示只要求是一个传送动作。
+        /// </summary>
+        private static bool HasTeleportTarget(NPCPage start, int targetMapIndex)
+        {
+            if (start == null) return false;
+
+            foreach (NPCPage page in PageChain(start))
+            {
+                if (page.Actions == null) continue;
+
+                foreach (NPCAction action in page.Actions)
+                {
+                    if (action.ActionType != NPCActionType.Teleport) continue;
+                    if (action.MapParameter1 == null) continue;
+
+                    if (targetMapIndex > 0 && action.MapParameter1.Index != targetMapIndex) continue;
+
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 在传送石的入口页里找「通往 <paramref name="targetMapIndex"/> 的按钮」，返回 ButtonID；找不到返回 -1。
         /// <para>
-        /// 只匹配**直达**按钮（目标页里的 Teleport 动作指向目标图）。
+        /// 只匹配**直达**按钮（按钮页 + 它的 SuccessPage 链里有指向目标图的 Teleport 动作）。
         /// 「自由传送员」这类二级页要先点一次父按钮再点子按钮，本版不处理 ——
         /// 高级图本来就有等级门槛，低级假人也去不了。
         /// </para>
@@ -343,17 +396,9 @@ namespace Server.Bots
 
             foreach (NPCButton button in npc.EntryPage.Buttons)
             {
-                NPCPage dest = button.DestinationPage;
+                if (!HasTeleportTarget(button.DestinationPage, targetMapIndex)) continue;
 
-                if (dest?.Actions == null) continue;
-
-                foreach (NPCAction action in dest.Actions)
-                {
-                    if (action.ActionType != NPCActionType.Teleport) continue;
-                    if (action.MapParameter1?.Index != targetMapIndex) continue;
-
-                    return button.ButtonID;
-                }
+                return button.ButtonID;
             }
 
             return -1;
@@ -371,20 +416,22 @@ namespace Server.Bots
             {
                 NPCPage dest = button.DestinationPage;
 
-                if (dest?.Actions == null) continue;
+                if (!HasTeleportTarget(dest, targetMapIndex)) continue;
 
-                bool hits = false;
+                // 收费（TakeGold）在按钮页，传送（Teleport）在 SuccessPage ——
+                // 所以钱要沿整条链累加，不能只看按钮页。
                 int cost = 0;
 
-                foreach (NPCAction action in dest.Actions)
+                foreach (NPCPage page in PageChain(dest))
                 {
-                    if (action.ActionType == NPCActionType.Teleport && action.MapParameter1?.Index == targetMapIndex)
-                        hits = true;
-                    else if (action.ActionType == NPCActionType.TakeGold && action.IntParameter1 > 0)
-                        cost = action.IntParameter1;
+                    if (page.Actions == null) continue;
+
+                    foreach (NPCAction action in page.Actions)
+                        if (action.ActionType == NPCActionType.TakeGold && action.IntParameter1 > 0)
+                            cost += action.IntParameter1;
                 }
 
-                if (hits) return cost;
+                return cost;
             }
 
             return 0;

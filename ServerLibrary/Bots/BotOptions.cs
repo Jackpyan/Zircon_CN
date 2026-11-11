@@ -87,7 +87,10 @@ namespace Server.Bots
 
             foreach (string part in text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (int.TryParse(part.Trim(), out int index) && index > 0)
+                // 必须是 >= 0：**比奇城的地图索引就是 0**，
+                // 原来写成 `index > 0` 会把比奇城永久排除在白名单外，
+                // 配 BotHuntMaps=0,1 也永远选不到比奇城。
+                if (int.TryParse(part.Trim(), out int index) && index >= 0)
                     result.Add(index);
             }
 

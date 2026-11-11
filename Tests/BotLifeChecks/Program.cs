@@ -594,6 +594,46 @@ Check(BotPerception.FindTeleportButton(stone, teleportTarget.Index + 1000) == -1
 Check(BotPerception.CheapestTeleportCost(stone, teleportTarget.Index) == 10000, "传送费用 10000");
 Check(BotPerception.CheapestTeleportCost(stone, teleportTarget.Index + 1000) == 0, "无此目标时费用 0");
 
+// 12.2b 真实库里的结构：收费在按钮页，传送挂在 SuccessPage 上
+//      入口页 → 按钮「失乐园 10K」→ 页[TakeGold] → SuccessPage「传送至失乐园」[Teleport]
+//      2026-11-12 实测：只看按钮直达页 → 30 个假人一次都没传送过，全走 A* 活锁。
+NPCPage realEntry = pages.CreateNewObject();
+realEntry.Description = "比奇城传送员（真实）";
+
+NPCPage realCharge = pages.CreateNewObject();
+realCharge.Description = "失乐园 10K";
+
+NPCAction realGold = actions.CreateNewObject();
+realGold.ActionType = NPCActionType.TakeGold;
+realGold.IntParameter1 = 5000;
+realGold.Page = realCharge;
+
+NPCPage realTeleport = pages.CreateNewObject();
+realTeleport.Description = "传送至失乐园";
+
+NPCAction realTele = actions.CreateNewObject();
+realTele.ActionType = NPCActionType.Teleport;
+realTele.MapParameter1 = teleportTarget;
+realTele.Page = realTeleport;
+
+realCharge.SuccessPage = realTeleport;
+
+NPCButton realButton = buttons.CreateNewObject();
+realButton.ButtonID = 3;
+realButton.Page = realEntry;
+realButton.DestinationPage = realCharge;
+
+NPCInfo realStone = SEnvir.NPCInfoList.CreateNewObject();
+realStone.NPCName = "六合圣石（真实结构）";
+realStone.EntryPage = realEntry;
+
+Check(realCharge.Actions.Count == 1 && realCharge.Actions[0].ActionType == NPCActionType.TakeGold,
+    "真实结构的按钮页只有 TakeGold（传送在 SuccessPage 上）");
+Check(!realEntry.Actions.Any(), "真实结构的入口页自己没有动作");
+Check(BotPerception.IsTeleportStone(realStone), "传送动作在 SuccessPage 上也能识别为传送石");
+Check(BotPerception.FindTeleportButton(realStone, teleportTarget.Index) == 3, "沿 SuccessPage 链找到按钮（id 3）");
+Check(BotPerception.CheapestTeleportCost(realStone, teleportTarget.Index) == 5000, "收费沿页链读取 = 5000");
+
 // 12.3 不能把普通 NPC 误判成传送石
 NPCPage shopEntry = pages.CreateNewObject();
 shopEntry.Description = "基础药品买卖";
