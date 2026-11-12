@@ -439,6 +439,37 @@ namespace Server.Bots
 
         #endregion
 
+        #region 传送（六合圣石）
+
+        /// <summary>
+        /// 在 <paramref name="map"/> 上找一颗**能直达 <paramref name="targetMapIndex"/>** 的六合石。
+        /// <para>
+        /// **为什么不能只取第一颗**：一个城里常常有好几颗石头，分工不同。
+        /// 实测沙漠土城就有「荒漠土城内传送员」（只有「荒漠土城内城 1K」一个按钮，
+        /// Teleport 指向沙漠土城自己）和「荒漠土城外传送员」（失乐园 10K / 自由传送员）。
+        /// 取 map.NPCs 里第一颗会拿到**内传送员**，于是「去失乐园」永远判成「没有直达按钮」，
+        /// 假人只能 A* 硬走 —— 2026-11-12 用诊断日志实测到的就是这一条。
+        /// </para>
+        /// </summary>
+        public static NPCObject FindTeleportStoneFor(Map map, int targetMapIndex)
+        {
+            if (map?.NPCs == null) return null;
+            if (targetMapIndex <= 0) return null;
+
+            foreach (NPCObject npc in map.NPCs)
+            {
+                if (npc?.NPCInfo == null) continue;
+                if (!IsTeleportStone(npc.NPCInfo)) continue;
+                if (FindTeleportButton(npc.NPCInfo, targetMapIndex) < 0) continue;
+
+                return npc;
+            }
+
+            return null;
+        }
+
+        #endregion
+
         /// <summary>
         /// 判断一个 NPC 是不是药店：入口页、或入口页一层的按钮目标页里，有恢复生命/魔法的消耗品。
         /// 实测 12 个药店都是「入口页 → 按钮(1) → 基础药品买卖－城堡」，所以最多看一层。

@@ -690,11 +690,18 @@ namespace Server.Bots
             BotOptions options = Options;
 
             // 等级窗口：能打得动（≤ 自己+4）且不至于太低（≥ 自己-8，否则经验少得没意义）。
+            //
+            // **必须按地图去重**：RespawnInfo 是「刷怪区」不是「地图」，一张图有十几个区域。
+            // 原来直接 OrderBy(地图索引距离).Take(12)，潘夜村[6] 的十几个刷怪区会把
+            // 12 个候选位全部占满，失乐园[5] 根本进不了候选 ——
+            // 于是明明能从沙漠土城 3K 直传失乐园，假人却只能 A* 硬走潘夜村（2026-11-12 实测）。
             List<RespawnInfo> candidates = SEnvir.RespawnInfoList.Binding
                 .Where(x => x.Region?.Map != null && x.Region.Map != current.Info && x.Monster != null)
                 .Where(x => options.HuntMaps.Count == 0 || options.HuntMaps.Contains(x.Region.Map.Index))
                 .Where(x => x.Monster.Level <= _player.Level + 4 && x.Monster.Level >= _player.Level - 8)
                 .Where(x => x.Region.Map.MinimumLevel <= _player.Level)
+                .GroupBy(x => x.Region.Map)
+                .Select(g => g.OrderBy(x => Math.Abs(x.Monster.Level - _player.Level)).First())
                 .OrderBy(x => Math.Abs(x.Region.Map.Index - current.Info.Index))
                 .Take(12)
                 .ToList();
@@ -725,6 +732,20 @@ namespace Server.Bots
                     if (points == null || points.Count == 0) continue;
 
                     if (TryStartTeleport(map, points[SEnvir.Random.Next(points.Count)])) return true;
+                }
+
+                // 阶段 A 全灭才走到这里。
+                if (pass == 0)
+                {
+                    if (candidates.Count > 0)
+                        LogTeleportCandidates(candidates, current);
+
+                    // 本图**有石头却一个目标图都传不到**（石头只通内城 / 按钮里没有这些图）
+                    // → 回主城中转。主城的石头按钮更全：比奇城能直达潘夜村和失乐园。
+                    // 这比在沙漠土城硬走 A* 去潘夜村安全得多。
+                    if (BotPerception.FindTeleportStone(current) != null &&
+                        TryStartReturnHomeForTeleport())
+                        return true;
                 }
 
                 // 阶段 B：一张能直达的都没有（本图没石头 / 没直达按钮）→ A* 逐格跨图。
@@ -763,6 +784,46 @@ namespace Server.Bots
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 阶段 A（能直达传送的图）全灭时打一条诊断：候选有哪几张图，每张为什么传不了。
+        /// <para>
+        /// 存在的意义：跨图机制出问题时，「明明有石头却还在 A*」是最常见的现象，
+        /// 而光看 A* 那行日志无法区分「本图没石头」「石头没直达标图」「钱不够」
+        /// 「候选里根本没有那张能传的图」——这四种原因的修法完全不同。
+        /// </para>
+        /// </summary>
+        private void LogTeleportCandidates(List<RespawnInfo> candidates, Map current)
+        {
+            NPCObject stone = BotPerception.FindTeleportStone(current);
+
+            if (stone == null) return;
+
+            List<string> parts = new List<string>();
+
+            foreach (RespawnInfo candidate in candidates)
+            {
+                MapInfo map = candidate.Region.Map;
+
+                int button = BotPerception.FindTeleportButton(stone.NPCInfo, map.Index);
+
+                if (button < 0)
+                {
+                    parts.Add(string.Format("{0}[{1}]=无直达", map.Description, map.Index));
+                    continue;
+                }
+
+                int cost = BotPerception.CheapestTeleportCost(stone.NPCInfo, map.Index);
+
+                parts.Add(cost > 0 && GoldAmount() < cost
+                    ? string.Format("{0}[{1}]=没钱({2})", map.Description, map.Index, cost)
+                    : string.Format("{0}[{1}]=可传", map.Description, map.Index));
+            }
+
+            BotLog.Warn(Profile.Seq, string.Format(
+                "跨图候选 {0} 个（本图 {1} 有石头）：{2}",
+                candidates.Count, current.Info.Description, string.Join("，", parts)));
         }
 
         private void ProcessTravel()
@@ -882,11 +943,11 @@ namespace Server.Bots
                 return;
             }
 
-            NPCObject stone = BotPerception.FindTeleportStone(_player.CurrentMap);
+            NPCObject stone = BotPerception.FindTeleportStoneFor(_player.CurrentMap, _travelMap.Index);
 
             if (stone == null)
             {
-                FallbackToTravel("当前地图没有六合圣石，改走 A* 跨图");
+                FallbackToTravel("当前地图没有能直达目标图的六合圣石，改走 A* 跨图");
                 return;
             }
 
@@ -1013,7 +1074,7 @@ namespace Server.Bots
             int scrolls = BotActions.CountTownScroll(_player);
 
             BotLog.Warn(Profile.Seq, string.Format(
-                "跨图中转：{0}[{1}] 没有六合石，先回 {2}[{3}] 再传送（回城卷 {4} 张）",
+                "跨图中转：{0}[{1}] 没有可用的六合石传送，先回 {2}[{3}] 再选图（回城卷 {4} 张）",
                 current.Info.Description, current.Info.Index,
                 home.Description, home.Index, scrolls));
 
@@ -1108,7 +1169,9 @@ namespace Server.Bots
         /// <summary>能不能用传送石去目标图（有石头 + 有直达按钮 + 钱够）。</summary>
         private bool TryStartTeleport(MapInfo map, Point point)
         {
-            NPCObject stone = BotPerception.FindTeleportStone(_player.CurrentMap);
+            // 必须找「能直达这张图」的那颗石头：一个城里常常有好几颗，
+            // 内传送员的按钮只通向城内，外传送员才有跨城按钮（沙漠土城实测）。
+            NPCObject stone = BotPerception.FindTeleportStoneFor(_player.CurrentMap, map.Index);
 
             if (stone == null) return false;
 
