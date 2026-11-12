@@ -1250,7 +1250,7 @@ namespace Server.Bots
                 _restockCooldown = DateTime.MinValue;
                 _restockFailStreak = 0;
 
-                EnterState(BotState.Restock, "后台要求立即补给", TimeSpan.FromMinutes(3));
+                EnterState(BotState.Restock, "后台要求立即补给", TimeSpan.FromMinutes(5));
 
                 return true;
             }
@@ -1293,7 +1293,23 @@ namespace Server.Bots
 
             if (floorPrice > 0 && GoldAmount() < floorPrice) return false;
 
-            EnterState(BotState.Restock, string.Format("红药只剩 {0} 瓶，回城补给", red), TimeSpan.FromMinutes(3));
+            // 负重快满时去药店也是空手而归：CanGainItems 按 Weight × 瓶数 校验，
+            // 超重直接拒绝，且假人收不到任何提示（无 socket）。
+            //
+            // 但只在**有东西可卖**时才袖手旁观 —— 否则纯装备超重的假人会永远不补给，
+            // 断药 → 打不了怪 → 更卖不了东西，死锁更狠。
+            long capacity = _player.Stats[Stat.BagWeight];
+
+            if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10 && HasSellableItems())
+            {
+                LastDetail = "负重快满了，先卖货再补给";
+                return false;
+            }
+
+            // 5 分钟而不是 3 分钟：一次补给要「AutoPath 跨图回城 → 走到药店买药 →
+            // 再走到杂货商买卷」三段，城外 60 格、两个 NPC 各 20~40 格。
+            // 3 分钟实测经常卡在最后一段（2026-11-12：6 次失败里 4 次是「补给超时」）。
+            EnterState(BotState.Restock, string.Format("红药只剩 {0} 瓶，回城补给", red), TimeSpan.FromMinutes(5));
 
             return true;
         }
@@ -1806,7 +1822,10 @@ namespace Server.Bots
             int potions = BotActions.CountPotion(_player, Stat.Health) + BotActions.CountPotion(_player, Stat.Mana);
             int scrolls = BotActions.CountTownScroll(_player);
 
-            int gained = potions - _restockBaselinePotions + (scrolls - _restockBaselineScrolls);
+            int basePotions = _restockBaselinePotions;
+            int baseScrolls = _restockBaselineScrolls;
+
+            int gained = potions - basePotions + (scrolls - baseScrolls);
 
             bool success = gained > 0;
 
@@ -1835,7 +1854,12 @@ namespace Server.Bots
 
             _restockCooldown = SEnvir.Now.AddSeconds(cooldown);
 
-            BotLog.Info(Profile.Seq, detail);
+            // 必须是 Warn：补给成败是 D5 验收的核心指标，而 Info 会被 BotLogLevel=2 整体过滤。
+            // 2026-11-12 又踩了一次：补给成功率掉到 38%，日志里一个字都看不到，只能靠猜。
+            // 把「药/卷的前后数量」一起打出来，才能区分「根本没买到」和「买了但期间喝掉了」。
+            BotLog.Warn(Profile.Seq, string.Format("补给{0}：{1}（药 {2}→{3}，卷 {4}→{5}）",
+                success ? "成功" : "失败", detail,
+                basePotions, potions, baseScrolls, scrolls));
 
             EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(3));
         }
@@ -2038,6 +2062,17 @@ namespace Server.Bots
                 int currentScore = current == null ? 0 : EquipmentScore(current);
 
                 if (score <= currentScore + 50) continue;
+
+                // 换装要留负重余量：穿装备不受 CanGainItems 把关，可以一路顶到 130%。
+                //
+                // 实测（2026-11-12，生产配置：11 倍爆率）：掉落装备暴增 → 假人专挑属性最高
+                // （也是最重）的装备穿 → 负重 110/84 → 买药时 CanGainItems 返回 false
+                // → 一瓶药都买不到（NPCBuy 静默 return）→ 补给成功率掉到 40%。
+                // 这里留 15% 余量给药品：留着穿不了，就等于把「补给闭环」焊死了。
+                int delta = item.Info.Weight - (current?.Info?.Weight ?? 0);
+                long capacity = player.Stats[Stat.BagWeight];
+
+                if (capacity > 0 && player.BagWeight + delta > capacity * 85 / 100) continue;
 
                 if (score <= bestScore) continue;
 
