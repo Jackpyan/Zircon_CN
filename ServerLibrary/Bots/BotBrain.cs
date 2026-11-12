@@ -76,6 +76,16 @@ namespace Server.Bots
         /// <para>30 秒 ≈ 正常走 100~300 格，远大于城内任何绕楼距离；</para>
         /// </summary>
         private const int TradeApproachStallSeconds = 30;
+
+        /// <summary>
+        /// 装备剩余耐久低于这个百分比就去修。
+        /// <para>
+        /// 原来是「正好 0 才修」，但界面按整数百分比显示 —— 剩 0.4% 也显示 0%，
+        /// 判定却过不去，于是那件装备一直挂在 0% 没人管（实测 <c>老酒坛</c> 衣服 0%）。
+        /// 15% 是留一次余量的经验值：一次修理几十金币，而耐久见底的装备会被引擎整件跳过、属性全失效。
+        /// </para>
+        /// </summary>
+        private const int RepairDurabilityPercent = 15;
         /// <summary>同一张图上最多同时有几个假人在练级，超了就分流（后台可调）。</summary>
         private int MapCapacity => Math.Max(1, Options.MapCapacity);
         /// <summary>本图连续几次找不到怪才考虑跨图（避免刷怪间隙就乱跑）。</summary>
@@ -3096,15 +3106,20 @@ namespace Server.Bots
             // 它是在线期间被补给的 Locked 药顶上去的。
             if (overweight || free <= 8) RepairPotionFlags(log: false);
 
-            // 1) 有装备坏了 → 去修理（修理优先于卖货：攻击力为 0 是致命的）
+            // 1) 有装备耐久见底 → 去修理（修理优先于卖货：属性全失效是致命的）
             if (SEnvir.Now >= _repairCooldown && HasBrokenEquipment())
             {
                 _tradeIsRepair = true;
-                SetTradeTarget(BrokenEquipmentType());
 
-                EnterState(BotState.Trade, "装备耐久没了，回城修理", TimeSpan.FromMinutes(3));
+                // 必须看返回值：全服都找不到「收这一类」的修理铺时别再每拍重试。
+                if (SetTradeTarget(BrokenEquipmentType()))
+                {
+                    EnterState(BotState.Trade, "装备耐久见底了，回城修理", TimeSpan.FromMinutes(3));
 
-                return true;
+                    return true;
+                }
+
+                _repairCooldown = SEnvir.Now.AddMinutes(10);
             }
 
             // 2) 背包快满了 → 去卖货腾格子
@@ -3217,7 +3232,14 @@ namespace Server.Bots
             {
                 if (item?.Info == null) continue;
                 if (item.Info.Durability <= 0) continue;
-                if (item.CurrentDurability > 0) continue;
+                if (!item.Info.CanRepair) continue;
+                if (item.MaxDurability <= 0) continue;
+
+                // 原来只认「正好 0」，可界面按整数百分比显示 —— 剩 0.4% 也显示 0%，
+                // 而 HasBrokenEquipment 判不出来，于是那件装备一直挂在 0% 没人修。
+                // 改成「剩余 <= 15% 就去修」，配合 10 分钟冷却，既不会刷屏也不会穿到烂。
+                if (!BotItemRules.NeedsRepair(item.CurrentDurability, item.MaxDurability, RepairDurabilityPercent))
+                    continue;
 
                 return true;
             }
@@ -3225,19 +3247,39 @@ namespace Server.Bots
             return false;
         }
 
-        /// <summary>第一件坏掉的装备的类型（用来找对应的修理铺）。</summary>
+        /// <summary>
+        /// 「最该修」的那件装备的类型 —— 按**剩余比例**挑最差的，不是按背包顺序。
+        /// <para>
+        /// 为什么按比例：不同装备的 <c>MaxDurability</c> 差好几倍（武器 2 万、戒指 5 千），
+        /// 用绝对值比会把「还剩 3000 的武器」当成比「还剩 800 的戒指」更该修。
+        /// </para>
+        /// <para>
+        /// 这个类型直接决定去**哪一家**修理铺：武器店只收 Weapon/Shield、
+        /// 首饰店只收 Ring/Bracelet/Necklace、服装店只收 Armour/Helmet/Shoes/Shield。
+        /// </para>
+        /// </summary>
         private ItemType BrokenEquipmentType()
         {
+            ItemType worstType = ItemType.Weapon;
+            long worstRatio = long.MaxValue;
+
             foreach (UserItem item in _player.Equipment)
             {
                 if (item?.Info == null) continue;
                 if (item.Info.Durability <= 0) continue;
-                if (item.CurrentDurability > 0) continue;
+                if (!item.Info.CanRepair) continue;
+                if (item.MaxDurability <= 0) continue;
+                if (item.CurrentDurability >= item.MaxDurability) continue;
 
-                return item.Info.ItemType;
+                long ratio = BotItemRules.DurabilityPermille(item.CurrentDurability, item.MaxDurability);
+
+                if (ratio >= worstRatio) continue;
+
+                worstRatio = ratio;
+                worstType = item.Info.ItemType;
             }
 
-            return ItemType.Weapon;
+            return worstType;
         }
 
         /// <summary>
@@ -3458,11 +3500,7 @@ namespace Server.Bots
             Map current = _player.CurrentMap;
             MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
 
-            if (_tradeIsRepair)
-            {
-                if (current != null && BotPerception.FindRepairShop(current) != null) return current.Info;
-                return home;
-            }
+            if (_tradeIsRepair) return ResolveRepairDestination(type, current, home);
 
             if (type == ItemType.Nothing) return home;
 
@@ -3495,6 +3533,72 @@ namespace Server.Bots
 
                 if (dist >= bestDist) continue;
 
+                bestDist = dist;
+                best = info;
+            }
+
+            return best;
+        }
+
+        /// <summary>这张图上有没有**收这一类**的修理铺（武器/首饰/服装各一家，不能混）。</summary>
+        private static bool HasRepairShopFor(Map map, ItemType type)
+        {
+            if (map == null) return false;
+
+            NPCObject npc = BotPerception.FindRepairShop(map, type);
+
+            return npc != null && BotPerception.RepairAcceptsType(npc.NPCInfo, type);
+        }
+
+        /// <summary>
+        /// 挑一家**收这一类装备**的修理铺所在地图：当前图 → 绑定主城 → 全服可达图。
+        /// <para>
+        /// <b>为什么必须走到第三级</b>：修理铺按店铺分家，小村子常常缺一家 ——
+        /// 潘夜村(2) 只有武器店和首饰店、**没有服装店**，而假人老家就是潘夜村。
+        /// 只看「当前图 + 主城」的话，衣服耐久见底永远找不到铺子，
+        /// 只会反复「找不到 → 10 分钟冷却」（实测 <c>老酒坛</c> 衣服 0%、<c>半盏茶</c> 10%）。
+        /// </para>
+        /// <para>
+        /// 第三级优先**六合石直达**（1 秒、3000 金），其次两跳，最后才交给 AutoPath 走图，
+        /// 免得为了一件装备横穿半个世界。
+        /// </para>
+        /// </summary>
+        private MapInfo ResolveRepairDestination(ItemType type, Map current, MapInfo home)
+        {
+            // ① 就地能修 → 一步都不用跑
+            if (current != null && HasRepairShopFor(current, type)) return current.Info;
+
+            // ② 绑定主城（回城卷直达，1 秒）
+            Map homeMap = home == null ? null : SEnvir.GetMap(home);
+
+            if (home != null && HasRepairShopFor(homeMap, type) && !IsTradeMapBlocked(home)) return home;
+
+            // ③ 全服找：按「六合石直达 → 两跳 → 其他」排序，同级挑索引最近的
+            HashSet<int> direct = BotPerception.TeleportTargetsFrom(current?.Info ?? home);
+
+            MapInfo best = null;
+            int bestRank = int.MaxValue;
+            int bestDist = int.MaxValue;
+
+            foreach (MapInfo info in BotPerception.RepairMapsFor(type))
+            {
+                if (info == null) continue;
+                if (info == home) continue;
+                if (current?.Info == info) continue;
+                if (IsTradeMapBlocked(info)) continue;
+
+                int rank;
+
+                if (direct.Contains(info.Index)) rank = 0;
+                else if (BotPerception.TryFindTwoHopRoute(current?.Info ?? home, info.Index, out _)) rank = 1;
+                else rank = 2;
+
+                int dist = Math.Abs(info.Index - (current?.Info?.Index ?? home?.Index ?? 0));
+
+                if (rank > bestRank) continue;
+                if (rank == bestRank && dist >= bestDist) continue;
+
+                bestRank = rank;
                 bestDist = dist;
                 best = info;
             }
@@ -3601,9 +3705,9 @@ namespace Server.Bots
                 return;
             }
 
-            // 在目的地：找对应的 NPC
+            // 在目的地：找对应的 NPC（修理要按类型挑铺子，见 FindRepairShop）
             NPCObject npc = _tradeIsRepair
-                ? BotPerception.FindRepairShop(_player.CurrentMap)
+                ? BotPerception.FindRepairShop(_player.CurrentMap, _tradeItemType)
                 : BotPerception.FindTrader(_player.CurrentMap, _tradeItemType);
 
             if (npc == null)
@@ -3818,7 +3922,29 @@ namespace Server.Bots
 
             long goldAfter = GoldAmount();
 
-            FinishTrade(string.Format("修了 {0} 件装备，花了 {1} 金币", links.Count, goldBefore - goldAfter));
+            // 日志要写清**修的是哪几件**：只写「修了 1 件装备」分不清修的是武器还是衣服，
+            // 而「衣服到底修没修上」正是这一轮要验证的东西（三家铺子各收一类，很容易修错家）。
+            FinishTrade(string.Format("修了 {0}，花了 {1} 金币", RepairNames(links), goldBefore - goldAfter));
+        }
+
+        /// <summary>把要修的槽位翻成「布衣（男）、铁剑」这样的名字串，给日志用。</summary>
+        private string RepairNames(List<CellLinkInfo> links)
+        {
+            List<string> names = new List<string>();
+
+            foreach (CellLinkInfo link in links)
+            {
+                UserItem item = _player.Equipment[link.Slot];
+
+                names.Add(item?.Info?.ItemName ?? "?");
+            }
+
+            if (names.Count == 0) return "0 件装备";
+
+            // 一身 14 件同时见底的情况很少，真遇上了也别把一行日志写成一篇小作文。
+            if (names.Count > 4) return string.Format("{0} 等 {1} 件", string.Join("、", names.GetRange(0, 4)), names.Count);
+
+            return string.Join("、", names);
         }
 
         /// <summary>构造要修理的装备列表（只挑这个修理铺收、且耐久不足的）。</summary>
@@ -3871,7 +3997,10 @@ namespace Server.Bots
 
             // 冷却分开设：卖货 20 秒（背包还满的话下一拍就要再卖）、修理 10 分钟（耐久掉得慢）。
             // 卖货 20 秒而不是 1 分钟：原来「药空了 → 等冷却」这一分钟正好是被打死的时候。
-            if (_tradeIsRepair) _repairCooldown = SEnvir.Now.AddMinutes(10);
+            //
+            // 修理要看「修完还有没有别的部位见底」：武器 / 首饰 / 防具分属三家店，
+            // 一趟只能修一类。还有别的就只给 60 秒，让它接着跑下一家；都修好了才给 10 分钟。
+            if (_tradeIsRepair) _repairCooldown = SEnvir.Now.AddSeconds(HasBrokenEquipment() ? 60 : 600);
             else _sellCooldown = SEnvir.Now.AddSeconds(20);
             _blockedCount = 0;
             _target = null;

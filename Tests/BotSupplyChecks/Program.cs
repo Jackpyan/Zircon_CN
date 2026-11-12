@@ -123,6 +123,26 @@ Check(BotItemRules.NeedsManaPotions(MirClass.Wizard), "法师要蓝药");
 Check(BotItemRules.NeedsManaPotions(MirClass.Taoist), "道士要蓝药");
 
 Console.WriteLine();
+Console.WriteLine("—— 装备耐久（BotItemRules）——");
+Console.WriteLine();
+
+Check(BotItemRules.NeedsRepair(current: 0, max: 1000, thresholdPercent: 15), "耐久正好 0 → 去修");
+Check(BotItemRules.NeedsRepair(current: 4, max: 1000, thresholdPercent: 15), "剩 0.4%（界面显示 0%）→ 也要去修");
+Check(BotItemRules.NeedsRepair(current: 100, max: 1000, thresholdPercent: 15), "剩 10% → 去修");
+Check(BotItemRules.NeedsRepair(current: 150, max: 1000, thresholdPercent: 15), "正好 15% → 去修（边界含等于）");
+Check(!BotItemRules.NeedsRepair(current: 151, max: 1000, thresholdPercent: 15), "剩 15.1% → 还不用修");
+Check(!BotItemRules.NeedsRepair(current: 1000, max: 1000, thresholdPercent: 15), "满耐久 → 不修");
+Check(!BotItemRules.NeedsRepair(current: 0, max: 0, thresholdPercent: 15), "耐久上限为 0（不耗耐久的装备）→ 不修");
+
+Check(BotItemRules.DurabilityPercent(current: 4, max: 1000) == 0, "千分比换算：剩 0.4% 显示 0%");
+Check(BotItemRules.DurabilityPercent(current: 999, max: 1000) == 99, "千分比换算：剩 99.9% 显示 99%");
+
+// 挑「最该修」的装备要比**比例**：武器上限 20000 剩 3000（15%），戒指上限 5000 剩 800（16%）
+Check(BotItemRules.DurabilityPermille(current: 3000, max: 20000) <
+      BotItemRules.DurabilityPermille(current: 800, max: 5000),
+    "武器 15% 比戒指 16% 更该修（按比例，不按绝对值）");
+
+Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"全部通过：{checks} 项"
     : $"失败 {failures} / {checks} 项");

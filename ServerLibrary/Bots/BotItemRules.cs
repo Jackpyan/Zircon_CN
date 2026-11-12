@@ -62,5 +62,45 @@ namespace Server.Bots
         {
             return @class != MirClass.Warrior;
         }
+
+        /// <summary>
+        /// 剩余耐久的百分比（0~100，向下取整）—— 与后台页面显示的口径一致。
+        /// </summary>
+        public static int DurabilityPercent(long current, long max)
+        {
+            if (max <= 0) return 0;
+
+            return (int)(current * 100 / max);
+        }
+
+        /// <summary>
+        /// 这件装备该不该去修：剩余耐久 **&lt;= 阈值** 就修。
+        ///
+        /// <para><b>为什么不用「等于 0」</b>：后台按整数百分比显示，剩 0.4% 也显示 0%，
+        /// 而旧判定要求 <c>CurrentDurability == 0</c>，于是那件装备一直挂在 0% 没人管
+        /// （实测 2026-11-12：<c>老酒坛</c> 衣服 0%、<c>半盏茶</c> 衣服 10%）。</para>
+        ///
+        /// <para>调用方负责先过滤「不耗耐久」「不可修理」的装备。</para>
+        /// </summary>
+        public static bool NeedsRepair(long current, long max, int thresholdPercent)
+        {
+            if (max <= 0) return false;
+            if (current >= max) return false;
+
+            return current * 100 <= max * thresholdPercent;
+        }
+
+        /// <summary>
+        /// 剩余耐久的千分比，用来在几件坏装备里挑「最该修」的那件。
+        ///
+        /// <para>不能比绝对值：武器耐久上限 2 万、戒指 5 千，
+        /// 按绝对值会把「还剩 3000 的武器」判成比「还剩 800 的戒指」更该修。</para>
+        /// </summary>
+        public static long DurabilityPermille(long current, long max)
+        {
+            if (max <= 0) return 0;
+
+            return current * 1000 / max;
+        }
     }
 }

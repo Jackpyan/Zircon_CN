@@ -1159,6 +1159,9 @@ namespace Server.Bots
         private static readonly Dictionary<NPCInfo, HashSet<ItemType>> TraderCache = new Dictionary<NPCInfo, HashSet<ItemType>>();
         private static readonly Dictionary<NPCInfo, bool> RepairCache = new Dictionary<NPCInfo, bool>();
 
+        /// <summary>修理页收哪些类型（武器店 / 首饰店 / 服装店各不同，见 <see cref="FindRepairShop"/>）。</summary>
+        private static readonly Dictionary<NPCInfo, HashSet<ItemType>> RepairTypeCache = new Dictionary<NPCInfo, HashSet<ItemType>>();
+
         /// <summary>
         /// 在当前地图上找收 <paramref name="itemType"/> 这类东西的商人。
         /// <para>
@@ -1183,19 +1186,130 @@ namespace Server.Bots
             return null;
         }
 
-        /// <summary>在当前地图上找修理铺。</summary>
-        public static NPCObject FindRepairShop(Map map)
+        /// <summary>
+        /// 在当前地图上找修理铺。
+        /// <para>
+        /// <b>必须按类型找</b>：修理铺分三家 —— 武器店收 <c>Weapon,Shield</c>、
+        /// 首饰店收 <c>Ring,Bracelet,Necklace</c>、服装店收 <c>Armour,Helmet,Shoes,Shield</c>
+        /// （<c>npcq --repair</c> 实测 34 个带修理页的 NPC）。
+        /// 原来只挑「第一个带修理页的 NPC」，而 <c>map.NPCs</c> 里武器店通常排在前面，
+        /// 于是 <see cref="BotBrain"/> 的 <c>BuildRepairLinks</c> 按页收类型一过滤，
+        /// 衣服 / 首饰全被丢掉 → 报「没有要修的装备」→ 10 分钟冷却 → **永远修不到**。
+        /// 实测（2026-11-12）<c>老酒坛</c> 衣服 0%、<c>半盏茶</c> 10%、<c>落花生</c> 武器 12%。
+        /// </para>
+        /// <para><paramref name="itemType"/> 传 <c>Nothing</c> 时退化成「随便找一家」，只用于诊断。</para>
+        /// </summary>
+        public static NPCObject FindRepairShop(Map map, ItemType itemType = ItemType.Nothing)
         {
             if (map?.NPCs == null) return null;
+
+            NPCObject fallback = null;
 
             foreach (NPCObject npc in map.NPCs)
             {
                 if (npc?.NPCInfo == null) continue;
+                if (!HasRepairPage(npc.NPCInfo)) continue;
 
-                if (HasRepairPage(npc.NPCInfo)) return npc;
+                if (itemType == ItemType.Nothing) return npc;
+
+                if (RepairAcceptsType(npc.NPCInfo, itemType)) return npc;
+
+                if (fallback == null) fallback = npc;
             }
 
-            return null;
+            // 这家图没有对口的铺子 —— 返回任意一家，让上层自己判断「修不了」，
+            // 总比返回 null 让调用方误以为「这张图没有修理铺」好排查。
+            return fallback;
+        }
+
+        /// <summary>
+        /// 这个 NPC 的修理页收不收这类装备。
+        /// <para>修理页既可能就在入口页上，也可能是入口页某个按钮的目标页，两处都要看。</para>
+        /// </summary>
+        public static bool RepairAcceptsType(NPCInfo npc, ItemType itemType)
+        {
+            if (npc == null) return false;
+
+            if (!RepairTypeCache.TryGetValue(npc, out HashSet<ItemType> types))
+            {
+                types = CollectRepairTypes(npc);
+                RepairTypeCache[npc] = types;
+            }
+
+            return types.Contains(itemType);
+        }
+
+        /// <summary>这个 NPC 的修理页收哪些类型（入口页 + 一层按钮的目标页）。</summary>
+        private static HashSet<ItemType> CollectRepairTypes(NPCInfo npc)
+        {
+            HashSet<ItemType> types = new HashSet<ItemType>();
+
+            void Collect(NPCPage page)
+            {
+                if (page?.DialogType != NPCDialogType.Repair || page.Types == null) return;
+
+                foreach (NPCType type in page.Types)
+                {
+                    if (type == null) continue;
+
+                    types.Add(type.ItemType);
+                }
+            }
+
+            Collect(npc.EntryPage);
+
+            if (npc.EntryPage?.Buttons != null)
+            {
+                foreach (NPCButton button in npc.EntryPage.Buttons)
+                    Collect(button.DestinationPage);
+            }
+
+            return types;
+        }
+
+        /// <summary>类型 → 「哪些地图上有收这一类的修理铺」。懒加载一次。</summary>
+        private static Dictionary<ItemType, List<MapInfo>> _repairMapsByType;
+
+        /// <summary>
+        /// 全服范围内，哪些地图上有**收这一类装备**的修理铺。
+        /// <para>
+        /// <b>为什么不能只看当前图 / 绑定主城</b>：修理铺按店铺分家，而小村子往往缺一家 ——
+        /// <c>npcq --repair</c> 实测潘夜村(2) 只有武器店（金先生）和首饰店（达科塔），
+        /// **没有服装店**；假人老家正好是潘夜村，于是「衣服耐久见底」永远找不到铺子，
+        /// 只能一遍遍 10 分钟冷却（实测 <c>老酒坛</c> 衣服 0%、<c>半盏茶</c> 10%）。
+        /// </para>
+        /// <para>
+        /// 只读 NPC 数据（<see cref="SEnvir.NPCInfoList"/>）里的 <c>Region.Map</c>，
+        /// **不加载地图**，所以不会把几十张图实例化进内存。
+        /// </para>
+        /// </summary>
+        public static List<MapInfo> RepairMapsFor(ItemType itemType)
+        {
+            if (_repairMapsByType == null)
+            {
+                Dictionary<ItemType, List<MapInfo>> index = new Dictionary<ItemType, List<MapInfo>>();
+
+                foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+                {
+                    if (npc?.Region?.Map == null) continue;
+                    if (!HasRepairPage(npc)) continue;
+
+                    foreach (ItemType accepted in CollectRepairTypes(npc))
+                    {
+                        if (!index.TryGetValue(accepted, out List<MapInfo> maps))
+                            index[accepted] = maps = new List<MapInfo>();
+
+                        if (!maps.Contains(npc.Region.Map)) maps.Add(npc.Region.Map);
+                    }
+                }
+
+                // 空表说明数据还没加载完，别缓存（同 GetMapInfo）。
+                if (index.Count == 0) return new List<MapInfo>();
+
+                _repairMapsByType = index;
+            }
+
+            return _repairMapsByType.TryGetValue(itemType, out List<MapInfo> found) ? found : new List<MapInfo>();
         }
 
         /// <summary>这个 NPC 收不收这类东西（查它入口页一层按钮的目标页）。</summary>
