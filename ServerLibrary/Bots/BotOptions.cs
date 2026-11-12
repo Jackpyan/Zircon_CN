@@ -28,6 +28,37 @@ namespace Server.Bots
 
         public int MapCapacity { get; private init; }
 
+        /// <summary>真人优先：不抢真人已经打过的怪（<c>EXPOwner</c> 是真人）。</summary>
+        public bool RespectRealPlayerTags { get; private init; }
+
+        /// <summary>BOSS 留给真人：跳过 <c>MonsterInfo.IsBoss</c>。</summary>
+        public bool SkipBoss { get; private init; }
+
+        /// <summary>说话总开关（默认关）。</summary>
+        public bool ChatEnabled { get; private init; }
+
+        public int ChatIntervalMinSeconds { get; private init; }
+        public int ChatIntervalMaxSeconds { get; private init; }
+
+        public bool WalkPauseEnabled { get; private init; }
+        public bool TownStrollEnabled { get; private init; }
+        public int TownStrollPercent { get; private init; }
+        public bool MistakeEnabled { get; private init; }
+        public int MistakePerHour { get; private init; }
+
+        public bool NightEnabled { get; private init; }
+        public int NightScalePercent { get; private init; }
+        public bool MapRotateEnabled { get; private init; }
+
+        public bool PkEnabled { get; private init; }
+        public int PkIntervalMinutes { get; private init; }
+        public int PkRadius { get; private init; }
+
+        public bool TopSlowEnabled { get; private init; }
+        public int TopRankLimit { get; private init; }
+        public int TopHoldMinutes { get; private init; }
+        public int TopSlowMinutes { get; private init; }
+
         public int RestockPotionLow { get; private init; }
         public int RestockBuyRed { get; private init; }
         public int RestockBuyBlue { get; private init; }
@@ -59,6 +90,26 @@ namespace Server.Bots
                 NewbiePotionCount = Math.Max(0, Config.BotNewbiePotionCount),
                 AutoSkill = Config.BotAutoSkill,
                 MapCapacity = Math.Max(1, Config.BotMapCapacity),
+                RespectRealPlayerTags = Config.BotRespectRealPlayerTags,
+                SkipBoss = Config.BotSkipBoss,
+                ChatEnabled = Config.BotChatEnabled,
+                ChatIntervalMinSeconds = Math.Max(60, Config.BotChatIntervalMinSeconds),
+                ChatIntervalMaxSeconds = Math.Max(Math.Max(60, Config.BotChatIntervalMinSeconds), Config.BotChatIntervalMaxSeconds),
+                WalkPauseEnabled = Config.BotWalkPauseEnabled,
+                TownStrollEnabled = Config.BotTownStrollEnabled,
+                TownStrollPercent = Math.Clamp(Config.BotTownStrollPercent, 0, 100),
+                MistakeEnabled = Config.BotMistakeEnabled,
+                MistakePerHour = Math.Max(0, Config.BotMistakePerHour),
+                NightEnabled = Config.BotNightEnabled,
+                NightScalePercent = Math.Clamp(Config.BotNightScalePercent, 0, 100),
+                MapRotateEnabled = Config.BotMapRotateEnabled,
+                PkEnabled = Config.BotSocialEnabled && Config.BotPkEnabled,
+                PkIntervalMinutes = Math.Max(1, Config.BotPkIntervalMinutes),
+                PkRadius = Math.Max(1, Config.BotPkRadius),
+                TopSlowEnabled = Config.BotTopSlowEnabled,
+                TopRankLimit = Math.Max(1, Config.BotTopRankLimit),
+                TopHoldMinutes = Math.Max(1, Config.BotTopHoldMinutes),
+                TopSlowMinutes = Math.Max(1, Config.BotTopSlowMinutes),
                 RestockPotionLow = Math.Max(0, Config.BotRestockPotionLow),
                 RestockBuyRed = Math.Max(0, Config.BotRestockBuyRed),
                 RestockBuyBlue = Math.Max(0, Config.BotRestockBuyBlue),
@@ -76,6 +127,20 @@ namespace Server.Bots
             if (StepDelayMaxMs <= StepDelayMinMs) return TimeSpan.FromMilliseconds(StepDelayMinMs);
 
             return TimeSpan.FromMilliseconds(SEnvir.Random.Next(StepDelayMinMs, StepDelayMaxMs + 1));
+        }
+
+        /// <summary>
+        /// 下一次说话要等多久（15~40 分钟，随机）。
+        /// <para>
+        /// 必须随机：固定周期会让 30 个假人慢慢同步成「整点合唱」，比不说话还假。
+        /// </para>
+        /// </summary>
+        public TimeSpan NextChatDelay()
+        {
+            if (ChatIntervalMaxSeconds <= ChatIntervalMinSeconds)
+                return TimeSpan.FromSeconds(ChatIntervalMinSeconds);
+
+            return TimeSpan.FromSeconds(SEnvir.Random.Next(ChatIntervalMinSeconds, ChatIntervalMaxSeconds + 1));
         }
 
         /// <summary>解析 "1,3,5" 形式的地图索引列表。空串或全非法 → 空集合（视为不限制）。</summary>

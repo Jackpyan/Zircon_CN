@@ -24,7 +24,18 @@ namespace Server.Bots
         /// 高于自身等级 3 级以上的怪打不动，只会白白掉血。
         /// </para>
         /// </summary>
-        public static MonsterObject FindHuntTarget(PlayerObject player, int radius)
+        /// <summary>
+        /// 找一只该打的怪。
+        /// <para>
+        /// <paramref name="respectRealPlayerTags"/>：真人已经打过的怪不抢。判据是引擎的
+        /// <c>MonsterObject.EXPOwner</c>（「谁先打谁拥有」，怪物第一次被伤害时挂上），
+        /// 它不是假人 → 说明真人在打，直接放过。这是真人最容易察觉的一条（一群假人围着你的怪砍）。
+        /// </para>
+        /// <para>
+        /// <paramref name="skipBoss"/>：BOSS 留给真人。假人打 BOSS 会抢掉落，而且大概率被围死。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindHuntTarget(PlayerObject player, int radius, bool respectRealPlayerTags = true, bool skipBoss = true)
         {
             Map map = player?.CurrentMap;
 
@@ -46,6 +57,12 @@ namespace Server.Bots
                 // 守卫（MonsterInfo.AI == -1 生成 Guard）不产经验，假人一路过就打，
                 // 实测砍两分钟等级还卡在 1 级 —— 永远不打。
                 if (monster is Guard) continue;
+
+                // BOSS 留给真人（P4-2）。
+                if (skipBoss && info.IsBoss) continue;
+
+                // 真人优先（P4-3）：这只怪的击杀权在真人手上，别去抢。
+                if (respectRealPlayerTags && IsOwnedByRealPlayer(monster)) continue;
 
                 // 等级压制超过 4 级的先放过，0 级号硬扛只会送死。
                 // 容差取 4 是有依据的：本服最低的怪就是 Lv5 的鸡，1 级号必须打得动它（D1 实测三只鸡可升 2 级）。
@@ -96,6 +113,7 @@ namespace Server.Bots
                 if (distance > radius || distance >= bestDistance) continue;
 
                 if (!IsWorthPickingUp(item)) continue;
+                if (IsPotionSurplus(player, item.Item)) continue;
 
                 best = item;
                 bestDistance = distance;
@@ -164,6 +182,66 @@ namespace Server.Bots
         /// <c>UserCurrency</c>，是假人唯一的金币收入来源。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 药水囤积上限（瓶数）：补给目标 × 2。配置为 0/负数（关掉自动补给）= 不限。
+        /// </summary>
+        public static int PotionStockLimit(int restockTarget)
+        {
+            return restockTarget <= 0 ? int.MaxValue : Math.Max(1, restockTarget * 2);
+        }
+
+        /// <summary>
+        /// 地上这瓶药还要不要捡？true = 已经够了，别捡。
+        ///
+        /// <para><b>为什么要拦</b>：11 倍爆率下地上到处是药，假人见什么捡什么 ——
+        /// 实测有人囤了 90 瓶红药 + 46 瓶蓝药，背包总重 155 里药水占 142（92%），
+        /// 而药又因为「自己要用」不许卖，于是负重降不下来、新战利品捡不进来，卡死。</para>
+        ///
+        /// <para><b>两道闸门，任意一条超了就不捡</b>：① 该属性药水已有 ≥ 目标×2 瓶；
+        /// ② 药水总重已占负重上限的 40%。只按瓶数不够 —— 低等级角色负重上限才 58，
+        /// 40 瓶药就占 69%，得让重量维度也能兜住。</para>
+        /// </summary>
+        public static bool IsPotionSurplus(PlayerObject player, UserItem item)
+        {
+            if (player?.Inventory == null || item?.Info == null) return false;
+            if (item.Info.ItemType != ItemType.Consumable) return false;
+
+            bool heals = item.Info.Stats[Stat.Health] > 0;
+            bool restoresMana = item.Info.Stats[Stat.Mana] > 0;
+
+            // 卷轴 / 食物之类不算药，走普通物品判定。
+            if (!heals && !restoresMana) return false;
+
+            Stat stat = heals ? Stat.Health : Stat.Mana;
+
+            // 战士不喝蓝药，地上的也别捡。
+            if (stat == Stat.Mana && player.Character?.Class == MirClass.Warrior) return true;
+
+            int target = stat == Stat.Health ? Config.BotRestockBuyRed : Config.BotRestockBuyBlue;
+            int limit = PotionStockLimit(target);
+
+            if (limit != int.MaxValue && BotActions.CountPotion(player, stat) >= limit) return true;
+
+            long capacity = player.Stats[Stat.BagWeight];
+
+            if (capacity <= 0) return false;
+
+            long potionWeight = 0;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+            {
+                UserItem owned = player.Inventory[i];
+
+                if (owned?.Info == null) continue;
+                if (owned.Info.ItemType != ItemType.Consumable) continue;
+                if (owned.Info.Stats[Stat.Health] <= 0 && owned.Info.Stats[Stat.Mana] <= 0) continue;
+
+                potionWeight += (long)owned.Info.Weight * Math.Max(1, owned.Count);
+            }
+
+            return potionWeight >= capacity * 40 / 100;
+        }
+
         public static bool IsWorthPickingUp(ItemObject item)
         {
             if (item?.Item?.Info == null) return false;
@@ -228,6 +306,91 @@ namespace Server.Bots
             Cell cell = player.CurrentMap.GetCell(player.CurrentLocation);
 
             return cell != null && cell.SafeZone != null;
+        }
+
+        /// <summary>
+        /// 找一个红名目标（P3-4）。只返回「名字红到会被系统标红」的玩家，白名一律不碰。
+        /// <para>
+        /// 判据与 <c>PlayerObject.ProcessNameColour</c> 完全一致：<c>Stats[Stat.PKPoint] &gt;= Config.RedPoint</c>。
+        /// 安全区里的红名也不打 —— 那是系统保护的休战区，打了等于当着所有人违规。
+        /// </para>
+        /// </summary>
+        public static PlayerObject FindRedNameTarget(PlayerObject player, int radius, int redPoint)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            PlayerObject best = null;
+            int bestDistance = int.MaxValue;
+
+            foreach (PlayerObject other in map.Players)
+            {
+                if (other == null || other == player) continue;
+                if (other.Dead || other.Node == null) continue;
+                if (other.Connection == null) continue;
+                if (other.Stats[Stat.PKPoint] < redPoint) continue;
+                if (InSafeZone(other)) continue;
+
+                int distance = BotNavigator.Distance(player.CurrentLocation, other.CurrentLocation);
+
+                if (distance > radius || distance >= bestDistance) continue;
+
+                best = other;
+                bestDistance = distance;
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// 这个角色现在是否在排行榜前 <paramref name="top"/> 名（P4-4 榜首降速）。
+        /// <para>
+        /// 直接走 <c>SEnvir.Rankings</c> 链表的头几个节点，O(top) —— 不用
+        /// <c>GetRankingPosition</c>（那个是 private，而且要从节点一路往前数，O(n)）。
+        /// 30 个假人每几秒调一次也不会有性能问题。
+        /// </para>
+        /// <para>
+        /// <c>RankingNode</c> 可能为 null（角色还没进排行榜 / 刚建号），一律当作「不在榜上」。
+        /// </para>
+        /// </summary>
+        public static bool IsTopRanked(CharacterInfo character, int top)
+        {
+            if (character?.RankingNode == null) return false;
+            if (SEnvir.Rankings == null || top <= 0) return false;
+
+            LinkedListNode<CharacterInfo> node = SEnvir.Rankings.First;
+
+            for (int i = 0; i < top && node != null; i++, node = node.Next)
+            {
+                if (ReferenceEquals(node.Value, character)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 这只怪的击杀权是否在真人手上（P4-3 真人优先）。
+        /// <para>
+        /// <c>EXPOwner</c> 是引擎的「谁先打谁拥有」标记：怪物第一次被伤害时由 <c>PlayerObject</c> 挂上，
+        /// 死亡时清空。为 null = 还没人打过，假人可以打。
+        /// </para>
+        /// <para>
+        /// 判据用 <c>Connection.IsBot</c> 而不是角色名 / 账号：假人是伪连接，这个标记在整个
+        /// 生命周期里恒为 true，重启后重建的假人也是 true。
+        /// </para>
+        /// </summary>
+        public static bool IsOwnedByRealPlayer(MonsterObject monster)
+        {
+            PlayerObject owner = monster?.EXPOwner;
+
+            if (owner == null) return false;
+
+            // Connection 为 null 说明这个人已经下线（击杀权还挂着）。这种情况当作「没人在打」，
+            // 让假人接着打，免得怪烂在地上、刷怪点被一具「僵尸所有权」卡住。
+            if (owner.Connection == null) return false;
+
+            return !owner.Connection.IsBot;
         }
 
         /// <summary>把坐标包成 Point（避免调用方到处 new）。</summary>

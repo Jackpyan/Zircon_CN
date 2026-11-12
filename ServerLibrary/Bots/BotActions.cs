@@ -33,6 +33,25 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 攻击一个玩家（P3-4 红名 PK）。与 <see cref="TryAttack"/> 同一套校验，
+        /// 区别只是目标类型 —— 引擎的 <c>Attack</c> 会自己做 PvP 判定（安全区、等级差、善恶值）。
+        /// <para>调用方必须保证目标是红名，并且已经走到相邻格。</para>
+        /// </summary>
+        public static bool TryAttackPlayer(PlayerObject player, PlayerObject target)
+        {
+            if (player == null || target == null) return false;
+            if (player == target) return false;
+            if (player.Dead || !player.CanAttack) return false;
+            if (target.Dead || target.Node == null) return false;
+
+            if (BotNavigator.Distance(player.CurrentLocation, target.CurrentLocation) > 1) return false;
+
+            player.Attack(Functions.DirectionFromPoint(player.CurrentLocation, target.CurrentLocation), MagicType.None);
+
+            return true;
+        }
+
+        /// <summary>
         /// 拾取地面物品。距离由引擎校验，太远会自动走一步再捡（引擎内部逻辑）。
         /// <para>
         /// 返回值是**引擎的真实结果**，不是「我发了个请求」。

@@ -292,13 +292,23 @@ namespace Server.Bots
             return true;
         }
 
-        /// <summary>发红蓝药。库里找不到对应药水时静默跳过（不阻断上线）。</summary>
+        /// <summary>
+        /// 发红蓝药。库里找不到对应药水时静默跳过（不阻断上线）。
+        /// <para>
+        /// 战士<b>不发蓝药</b>（<see cref="BotItemRules.NeedsManaPotions"/>）：喝药分支是
+        /// 「非战士且蓝低于 30% 才喝」，战士一辈子喝不掉一瓶，而发下来的药卖不掉的话
+        /// 就是几十点永久负重。实测（2026-11-12）<c>三更雪</c>、<c>江湖客</c>
+        /// 两个战士背包里各躺着 40 瓶魔法药，负重 153/84、165/84。
+        /// </para>
+        /// </summary>
         private static int GrantPotions(PlayerObject player, int count)
         {
             int granted = 0;
 
             granted += GivePotion(player, Stat.Health, count);
-            granted += GivePotion(player, Stat.Mana, count);
+
+            if (BotItemRules.NeedsManaPotions(player.Character?.Class ?? MirClass.Warrior))
+                granted += GivePotion(player, Stat.Mana, count);
 
             return granted;
         }
@@ -309,7 +319,13 @@ namespace Server.Bots
 
             if (potion == null) return 0;
 
-            ItemCheck check = new ItemCheck(potion, count, UserItemFlags.Bound | UserItemFlags.Worthless, TimeSpan.Zero);
+            // 不带 Bound | Worthless：
+            //   · Worthless 被引擎 NPCSell 直接拒收（价格 0 干脆不卖），
+            //     假人自己的卖货口径（BotItemRules.IsSellBlocked）也会跳过它；
+            //   · 假人不做玩家交易，Bound 对它没有任何保护作用。
+            // 结果就是「发的药越多、负重越死」—— 实测 40 瓶绑定蓝药 = 40 点永久负重，
+            // 而 BotNewbieGold=50 万，靠卖启动药换钱根本不构成套利。
+            ItemCheck check = new ItemCheck(potion, count, UserItemFlags.None, TimeSpan.Zero);
 
             if (!player.CanGainItems(false, check)) return 0;
 

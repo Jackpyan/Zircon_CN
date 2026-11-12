@@ -435,7 +435,9 @@ Check(keepItem != null, "能找到 IsKeepItem 判定方法");
 
 if (keepItem != null)
 {
-    bool IsKeep(UserItem item) => (bool)(keepItem.Invoke(null, new object[] { item }) ?? false);
+    // IsKeepItem 现在多了一个「药水保留额度」参数（超重时额度外的药可以卖，
+    // 见 BotPotionBudget）。这里验的是**未超重**的保守行为，所以传不限额度。
+    bool IsKeep(UserItem item) => (bool)(keepItem.Invoke(null, new object[] { item, BotPotionBudget.Unlimited() }) ?? false);
 
     Check(IsKeep(MakeUserItem(townScroll)), "回城卷属于保留物品，不卖");
     Check(IsKeep(MakeUserItem(potion)), "药属于保留物品，不卖");

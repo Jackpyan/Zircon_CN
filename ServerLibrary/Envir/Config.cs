@@ -242,6 +242,170 @@ namespace Server.Envir
 
         /// <summary>同一张地图上最多放几个假人练级，超了就跨图分流（防止一堆人抢一片刷怪区）。</summary>
         public static int BotMapCapacity { get; set; } = 8;
+
+        /// <summary>
+        /// 真人优先：已经被真人打过的怪（引擎的 <c>MonsterObject.EXPOwner</c> = 谁先打谁拥有）假人不再抢。
+        /// <para>
+        /// 不开这个，假人会围着真人正在打的怪一起砍 —— 这是真人最容易察觉、也最容易反感的一条。
+        /// </para>
+        /// </summary>
+        public static bool BotRespectRealPlayerTags { get; set; } = true;
+
+        /// <summary>BOSS 留给真人：假人跳过 <c>MonsterInfo.IsBoss</c> 的怪（抢掉落 + 容易被围死）。</summary>
+        public static bool BotSkipBoss { get; set; } = true;
+
+        /// <summary>
+        /// 假人说话总开关（默认关）。
+        /// <para>
+        /// 关着的时候假人一句不说；开着才按 <c>Bots/chat.txt</c> 的语料说话。
+        /// 默认关是因为它会往全服聊天频道和 <c>Logs.txt</c> 里写字，属于「上线前要人确认」的行为。
+        /// </para>
+        /// </summary>
+        public static bool BotChatEnabled { get; set; } = false;
+
+        /// <summary>同一个假人两次说话的最小间隔（秒）。默认 15 分钟。</summary>
+        public static int BotChatIntervalMinSeconds { get; set; } = 900;
+
+        /// <summary>同一个假人两次说话的最大间隔（秒）。默认 40 分钟。</summary>
+        public static int BotChatIntervalMaxSeconds { get; set; } = 2400;
+
+        /// <summary>是否允许上世界频道（<c>!@</c>）。关掉就只在本图普通频道说话。</summary>
+        public static bool BotChatWorldEnabled { get; set; } = true;
+
+        /// <summary>世界频道的最低等级。引擎硬要求 33 级，配低了也发不出去。</summary>
+        public static int BotChatWorldMinLevel { get; set; } = 33;
+
+        /// <summary>说世界频道的概率（0~100）。默认 35%，其余走本图普通频道。</summary>
+        public static int BotChatWorldPercent { get; set; } = 35;
+
+        /// <summary>全服两次世界频道说话的最小间隔（秒）。防止几个假人同时刷世界。</summary>
+        public static int BotChatWorldCooldownSeconds { get; set; } = 40;
+
+        /// <summary>
+        /// 走路停顿（P2-2）：每走 5~15 步随机站 0.4~1.2 秒，消除「机器人匀速巡逻」的观感。
+        /// 打架 / 掉血 / 目标贴脸时会自动打断。
+        /// </summary>
+        public static bool BotWalkPauseEnabled { get; set; } = true;
+
+        /// <summary>城里闲逛（P2-3）：补给/卖货办完后按概率在主城多待 1~3 分钟，让城里有人。</summary>
+        public static bool BotTownStrollEnabled { get; set; } = true;
+
+        /// <summary>闲逛概率（0~100），默认 30%。</summary>
+        public static int BotTownStrollPercent { get; set; } = 30;
+
+        /// <summary>
+        /// 误操作（P2-5）：极小概率走岔一步，破「完美脚本」感。
+        /// <para>默认开启但概率极低（0.5%）、每小时最多 2 次、血 &lt; 30% 与安全区不触发。</para>
+        /// </summary>
+        public static bool BotMistakeEnabled { get; set; } = true;
+
+        /// <summary>每个假人每小时最多犯几次错。硬上限，别调太高。</summary>
+        public static int BotMistakePerHour { get; set; } = 2;
+
+        /// <summary>
+        /// 作息（P2-6）：夜间时段把在线目标按比例缩水。
+        /// 缩水是「一个一个下线」（受 <see cref="BotMaxChangePerTick"/> 约束），不是整点集体消失。
+        /// </summary>
+        public static bool BotNightEnabled { get; set; } = true;
+
+        /// <summary>夜间时段起点（0~23）。默认 1 点。</summary>
+        public static int BotNightMinHour { get; set; } = 1;
+
+        /// <summary>夜间时段终点（0~23，不含）。默认 7 点。与起点相等 = 不启用。</summary>
+        public static int BotNightMaxHour { get; set; } = 7;
+
+        /// <summary>夜间目标百分比（默认 50 = 减半）。</summary>
+        public static int BotNightScalePercent { get; set; } = 50;
+
+        /// <summary>
+        /// 换图流动（P2-4）：在同一张图待满 25~45 分钟后，按等级段随机换一张练级图。
+        /// 目的不是效率，是让地图上的人「在流动」。复用 90 秒换图冷却 + 5 分钟防折返。
+        /// </summary>
+        public static bool BotMapRotateEnabled { get; set; } = true;
+
+        /// <summary>
+        /// 社交总开关（P3）。关着的时候行会 / 组队 / 交易 / PK 全部不动作。
+        /// <para>
+        /// 三条硬禁令写在 <see cref="Server.Bots.BotSocial"/> 里：不邀请真人、不私聊真人、不向真人发起交易。
+        /// </para>
+        /// </summary>
+        public static bool BotSocialEnabled { get; set; } = false;
+
+        /// <summary>假人行会（P3-1）。需要 <see cref="BotSocialEnabled"/> 一起打开。</summary>
+        public static bool BotGuildEnabled { get; set; } = true;
+
+        /// <summary>要建几个假人行会（不超过 <see cref="BotGuildNames"/> 的条数）。</summary>
+        public static int BotGuildCount { get; set; } = 2;
+
+        /// <summary>
+        /// 行会名，逗号分隔。
+        /// <para>
+        /// <b>只能是字母数字</b>：<c>Globals.GuildNameRegex</c> 是 <c>^[A-Za-z0-9]{n,m}$</c>，中文名建不出来。
+        /// </para>
+        /// </summary>
+        public static string BotGuildNames { get; set; } = "MoonLight,OldTimes";
+
+        /// <summary>建会资格等级（真人客户端也是 30 级才能建会）。</summary>
+        public static int BotGuildMinLevel { get; set; } = 30;
+
+        /// <summary>
+        /// 建会时额外买多少「成员格」（每格 100 万金币）。
+        /// <para>成员上限 = 10 + 这个值。默认 5 → 15 个位置，两个会能装下 30 个假人。</para>
+        /// </summary>
+        public static int BotGuildMembers { get; set; } = 5;
+
+        /// <summary>
+        /// 建会注资上限（金币）。0 = 不注资（假人只能靠自己攒，基本建不起来）。
+        /// <para>
+        /// 建会要 750 万，假人靠打怪攒不现实，所以这里允许一次性补差额。
+        /// <b>这是往经济里注水</b>：两个会约 2500 万，开之前先想清楚。
+        /// </para>
+        /// </summary>
+        public static long BotGuildGrantGold { get; set; } = 13000000;
+
+        /// <summary>
+        /// 红名 PK（P3-4）。<b>会主动攻击真人红名</b>，是整个假人系统里唯一这么做的功能。
+        /// 只打红名、只吓唬（对方血 &lt; 30% 收手）、有分钟级间隔。
+        /// </summary>
+        public static bool BotPkEnabled { get; set; } = true;
+
+        /// <summary>同一个假人两次主动 PK 的最小间隔（分钟）。默认 30。</summary>
+        public static int BotPkIntervalMinutes { get; set; } = 30;
+
+        /// <summary>发现红名的半径（格）。默认 8。</summary>
+        public static int BotPkRadius { get; set; } = 8;
+
+        /// <summary>
+        /// 假人互组（P3-2）：同图、等级接近、都没队的假人互相组队。
+        /// 只影响观感（城里/野外有队伍），不影响各自练级路线。
+        /// </summary>
+        public static bool BotGroupEnabled { get; set; } = true;
+
+        /// <summary>组队的最低等级（太低级的号组队没意义，也容易被当成脚本）。</summary>
+        public static int BotGroupMinLevel { get; set; } = 5;
+
+        /// <summary>组队的最大等级差。超过这个差距引擎分经验也不划算。</summary>
+        public static int BotGroupLevelGap { get; set; } = 5;
+
+        /// <summary>
+        /// 榜首降速（P4-4）：假人连续占住排行榜前几名就暂停练级，把位置让给真人。
+        /// <para>
+        /// 这是「不设等级封顶」的配套措施 —— 封顶会让等级停成一条直线，比占榜还假；
+        /// 降速是「跑一阵、歇两小时」，看起来像玩家自己下线了。
+        /// </para>
+        /// </summary>
+        public static bool BotTopSlowEnabled { get; set; } = true;
+
+        /// <summary>「前几名」算占榜。默认 3。</summary>
+        public static int BotTopRankLimit { get; set; } = 3;
+
+        /// <summary>连续占榜多少分钟后开始降速。默认 30 分钟。</summary>
+        public static int BotTopHoldMinutes { get; set; } = 30;
+
+        /// <summary>降速持续多少分钟。默认 120 分钟（2 小时）。</summary>
+        public static int BotTopSlowMinutes { get; set; } = 120;
+
+
         /// <summary>红药低于这个瓶数就回城补给（0 = 不自动补给）。</summary>
         public static int BotRestockPotionLow { get; set; } = 5;
         /// <summary>每次补给买多少瓶红药。</summary>

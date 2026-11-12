@@ -70,6 +70,12 @@ namespace Server.Bots
         /// </para>
         /// </summary>
         private const int AutoPathToNpcDistance = 20;
+
+        /// <summary>
+        /// 走到卖货 NPC 的耐心：这么多秒还没能靠近一格，就认定这条路堵死，换一张图卖。
+        /// <para>30 秒 ≈ 正常走 100~300 格，远大于城内任何绕楼距离；</para>
+        /// </summary>
+        private const int TradeApproachStallSeconds = 30;
         /// <summary>同一张图上最多同时有几个假人在练级，超了就分流（后台可调）。</summary>
         private int MapCapacity => Math.Max(1, Options.MapCapacity);
         /// <summary>本图连续几次找不到怪才考虑跨图（避免刷怪间隙就乱跑）。</summary>
@@ -118,6 +124,13 @@ namespace Server.Bots
         /// <summary>累计使用回城卷的次数（衡量「瞬移回城」这条捷径的利用量）。</summary>
         public int TownScrollUseCount { get; private set; }
 
+        /// <summary>
+        /// 最近一次**成功放出**的攻击魔法（P5 详情用，照片里的「最近技能 Thrusting」）。
+        /// <para>只在 <c>BotSkills.TryCastAttack</c> 返回 true 的那一笔记，没放出去的不算 ——
+        /// 否则「蓝不够在等冷却」也会被记成放过技能。</para>
+        /// </summary>
+        public string LastMagic { get; private set; } = string.Empty;
+
         public decimal ExperienceStart { get; private set; }
 
         private DateTime _nextActionTime;
@@ -126,6 +139,64 @@ namespace Server.Bots
 
         /// <summary>连续补给失败次数。用来做退避：失败越多，下次重试间隔越长。</summary>
         private int _restockFailStreak;
+
+        /// <summary>
+        /// 下一次允许说话的时间（P2-1）。首次为 <see cref="DateTime.MinValue"/>，
+        /// 由 <see cref="ProcessChat"/> 第一次调用时按「15~40 分钟」随机排期 ——
+        /// 这样 30 个假人不会在同一分钟集体开口。
+        /// </summary>
+        private DateTime _nextChatTime;
+
+        /// <summary>上一帧的坐标（P2-2 靠「位置变了」来数走了几步，不用改 10 个走格调用点）。</summary>
+        private Point _lastPosition;
+
+        /// <summary>距离上一次「走路停顿」走了多少步。</summary>
+        private int _stepsSincePause;
+
+        /// <summary>下次停顿在第几步（5~15 随机）。</summary>
+        private int _nextPauseAt = 8;
+
+        /// <summary>停顿结束时间；<see cref="DateTime.MinValue"/> = 没在停顿。</summary>
+        private DateTime _walkPauseUntil;
+
+        /// <summary>开始停顿时记的血量百分比，用来判断「被打断」。</summary>
+        private int _pauseHealthPercent;
+
+        /// <summary>城里闲逛到什么时候（P2-3）。<see cref="DateTime.MinValue"/> = 没在闲逛。</summary>
+        private DateTime _strollUntil;
+
+        /// <summary>闲逛时下一次挪步的时间。</summary>
+        private DateTime _nextStrollStep;
+
+        /// <summary>榜首降速期「走回安全区」时下一次挪步的时间（P4-4）。</summary>
+        private DateTime _nextSlowStep;
+
+        /// <summary>降速期上一次走的分支，用来「分支变化时打一条日志」（P4-4 排障用）。</summary>
+        private string _slowBranch;
+
+        /// <summary>下一次「走岔一步」的时间（P2-5）。<see cref="DateTime.MinValue"/> = 还没排期。</summary>
+        private DateTime _nextMistakeTime;
+
+        /// <summary>上一次看到的所在地图，用来发现「刚换图」（P2-4）。</summary>
+        private MapInfo _lastMapInfo;
+
+        /// <summary>进入当前地图的时刻。</summary>
+        private DateTime _mapEnteredAt;
+
+        /// <summary>这张图待多久之后考虑换一张（25~45 分钟随机）。</summary>
+        private TimeSpan _mapRotateAfter = TimeSpan.FromMinutes(30);
+
+        /// <summary>下一次允许主动 PK 的时间（P3-4）。</summary>
+        private DateTime _nextPkTime;
+
+        /// <summary>本次在线累计 PK 次数（只用于日志与后台观察）。</summary>
+        private int _pkCount;
+
+        /// <summary>开始连续占据排行榜前 N 名的时刻（P4-4）。<see cref="DateTime.MinValue"/> = 不在前 N。</summary>
+        private DateTime _topSince;
+
+        /// <summary>降速结束时间（P4-4）。<see cref="DateTime.MinValue"/> = 没在降速。</summary>
+        private DateTime _slowUntil;
         private DateTime _nextOptionsRefresh;
         private BotOptions _options;
         private Point _huntPoint;
@@ -237,8 +308,46 @@ namespace Server.Bots
         /// </summary>
         private MapInfo _tradeDest;
 
-        /// <summary>回城交易的冷却：卖完 / 修完别马上又跑一趟。</summary>
-        private DateTime _tradeCooldown;
+        /// <summary>
+        /// 卖货冷却：卖完别马上又跑一趟（20 秒 —— 背包还满的话下一拍就该再卖）。
+        /// </summary>
+        private DateTime _sellCooldown;
+
+        /// <summary>
+        /// 本轮交易「走到商人身边」的最好成绩与达成时刻。
+        /// <para>
+        /// <b>为什么需要它</b>：A* 每帧重算，一旦唯一通路被动态占位（别的假人、怪、地上的掉落），
+        /// 就会「A* 说往东 → <c>Move</c> 被引擎拒 → 兜底 <c>TryStepAdjacent</c> 往西 →
+        /// 下一帧 A* 又说往东」来回摆。实测（2026-11-12）<c>夜行人</c> 在潘夜村
+        /// 距肉类商人帕克 9 格处摆了 14 分钟，每 3 分钟一次「交易超时」，
+        /// 负重 70/63（111%）一直降不下来 —— 它压根没走到 NPC 面前。
+        /// </para>
+        /// <para>
+        /// 判定用「距离有没有创新低」而不是「有没有移动」：绕楼走一段远路是正常的，
+        /// 但 30 秒都没靠近一格就说明这条路走不通，该换一张图卖。
+        /// </para>
+        /// </summary>
+        private int _tradeApproachBest;
+
+        /// <summary>上一次刷新 <see cref="_tradeApproachBest"/> 的时刻。</summary>
+        private DateTime _tradeApproachSince;
+
+        /// <summary>
+        /// 「这些图的商人我走不到 / 去不了」的退避表：图索引 → 解禁时刻。
+        /// 置位后 5 分钟内不再把它当卖货目的地，让 <see cref="ResolveTradeDestination"/> 换一张图
+        /// （比如去比奇城找墨菲）。用表而不是单个字段 —— 一次卖货可能连续试错好几张图。
+        /// </summary>
+        private readonly Dictionary<int, DateTime> _tradeMapBlockedUntil = new Dictionary<int, DateTime>();
+
+        /// <summary>
+        /// 修理冷却：耐久掉得慢，修完 10 分钟内不用再跑。
+        /// <para>
+        /// ⚠ 必须和卖货冷却**分开**。原先共用一个 <c>_tradeCooldown</c>，实测后果是：
+        /// 假人每 10 分钟才有一次交易机会，而那一次被「修装备」占掉（修理优先），
+        /// 于是负重 111%、48/48 满格的角色**永远卖不出东西**，卡死在挖取态。
+        /// </para>
+        /// </summary>
+        private DateTime _repairCooldown;
 
         /// <summary>转生失败后的冷却（满级但去不了市政厅时，别每帧重试）。</summary>
         private DateTime _rebirthCooldown;
@@ -298,7 +407,59 @@ namespace Server.Bots
             ExperienceStart = player?.Experience ?? 0;
             _lastLocation = player?.CurrentLocation ?? Point.Empty;
 
+            // 上线先修一次存量：买来的药带 Locked、启动资源发的药带 Bound|Worthless，
+            // 两种标记引擎/假人自己都不肯卖，会把负重永久占死。
+            RepairPotionFlags(log: true);
+
             EnterState(BotState.Idle, "刚上线，先站一会儿", TimeSpan.FromSeconds(SEnvir.Random.Next(2, 6)));
+        }
+
+        /// <summary>
+        /// 把背包里「药」身上那些「卖不掉」的标记清掉
+        /// （<see cref="UserItemFlags.Locked"/> / <see cref="UserItemFlags.Bound"/> / <see cref="UserItemFlags.Worthless"/>）。
+        ///
+        /// <para><b>为什么必须做</b>：引擎 <c>NPCBuy</c> 给<b>所有</b>买来的物品打 <c>Locked</c>
+        /// （<c>PlayerObject.cs</c> 里 <c>UserItemFlags flags = UserItemFlags.Locked;</c>），
+        /// 而 <c>NPCSell</c> 直接拒收 Locked / Worthless，<c>ItemDrop</c> 也拒收 Locked ——
+        /// 于是补给买的药<b>既卖不掉也丢不掉</b>，只能等喝掉。</para>
+        ///
+        /// <para>第二类来源是<b>启动资源</b>（<c>BotFactory.GivePotion</c>）发的药，
+        /// 老版本给的是 <c>Bound | Worthless</c>：引擎同样拒收，而且假人自己的卖货口径
+        /// （<see cref="BotItemRules.IsSellBlocked"/>）也跳过带这三个标记的格子。
+        /// 实测（2026-11-12）<c>三更雪</c>（战士，负重 153/84）：
+        /// 40 瓶绑定魔法药 + 20 瓶绑定金创药 = 60 点<b>永久</b>负重，怎么卖都降不下来。</para>
+        ///
+        /// <para>假人没有交易行为，不存在「买了立刻卖回去」的套利，这层保护对它们只有副作用。
+        /// 修完仍由 <see cref="BotPotionBudget"/> 兜住「至少留够一轮补给量」，不会把药卖光。</para>
+        ///
+        /// <para>只修药水（<c>Consumable</c> 且回血/回蓝）。装备的 <c>Locked</c> 保持不动 ——
+        /// 装备还带着 <c>NonRefinable</c>，解锁会破坏精炼与卖店的经济口径。</para>
+        /// </summary>
+        private void RepairPotionFlags(bool log)
+        {
+            if (_player?.Inventory == null) return;
+
+            int repaired = 0;
+
+            for (int i = 0; i < _player.Inventory.Length; i++)
+            {
+                UserItem item = _player.Inventory[i];
+
+                if (item?.Info == null) continue;
+                if (!BotItemRules.IsPotion(item.Info.ItemType, item.Info.Stats[Stat.Health], item.Info.Stats[Stat.Mana])) continue;
+
+                UserItemFlags before = item.Flags;
+                UserItemFlags after = BotItemRules.RepairPotionFlags(before);
+
+                if (after == before) continue;
+
+                item.Flags = after;
+
+                repaired++;
+            }
+
+            if (log && repaired > 0)
+                BotLog.Warn(Profile.Seq, string.Format("修复 {0} 堆药的卖不掉标记（原 Locked/Bound/Worthless，卖不掉也丢不掉）", repaired));
         }
 
         /// <summary>
@@ -362,6 +523,21 @@ namespace Server.Bots
                 // 返回 true 表示本帧已经切到别的状态（例如药没了要回城），后面不用再处理旧状态。
                 if (ProcessSurvival()) return;
 
+                // 榜首降速（P4-4）：占了排行榜前几名的假人先歇着，把位置让给真人。
+                if (ProcessTopSlowdown()) return;
+
+                // 拟人化三件套（P2-2 / P2-5）：数步、停顿、偶发走错一步。
+                // 放在生存之后、状态机之前 —— 喝药不能被停顿挡住。
+                TrackSteps();
+                if (ShouldHoldForPause()) return;
+                if (TryMistake()) return;
+
+                // 说话与状态机无关（打怪、走路、城里发呆都可能开口），单独一路。
+                ProcessChat();
+
+                // 红名 PK（P3-4）：偶尔掺一脚；真动手了本帧就不再走状态机。
+                if (TryPk()) return;
+
                 switch (State)
                 {
                     case BotState.Idle:
@@ -417,6 +593,15 @@ namespace Server.Bots
         {
             if (SEnvir.Now < _stateDeadline) return;
 
+            // 城里闲逛（P2-3）：还没到点就继续在城里晃，不急着出城。
+            if (SEnvir.Now < _strollUntil)
+            {
+                ProcessTownStroll();
+                return;
+            }
+
+            _strollUntil = DateTime.MinValue;
+
             if (!TryPickHuntPoint())
             {
                 // 三种情况都会走到这里：本图没有等级合适的点、不在白名单、或者人已经满了。
@@ -445,7 +630,7 @@ namespace Server.Bots
             }
 
             // 路上看到怪就先打，不必走到点上（1 级号 52 血，闷头走容易被围死）。
-            MonsterObject monster = BotPerception.FindHuntTarget(_player, HuntRadius);
+            MonsterObject monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss);
 
             if (monster != null)
             {
@@ -502,6 +687,11 @@ namespace Server.Bots
 
         private void ProcessFight()
         {
+            // 待久了换一张图（P2-4）。真换成功的话状态已经切走，本帧到此为止。
+            MaybeRotateMap();
+
+            if (State != BotState.Fight) return;
+
             MonsterObject monster = _target;
 
             // 上一刀把它砍死了：记一次击杀，再去找下一只。
@@ -550,7 +740,7 @@ namespace Server.Bots
 
             if (monster == null || monster.Node == null)
             {
-                monster = BotPerception.FindHuntTarget(_player, HuntRadius);
+                monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss);
                 _target = monster;
             }
 
@@ -620,12 +810,14 @@ namespace Server.Bots
                 {
                     if (!_player.CanCast)
                     {
-                        LastDetail = string.Format("等 {0} 冷却（蓝 {1}/{2}）", attack, _player.CurrentMP, _player.Stats[Stat.Mana]);
+                        LastDetail = string.Format("等 {0} 冷却（蓝 {1}/{2}）", BotText.Magic(attack), _player.CurrentMP, _player.Stats[Stat.Mana]);
                         return;
                     }
 
                     if (BotSkills.TryCastAttack(_player, monster))
                     {
+                        LastMagic = BotText.Magic(attack);
+
                         LastDetail = string.Format("{0} 打 {1}（距离 {2}，蓝 {3}/{4}）",
                             attack, MonsterName(monster), distance, _player.CurrentMP, _player.Stats[Stat.Mana]);
 
@@ -1692,7 +1884,7 @@ namespace Server.Bots
                         // 实测那样会形成热循环（进门 → 卖不掉 → 收尾冷却 → 下一帧又进门），
                         // 30 个假人 30 分钟刷出 66,635 次空交易、18 个被判定 stuck。
                         // 冷却只有 20 秒，等得起。
-                        if (SEnvir.Now >= _tradeCooldown && SetTradeTarget(SellableItemType()))
+                        if (SEnvir.Now >= _sellCooldown && SetTradeTarget(SellableItemType()))
                         {
                             // 5 分钟：这一趟可能要跑好几类商人才卖得干净（装备/矿石/材料各一个 NPC）。
                             EnterState(BotState.Trade, "补给前先清背包（只留药和卷）", TimeSpan.FromMinutes(5));
@@ -1716,7 +1908,7 @@ namespace Server.Bots
 
             // 6) 日常：背包满了要回城卖货腾格子（否则会永久卡在拾取态）；
             //    装备耐久归零会被引擎整件跳过（攻击力变 0），也要修。
-            if (State != BotState.Trade && SEnvir.Now >= _tradeCooldown && TryStartTrade())
+            if (State != BotState.Trade && TryStartTrade())
                 return true;
 
             return false;
@@ -2430,6 +2622,9 @@ namespace Server.Bots
             BotLog.Debug(Profile.Seq, string.Format("买药诊断：{0} 买到 {1} ×{2}（{3} → {4}，金币 {5}）",
                 restoreStat, good.Item?.ItemName, affordable, before, after, gold));
 
+            // 刚买的药带着 Locked，不修的话下次负重超了也卖不掉（见 RepairPotionFlags）。
+            RepairPotionFlags(log: false);
+
             return true;
         }
 
@@ -2523,7 +2718,8 @@ namespace Server.Bots
                 success ? "成功" : "失败", detail,
                 basePotions, potions, baseScrolls, scrolls));
 
-            EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(3));
+            // 办完事不一定要立刻出城：按概率在城里待一会儿（P2-3）。
+            LeaveTownOrStroll(detail);
         }
 
         #region 挖取（Harvest）
@@ -2617,7 +2813,7 @@ namespace Server.Bots
             // 一次挖完等一小会儿再挖下一次（HarvestCount 要减到 0 才能拿全）。
             if (SEnvir.Now < _nextHarvestTime)
             {
-                LastDetail = string.Format("等待挖取（还要再挖 {0} 次）", corpse.HarvestCount);
+                LastDetail = "等待挖取" + HarvestRemain(corpse.HarvestCount);
                 return;
             }
 
@@ -2627,8 +2823,7 @@ namespace Server.Bots
             // （ActionTime 会被其它动作刷新，早一点发会被引擎排队而不是立即执行）。
             _nextHarvestTime = SEnvir.Now.AddMilliseconds(700);
 
-            LastDetail = string.Format("挖 {0}（还要再挖 {1} 次）",
-                corpse.MonsterInfo?.MonsterName ?? "尸体", Math.Max(0, corpse.HarvestCount));
+            LastDetail = string.Format("挖 {0}", corpse.MonsterInfo?.MonsterName ?? "尸体") + HarvestRemain(corpse.HarvestCount);
 
             // ⚠ 结束条件**不能**用 HarvestCount：
             // 引擎里 `if (ob.HarvestCount > 0) { ob.HarvestCount--; continue; }` ——
@@ -2650,6 +2845,18 @@ namespace Server.Bots
             BotLog.Debug(Profile.Seq, detail);
 
             EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(2));
+        }
+
+        /// <summary>
+        /// 挖取剩余次数的说明文字。
+        /// <para>
+        /// <c>HarvestCount</c> 是**空挖次数**：前 N 次挖都是空的，第 N+1 次才真正拿到东西。
+        /// 所以它减到 0 时不能说「还要再挖 0 次」—— 那一次正是有收获的那一下。
+        /// </para>
+        /// </summary>
+        private static string HarvestRemain(int count)
+        {
+            return count > 0 ? string.Format("（还要再挖 {0} 次）", count) : "（这一下就有收获）";
         }
 
         #endregion
@@ -2874,8 +3081,23 @@ namespace Server.Bots
             if (_player?.Character == null) return false;
             if (_player.Dead) return false;
 
+            // 背包余量 / 负重这两项下面三个分支都要用，先算一次。
+            //    格子阈值留 8 格余量：不然走到一半捡两件又满了，会反复半途折返。
+            int free = BotPerception.FreeInventorySlots(_player);
+
+            long capacity = _player.Stats[Stat.BagWeight];
+            bool overweight = capacity > 0 && _player.BagWeight >= capacity * 9 / 10;
+
+            // 真要卖货之前，先把「卖不掉的药」修成能卖的（幂等，只扫一遍 48 格背包）。
+            //
+            // 为什么不能只在上线时修：药是**边打边买**的，上线那一刻还没买，
+            // 等负重爆了才买的那批照样带 Locked；启动资源发的则带 Bound|Worthless。
+            // 实测 三更雪 负重 153/84 里 60 点是绑定药，上线修一次也救不了它 ——
+            // 它是在线期间被补给的 Locked 药顶上去的。
+            if (overweight || free <= 8) RepairPotionFlags(log: false);
+
             // 1) 有装备坏了 → 去修理（修理优先于卖货：攻击力为 0 是致命的）
-            if (HasBrokenEquipment())
+            if (SEnvir.Now >= _repairCooldown && HasBrokenEquipment())
             {
                 _tradeIsRepair = true;
                 SetTradeTarget(BrokenEquipmentType());
@@ -2886,8 +3108,13 @@ namespace Server.Bots
             }
 
             // 2) 背包快满了 → 去卖货腾格子
-            //    阈值留 8 格余量：不然走到一半捡两件又满了，会反复半途折返。
-            int free = BotPerception.FreeInventorySlots(_player);
+            //
+            // ⚠ 卖货冷却闸放在修理分支**之后**：修理有自己的 10 分钟冷却，不该被卖货的 20 秒挡。
+            // 这道闸也不能只写在「补给前先清背包」那一段 —— 下面 2/3/4 三个分支
+            // （格子满了 / 没钱了 / 负重爆了）都是**每拍都成立**的条件，
+            // 少了它就是「收尾 → 下一拍又进 Trade」的热循环：实测（2026-11-12 21:27）
+            // 夜行人 因为目的地图规划失败，每 0.5 秒刷一条「回 比奇城堡 的路线规划失败」。
+            if (SEnvir.Now < _sellCooldown) return false;
 
             if (free <= 8 && HasSellableItems())
             {
@@ -2931,9 +3158,7 @@ namespace Server.Bots
             //
             // 实测（2026-11-11）：金币 500,000、背包空位 18/48，日志
             // 「买药诊断：Health 下单失败（金创药 ×20 …）」刷了几十条，红药永远是 0。
-            long capacity = _player.Stats[Stat.BagWeight];
-
-            if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10 && HasSellableItems())
+            if (overweight && HasSellableItems())
             {
                 _tradeIsRepair = false;
 
@@ -3025,14 +3250,14 @@ namespace Server.Bots
         /// </summary>
         private bool HasSellableItems()
         {
+            BotPotionBudget budget = NewPotionBudget();
+
             foreach (UserItem item in _player.Inventory)
             {
                 if (item?.Info == null) continue;
                 if (!item.Info.CanSell) continue;
-                if ((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound) continue;
-                if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
-                if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
-                if (IsKeepItem(item)) continue;
+                if (BotItemRules.IsSellBlocked(item.Flags)) continue;
+                if (IsKeepItem(item, budget)) continue;
 
                 return true;
             }
@@ -3058,19 +3283,45 @@ namespace Server.Bots
         /// <c>Stats[Mana]</c> 之一大于 0）—— 否则会出现「数药时算它、卖货时又卖它」的自相矛盾。
         /// </para>
         /// </summary>
-        private static bool IsKeepItem(UserItem item)
+        private static bool IsKeepItem(UserItem item, BotPotionBudget budget)
         {
             if (item?.Info == null) return false;
 
             // 回城卷：回城的工具，绝不能卖。
             if (BotActions.IsTownScroll(item)) return true;
 
-            // 药：回血 / 回蓝的消耗品，自己要用。
-            if (item.Info.ItemType == ItemType.Consumable &&
-                (item.Info.Stats[Stat.Health] > 0 || item.Info.Stats[Stat.Mana] > 0))
-                return true;
+            if (item.Info.ItemType != ItemType.Consumable) return false;
 
-            return false;
+            bool heals = item.Info.Stats[Stat.Health] > 0;
+            bool restoresMana = item.Info.Stats[Stat.Mana] > 0;
+
+            // 卷轴 / 食物之类不算药，按普通物品处理（能卖就卖）。
+            if (!heals && !restoresMana) return false;
+
+            Stat stat = heals ? Stat.Health : Stat.Mana;
+            long weight = (long)item.Info.Weight * Math.Max(1, item.Count);
+
+            // 额度内保留，超出额度的可以卖（见 BotPotionBudget 的说明）。
+            return budget.Allow(stat, weight);
+        }
+
+        /// <summary>
+        /// 本轮遍历要用的药水保留额度。
+        /// <para>
+        /// 未到「该卖货」的程度（负重 &lt;90%）→ <see cref="BotPotionBudget.Unlimited"/>，一瓶不卖，
+        /// 保持原来的保守行为。超重了才限量，把囤积的超出部分吐出来解开死锁。
+        /// </para>
+        /// </summary>
+        private BotPotionBudget NewPotionBudget()
+        {
+            BotOptions options = Options;
+
+            return BotPotionBudget.For(
+                _player.BagWeight,
+                _player.Stats[Stat.BagWeight],
+                _player.Character?.Class == MirClass.Warrior,
+                options.RestockBuyRed,
+                options.RestockBuyBlue);
         }
 
         /// <summary>
@@ -3087,17 +3338,31 @@ namespace Server.Bots
         /// </summary>
         private ItemType SellableItemType()
         {
-            // 按**件数**排序：优先卖掉占位最多的那一类（挖取物 Meat 常常是几十件，
-            // 随便挑一件装备卖掉毫无意义，背包还是满的，会变成「卖一件→又满→再卖」的循环）。
-            Dictionary<ItemType, int> counts = SellableTypeCounts();
+            Dictionary<ItemType, SellableGroup> groups = SellableTypeCounts();
 
-            if (counts.Count == 0) return ItemType.Nothing;
+            if (groups.Count == 0) return ItemType.Nothing;
 
-            // 优先挑「**当前地图**就能卖」的类型：卖货最怕跑一趟还是卖不掉，
-            // 沙漠土城/诺玛村落 都没有肉类收购商，而挖取物恰恰全是 Meat。
+            // 排序维度按「这次是为了解决什么」来选：
+            //   · 负重已经爆了（≥90%）→ 按**总重**挑，而且**不迁就当前地图**；
+            //   · 只是格子满了 → 按**件数**挑，优先就地卖（腾格子更快）。
+            long capacity = _player.Stats[Stat.BagWeight];
+            bool byWeight = capacity > 0 && _player.BagWeight >= capacity * 9 / 10;
+
             Map current = _player.CurrentMap;
 
-            ItemType pick = PickByMap(counts, current);
+            if (byWeight)
+            {
+                // 减重优先。原来这里先看「当前地图能不能卖」，实测后果是：
+                // 三更雪背包里 140 重药水 + 8 重肉，练级图有肉商、没药店 →
+                // 每次都挑肉，卖了半小时负重一点没降（143/116 纹丝不动）。
+                // 减重是硬需求，值得为它跑一趟能收的城：
+                // 当前地图收不了也没关系，SetTradeTarget → ResolveTradeDestination 会挑一张能收的图。
+                return groups.OrderByDescending(x => x.Value.Weight).First().Key;
+            }
+
+            // 挑「**当前地图**就能卖」的类型：卖货最怕跑一趟还是卖不掉，
+            // 沙漠土城/诺玛村落 都没有肉类收购商，而挖取物恰恰全是 Meat。
+            ItemType pick = PickByMap(groups, current, byWeight);
 
             if (pick != ItemType.Nothing) return pick;
 
@@ -3105,53 +3370,67 @@ namespace Server.Bots
             MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
             Map homeMap = home == null ? null : SEnvir.GetMap(home);
 
-            pick = PickByMap(counts, homeMap);
+            pick = PickByMap(groups, homeMap, byWeight);
 
             if (pick != ItemType.Nothing) return pick;
 
             // 都不行就交给目的地解析去挑一张能收的图（宁可跑一趟，也别抱着背包不动）
-            return counts.OrderByDescending(x => x.Value).First().Key;
+            return groups.OrderByDescending(x => x.Value.Count).First().Key;
         }
 
-        /// <summary>在 <paramref name="map"/> 收得下的类型里，挑件数最多的那类。</summary>
-        private static ItemType PickByMap(Dictionary<ItemType, int> counts, Map map)
+        /// <summary>一类可卖物品的统计：件数与总重。</summary>
+        private sealed class SellableGroup
+        {
+            public int Count;
+            public long Weight;
+        }
+
+        /// <summary>在 <paramref name="map"/> 收得下的类型里，挑排序值最高的那类。</summary>
+        private static ItemType PickByMap(Dictionary<ItemType, SellableGroup> groups, Map map, bool byWeight)
         {
             if (map == null) return ItemType.Nothing;
 
             ItemType best = ItemType.Nothing;
-            int bestCount = 0;
+            long bestRank = 0;
 
-            foreach (KeyValuePair<ItemType, int> pair in counts)
+            foreach (KeyValuePair<ItemType, SellableGroup> pair in groups)
             {
-                if (pair.Value <= bestCount) continue;
+                long rank = byWeight ? pair.Value.Weight : pair.Value.Count;
+
+                if (rank <= bestRank) continue;
                 if (BotPerception.FindTrader(map, pair.Key) == null) continue;
 
                 best = pair.Key;
-                bestCount = pair.Value;
+                bestRank = rank;
             }
 
             return best;
         }
 
-        /// <summary>背包里每种「可卖」物品各有多少件。</summary>
-        private Dictionary<ItemType, int> SellableTypeCounts()
+        /// <summary>背包里每种「可卖」物品各有多少件、多少重。</summary>
+        private Dictionary<ItemType, SellableGroup> SellableTypeCounts()
         {
-            Dictionary<ItemType, int> result = new Dictionary<ItemType, int>();
+            Dictionary<ItemType, SellableGroup> result = new Dictionary<ItemType, SellableGroup>();
+
+            BotPotionBudget budget = NewPotionBudget();
 
             foreach (UserItem item in _player.Inventory)
             {
                 if (item?.Info == null) continue;
                 if (!item.Info.CanSell) continue;
-                if ((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound) continue;
-                if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
-                if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
-                if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) continue;
-                if (IsKeepItem(item)) continue;
+                if (BotItemRules.IsSellBlocked(item.Flags)) continue;
+                if (IsKeepItem(item, budget)) continue;
 
                 ItemType type = item.Info.ItemType;
 
-                result.TryGetValue(type, out int count);
-                result[type] = count + 1;
+                if (!result.TryGetValue(type, out SellableGroup group))
+                {
+                    group = new SellableGroup();
+                    result[type] = group;
+                }
+
+                group.Count++;
+                group.Weight += (long)item.Info.Weight * Math.Max(1, item.Count);
             }
 
             return result;
@@ -3162,6 +3441,10 @@ namespace Server.Bots
         {
             _tradeItemType = type;
             _tradeDest = ResolveTradeDestination(type);
+
+            // 新的一趟，靠近进度清零（见 _tradeApproachBest）。
+            _tradeApproachBest = int.MaxValue;
+            _tradeApproachSince = SEnvir.Now;
 
             return _tradeDest != null;
         }
@@ -3184,13 +3467,13 @@ namespace Server.Bots
             if (type == ItemType.Nothing) return home;
 
             // ① 就地能卖 → 一步都不用跑
-            if (current != null && BotPerception.FindTrader(current, type) != null)
+            if (current != null && BotPerception.FindTrader(current, type) != null && !IsTradeMapBlocked(current.Info))
                 return current.Info;
 
             // ② 绑定主城（回城卷直达，1 秒）
             Map homeMap = home == null ? null : SEnvir.GetMap(home);
 
-            if (homeMap != null && BotPerception.FindTrader(homeMap, type) != null)
+            if (homeMap != null && BotPerception.FindTrader(homeMap, type) != null && !IsTradeMapBlocked(home))
                 return home;
 
             // ③ 白名单里（练级图，有六合石直达）按索引距离挑最近的一张
@@ -3202,6 +3485,7 @@ namespace Server.Bots
                 MapInfo info = SEnvir.MapInfoList.Binding.FirstOrDefault(x => x.Index == index);
 
                 if (info == null || info == home) continue;
+                if (IsTradeMapBlocked(info)) continue;
 
                 Map map = SEnvir.GetMap(info);
 
@@ -3218,6 +3502,26 @@ namespace Server.Bots
             return best;
         }
 
+        /// <summary>这张图是不是刚被判定「走不到商人 / 去不了」，还在退避期内。</summary>
+        private bool IsTradeMapBlocked(MapInfo map)
+        {
+            if (map == null) return false;
+            if (!_tradeMapBlockedUntil.TryGetValue(map.Index, out DateTime until)) return false;
+
+            return SEnvir.Now < until;
+        }
+
+        /// <summary>把「走不到商人 / 去不了」的图拉黑 5 分钟，让下一次卖货换一张图。</summary>
+        private void BlacklistTradeMap(MapInfo map)
+        {
+            if (map == null) return;
+
+            _tradeMapBlockedUntil[map.Index] = SEnvir.Now.AddMinutes(5);
+
+            BotLog.Warn(Profile.Seq, string.Format("{0} 的商人去不了，5 分钟内不再选它当卖货目的地",
+                map.Description));
+        }
+
         /// <summary>回城交易的主流程：走回主城 → 找到对应 NPC → 卖货或修理。</summary>
         private void ProcessTrade()
         {
@@ -3228,7 +3532,8 @@ namespace Server.Bots
                 // 走不回城（没卷 + 路线又远）时，20 秒冷却会让它立刻再跑一趟，
                 // 结果整段时间都在路上。实测 BOT#11 连续 12 次采样「正在走回 潘夜村 交易」。
                 // 超时属于「这趟不划算」，给 5 分钟冷却，先回去练级攒卷。
-                _tradeCooldown = SEnvir.Now.AddMinutes(5);
+                _sellCooldown = SEnvir.Now.AddMinutes(5);
+                _repairCooldown = SEnvir.Now.AddMinutes(5);
 
                 return;
             }
@@ -3254,7 +3559,7 @@ namespace Server.Bots
 
             if (home == null)
             {
-                FinishTrade(string.Format("没有任何地图收 {0}，放弃这趟卖货", _tradeItemType));
+                FinishTrade(string.Format("没有任何地图收 {0}，放弃这趟卖货", BotText.Item(_tradeItemType)));
                 return;
             }
 
@@ -3283,7 +3588,11 @@ namespace Server.Bots
 
                 if (!AutoPathService.Instance.TryStart(_player, home, HomePoint(home)))
                 {
-                    FinishTrade(string.Format("回 {0} 的路线规划失败，60 秒后再试", home.Description));
+                    // 规划不出来 = 这张图根本去不了（等级/道具限制）。把它也拉黑，
+                    // 否则下一次 ResolveTradeDestination 还会挑中它，变成「规划失败 → 20 秒后又规划失败」。
+                    BlacklistTradeMap(home);
+
+                    FinishTrade(string.Format("回 {0} 的路线规划失败，换张图卖", home.Description));
                     return;
                 }
 
@@ -3301,12 +3610,29 @@ namespace Server.Bots
             {
                 FinishTrade(_tradeIsRepair
                     ? string.Format("{0} 里找不到修理铺", home.Description)
-                    : string.Format("{0} 里没有收 {1} 的商人", home.Description, _tradeItemType));
+                    : string.Format("{0} 里没有收 {1} 的商人", home.Description, BotText.Item(_tradeItemType)));
 
                 return;
             }
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
+
+            // 走不到就换图（见 _tradeApproachBest）：30 秒没能靠近一格 = 这条路堵死了，
+            // 别在这儿耗到 3 分钟交易超时、再重来一遍（实测那样能耗 14 分钟以上）。
+            if (distance < _tradeApproachBest)
+            {
+                _tradeApproachBest = distance;
+                _tradeApproachSince = SEnvir.Now;
+            }
+            else if (distance > 2 && SEnvir.Now > _tradeApproachSince.AddSeconds(TradeApproachStallSeconds))
+            {
+                BlacklistTradeMap(home);
+
+                FinishTrade(string.Format("走不到 {0}（{1} 秒没能靠近一格，换张图卖）",
+                    npc.Name, TradeApproachStallSeconds));
+
+                return;
+            }
 
             // 和补给同一套：远距离交给 AutoPath，贪心走格在城内会原地打转。
             if (distance > AutoPathToNpcDistance)
@@ -3382,13 +3708,13 @@ namespace Server.Bots
 
                 if (button <= 0)
                 {
-                    FinishTrade(string.Format("这个 NPC 页里没有卖 {0} 的入口", _tradeItemType));
+                    FinishTrade(string.Format("这个 NPC 页里没有卖 {0} 的入口", BotText.Item(_tradeItemType)));
                     return;
                 }
 
                 BotActions.TryPressButton(_player, button);
 
-                LastDetail = string.Format("打开卖 {0} 的页面", _tradeItemType);
+                LastDetail = string.Format("打开卖 {0} 的页面", BotText.Item(_tradeItemType));
 
                 return;
             }
@@ -3397,7 +3723,7 @@ namespace Server.Bots
 
             if (links.Count == 0)
             {
-                FinishTrade(string.Format("没有可卖的 {0}", _tradeItemType));
+                FinishTrade(string.Format("没有可卖的 {0}", BotText.Item(_tradeItemType)));
                 return;
             }
 
@@ -3410,7 +3736,7 @@ namespace Server.Bots
             LastDetail = string.Format("卖了 {0}，金币 {1} → {2}", links.Count, goldBefore, goldAfter);
 
             FinishTrade(string.Format("卖了 {0} 件 {1}，赚了 {2} 金币",
-                links.Count, _tradeItemType, goldAfter - goldBefore));
+                links.Count, BotText.Item(_tradeItemType), goldAfter - goldBefore));
         }
 
         /// <summary>构造要卖出的物品列表（只挑当前商店收、且引擎允许卖的那些）。</summary>
@@ -3430,6 +3756,8 @@ namespace Server.Bots
             // 这个商店不收这类东西 —— 引擎会静默拒绝，别白跑一趟。
             if (!accepted) return links;
 
+            BotPotionBudget budget = NewPotionBudget();
+
             for (int i = 0; i < _player.Inventory.Length; i++)
             {
                 UserItem item = _player.Inventory[i];
@@ -3439,13 +3767,11 @@ namespace Server.Bots
                 if (!item.Info.CanSell) continue;
                 if (item.Count <= 0) continue;
 
-                if ((item.Flags & UserItemFlags.Bound) == UserItemFlags.Bound) continue;
-                if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
-                if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) continue;
-                if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) continue;
+                if (BotItemRules.IsSellBlocked(item.Flags)) continue;
 
                 // 药和回城卷不卖（药店收货类型含 Consumable，引擎不会拦，得自己挡）。
-                if (IsKeepItem(item)) continue;
+                // 但超重时额度外的药水可以卖 —— 否则囤了几十瓶药就再也降不下负重（见 BotPotionBudget）。
+                if (IsKeepItem(item, budget)) continue;
 
                 links.Add(new CellLinkInfo
                 {
@@ -3543,10 +3869,10 @@ namespace Server.Bots
             if (_player.AutoPath != null)
                 AutoPathService.Instance.Cancel(_player);
 
-            // 冷却：卖完别马上又跑一趟（但背包还满的话下一拍就要再卖，得留短冷却）；
-            // 修完给长一点 —— 耐久掉得慢，不用频繁跑。
-            // 卖货 20 秒：原来 1 分钟太长，而「药空了 → 等冷却」这一分钟正好是被打死的时候。
-            _tradeCooldown = SEnvir.Now.AddMinutes(_tradeIsRepair ? 10 : 1.0 / 3.0);
+            // 冷却分开设：卖货 20 秒（背包还满的话下一拍就要再卖）、修理 10 分钟（耐久掉得慢）。
+            // 卖货 20 秒而不是 1 分钟：原来「药空了 → 等冷却」这一分钟正好是被打死的时候。
+            if (_tradeIsRepair) _repairCooldown = SEnvir.Now.AddMinutes(10);
+            else _sellCooldown = SEnvir.Now.AddSeconds(20);
             _blockedCount = 0;
             _target = null;
             _tradeDest = null;
@@ -3559,7 +3885,8 @@ namespace Server.Bots
             // 只能从后台面板的 detail 里看到。
             BotLog.Warn(Profile.Seq, detail);
 
-            EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(3));
+            // 卖完 / 修完同样按概率在城里待一会儿（P2-3）。
+            LeaveTownOrStroll(detail);
         }
 
         #endregion
@@ -3798,6 +4125,516 @@ namespace Server.Bots
 
             return count;
         }
+
+        #region 拟人化（P2）
+
+        /// <summary>
+        /// 数走了几步（P2-2）。
+        /// <para>
+        /// 用「坐标变了」来判断，而不是在 10 个走格调用点上各加一行 —— 走格入口有
+        /// <c>TryStepTowards</c> / <c>TryStepTowardsNear</c> / 传送 / 自动寻路好几个，
+        /// 逐个埋点必然漏。坐标对比只有一个地方，且天然不会重复计数。
+        /// </para>
+        /// </summary>
+        private void TrackSteps()
+        {
+            Point here = _player.CurrentLocation;
+
+            if (here != _lastPosition)
+            {
+                _lastPosition = here;
+
+                if (Options.WalkPauseEnabled)
+                {
+                    _stepsSincePause++;
+
+                    if (_stepsSincePause >= _nextPauseAt)
+                    {
+                        _stepsSincePause = 0;
+                        _nextPauseAt = SEnvir.Random.Next(5, 16);
+
+                        _walkPauseUntil = SEnvir.Now.AddMilliseconds(SEnvir.Random.Next(400, 1201));
+                        _pauseHealthPercent = BotPerception.HealthPercent(_player);
+                    }
+                }
+            }
+
+            // 换图流动（P2-4）：发现换了图就重新计时，随机 25~45 分钟后再考虑走。
+            MapInfo info = _player.CurrentMap?.Info;
+
+            if (info != null && info != _lastMapInfo)
+            {
+                _lastMapInfo = info;
+                _mapEnteredAt = SEnvir.Now;
+                _mapRotateAfter = TimeSpan.FromMinutes(SEnvir.Random.Next(25, 46));
+            }
+        }
+
+        /// <summary>
+        /// 在同一张图待太久了，换一张（P2-4）。
+        /// <para>
+        /// 只负责「提出换图请求」，真正的选图 / 防折返 / 冷却全在
+        /// <see cref="TryTravelToHuntMap"/> 里，不重复实现一遍。
+        /// 走不了就把计时重置 —— 否则会每帧都试一次，日志刷屏还白烧 CPU。
+        /// </para>
+        /// </summary>
+        private void MaybeRotateMap()
+        {
+            if (!Options.MapRotateEnabled) return;
+            if (_mapEnteredAt == DateTime.MinValue) return;
+            if (SEnvir.Now - _mapEnteredAt < _mapRotateAfter) return;
+
+            // 安全区里不换图（刚回城办事，让它先办完）。
+            if (BotPerception.InSafeZone(_player)) return;
+
+            _mapEnteredAt = SEnvir.Now;
+            _mapRotateAfter = TimeSpan.FromMinutes(SEnvir.Random.Next(25, 46));
+
+            if (TryTravelToHuntMap())
+                BotLog.Debug(Profile.Seq, "在这张图待久了，换个地方");
+        }
+
+        /// <summary>
+        /// 这一帧要不要「站着不动」（P2-2）。
+        /// <para>
+        /// 停顿必须能被打断：打架、掉血、目标贴脸时立刻恢复。否则会出现
+        /// 「怪在脸上砍它，它站着不动」—— 比匀速巡逻更像机器人。
+        /// </para>
+        /// </summary>
+        private bool ShouldHoldForPause()
+        {
+            if (_walkPauseUntil == DateTime.MinValue) return false;
+
+            if (SEnvir.Now >= _walkPauseUntil)
+            {
+                _walkPauseUntil = DateTime.MinValue;
+                return false;
+            }
+
+            // 打架 / 死亡时不停顿：站着挨打比「像人」重要得多。
+            if (State == BotState.Fight || State == BotState.Dead || _player.Dead)
+            {
+                _walkPauseUntil = DateTime.MinValue;
+                return false;
+            }
+
+            // 被打断：血掉得快。
+            if (BotPerception.HealthPercent(_player) <= _pauseHealthPercent - 15)
+            {
+                _walkPauseUntil = DateTime.MinValue;
+                return false;
+            }
+
+            // 被打断：目标已经贴到 3 格以内。
+            if (_target != null && !_target.Dead && _target.Node != null
+                && BotNavigator.Distance(_player.CurrentLocation, _target.CurrentLocation) <= 3)
+            {
+                _walkPauseUntil = DateTime.MinValue;
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 极小概率走岔一步（P2-5）。
+        /// <para>
+        /// <b>按时间排期，不按「每次决策掷骰子」</b>。2026-11-12 压测踩到：
+        /// 原来写的是「每次决策 0.5%」，而假人每 200ms 决策一次 ——
+        /// 24 个假人在登录后 2.5 分钟里就把「每小时 2 次」的配额全部用光（实测 17 次），
+        /// 之后一小时一个都不犯。观感上是「刚上线一群人手忙脚乱，然后集体变成完美脚本」。
+        /// </para>
+        /// <para>
+        /// 现在是「隔 18~42 分钟走岔一步」（由 <see cref="BotOptions.MistakePerHour"/> 推导），
+        /// 天然满足每小时上限，也不会扎堆。
+        /// </para>
+        /// </summary>
+        private bool TryMistake()
+        {
+            if (!Options.MistakeEnabled) return false;
+
+            if (_nextMistakeTime == DateTime.MinValue)
+            {
+                ScheduleNextMistake();
+                return false;
+            }
+
+            if (SEnvir.Now < _nextMistakeTime) return false;
+
+            // 状态不合适就一分钟后再试（不重置整段间隔，否则会永远排不上）。
+            if (State != BotState.GoHunt && State != BotState.Travel && State != BotState.Loot && State != BotState.Harvest
+                || _player.Dead || _player.CurrentMap == null
+                || BotPerception.HealthPercent(_player) < 30
+                || BotPerception.InSafeZone(_player))
+            {
+                _nextMistakeTime = SEnvir.Now.AddMinutes(1);
+                return false;
+            }
+
+            ScheduleNextMistake();
+
+            _player.Move((MirDirection)SEnvir.Random.Next(8), 1);
+
+            BotLog.Debug(Profile.Seq, "走岔了一步（拟人化误操作）");
+
+            return true;
+        }
+
+        /// <summary>按「每小时 N 次」推导下一次误操作时间，带 ±40% 抖动（避免 30 个假人同时犯傻）。</summary>
+        private void ScheduleNextMistake()
+        {
+            int perHour = Math.Max(1, Options.MistakePerHour);
+
+            double minutes = 60.0 / perHour;
+
+            // 0.6 ~ 1.4 倍：perHour=2 → 18~42 分钟一次。
+            double factor = 0.6 + SEnvir.Random.NextDouble() * 0.8;
+
+            _nextMistakeTime = SEnvir.Now.AddMinutes(minutes * factor);
+        }
+
+        /// <summary>
+        /// 补给 / 卖货办完之后的选择（P2-3）。
+        /// <para>
+        /// 按概率在城里再待 1~3 分钟：目的不是效率，是「城里有人」。
+        /// 一队假人办完事立刻消失，比根本不来还假。
+        /// </para>
+        /// </summary>
+        private void LeaveTownOrStroll(string detail)
+        {
+            if (!Options.TownStrollEnabled || SEnvir.Random.Next(100) >= Options.TownStrollPercent)
+            {
+                EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(3));
+                return;
+            }
+
+            _strollUntil = SEnvir.Now.AddSeconds(SEnvir.Random.Next(60, 181));
+            _nextStrollStep = DateTime.MinValue;
+
+            // 期限给 4 秒而不是整段闲逛时间：靠 _strollUntil 控制结束，
+            // 这样 ProcessIdle 会每 4 秒进来一次，才能真的「走两步」而不是站着。
+            EnterState(BotState.Idle, detail + "，在城里转转", TimeSpan.FromSeconds(4));
+        }
+
+        /// <summary>城里闲逛：在安全区内随机挪步，绝不往城外跑（出了安全区就是靶子）。</summary>
+        private void ProcessTownStroll()
+        {
+            if (SEnvir.Now < _nextStrollStep) return;
+
+            _nextStrollStep = SEnvir.Now.AddSeconds(SEnvir.Random.Next(4, 12));
+
+            if (!BotPerception.InSafeZone(_player))
+            {
+                // 晃出安全区了（被怪推 / 走偏）→ 立刻结束闲逛回城流程。
+                _strollUntil = DateTime.MinValue;
+                EnterState(BotState.Idle, "走出安全区了，不逛了", TimeSpan.FromSeconds(1));
+                return;
+            }
+
+            Point here = _player.CurrentLocation;
+
+            Point target = new Point(here.X + SEnvir.Random.Next(-6, 7), here.Y + SEnvir.Random.Next(-6, 7));
+
+            BotNavigator.TryStepTowards(_player, target);
+        }
+
+        /// <summary>
+        /// 榜首降速（P4-4）：假人连续 <see cref="BotOptions.TopHoldMinutes"/> 分钟待在排行榜前
+        /// <see cref="BotOptions.TopRankLimit"/> 名，就暂停练级 <see cref="BotOptions.TopSlowMinutes"/> 分钟。
+        /// <para>
+        /// 为什么不做「等级封顶」：封顶会让等级停在某个整数上一动不动，比占榜还假。
+        /// 降速是「先跑一阵、再歇两小时」，看起来就像玩家自己下线/挂机去了。
+        /// </para>
+        /// <para>
+        /// 返回 true = 本帧由降速逻辑接管，状态机不要再跑。
+        /// </para>
+        /// </summary>
+        private bool ProcessTopSlowdown()
+        {
+            if (!Options.TopSlowEnabled) return false;
+            if (_player?.Character == null) return false;
+
+            // ① 降速期内：不练级、不换图，只在城里待着。
+            if (_slowUntil != DateTime.MinValue)
+            {
+                if (SEnvir.Now < _slowUntil)
+                {
+                    ProcessSlowIdle();
+                    return true;
+                }
+
+                _slowUntil = DateTime.MinValue;
+                _topSince = DateTime.MinValue;
+
+                BotLog.Warn(Profile.Seq, "榜首降速结束，恢复练级");
+
+                EnterState(BotState.Idle, "降速结束，准备继续练级", TimeSpan.FromSeconds(3));
+                return false;
+            }
+
+            // ② 不在前 N 名：计时清零。
+            if (!BotPerception.IsTopRanked(_player.Character, Options.TopRankLimit))
+            {
+                if (_topSince != DateTime.MinValue)
+                {
+                    _topSince = DateTime.MinValue;
+                    BotLog.Warn(Profile.Seq, string.Format("已掉出排行榜前 {0}，取消降速计时", Options.TopRankLimit));
+                }
+
+                return false;
+            }
+
+            // ③ 刚进前 N：开始计时。
+            if (_topSince == DateTime.MinValue)
+            {
+                _topSince = SEnvir.Now;
+
+                BotLog.Warn(Profile.Seq, string.Format("进入排行榜前 {0}（{1} 级），开始计时",
+                    Options.TopRankLimit, _player.Level));
+
+                return false;
+            }
+
+            // ④ 连续占榜够久 → 开始降速。
+            if (SEnvir.Now - _topSince < TimeSpan.FromMinutes(Options.TopHoldMinutes)) return false;
+
+            _slowUntil = SEnvir.Now.AddMinutes(Options.TopSlowMinutes);
+            _topSince = DateTime.MinValue;
+
+            BotLog.Warn(Profile.Seq, string.Format(
+                "连续 {0} 分钟占据排行榜前 {1}，暂停练级 {2} 分钟（把名次让给真人）",
+                Options.TopHoldMinutes, Options.TopRankLimit, Options.TopSlowMinutes));
+
+            EnterState(BotState.Idle, "榜首降速中", TimeSpan.FromSeconds(10));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 降速期间干什么：回城、在安全区待着。
+        /// <para>
+        /// 不能在野外干站着 —— 那是活靶子，两小时下来会死成一条流水线，比占榜还难看。
+        /// 所以先想办法回主城（有卷用卷，没卷就走），到了城里就正常发呆/闲逛。
+        /// </para>
+        /// </summary>
+        private void ProcessSlowIdle()
+        {
+            MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
+
+            if (BotPerception.InSafeZone(_player))
+            {
+                // 已经在安全区：站着不动（细节见 ProcessSlowRest 的注释 —— 走动会晃出安全区）。
+                LogSlowBranch("安全区待着");
+
+                ProcessSlowRest();
+                return;
+            }
+
+            if (home == null)
+            {
+                // 没有绑定点（理论上不会发生）：至少别站着挨打，靠生存逻辑喝药。
+                LogSlowBranch("没有绑定主城");
+
+                if (SEnvir.Now >= _stateDeadline)
+                    EnterState(BotState.Idle, "榜首降速中（没有绑定主城）", TimeSpan.FromSeconds(15));
+
+                return;
+            }
+
+            // ① 在别的图：先试回城卷（瞬移，最省事），再退回 AutoPath 跨图走回去。
+            //    这段与 ProcessRestock 的回城分支完全同构 —— 跨图 AutoPath 是引擎支持的，
+            //    假人走这条路已经跑了几百次补给。
+            if (_player.CurrentMap?.Info != home)
+            {
+                if (TryReturnHomeByScroll(home))
+                {
+                    LogSlowBranch("用回城卷回 " + home.Description);
+
+                    LastDetail = string.Format("榜首降速，用回城卷回 {0}", home.Description);
+                    return;
+                }
+
+                if (_player.AutoPath != null)
+                {
+                    LogSlowBranch("AutoPath 走回 " + home.Description);
+
+                    LastDetail = string.Format("榜首降速，正在走回 {0}", home.Description);
+                    return;
+                }
+
+                if (AutoPathService.Instance.TryStart(_player, home, HomePoint(home)))
+                {
+                    LogSlowBranch("AutoPath 走回 " + home.Description);
+
+                    LastDetail = string.Format("榜首降速，走回 {0}", home.Description);
+                    return;
+                }
+
+                // 路线规划失败（等级/道具限制）：原地喝药撑着，稍后重试。
+                LogSlowBranch("回城路线规划失败");
+
+                if (SEnvir.Now >= _stateDeadline)
+                    EnterState(BotState.Idle, "榜首降速中（回城路线规划失败）", TimeSpan.FromSeconds(15));
+
+                return;
+            }
+
+            // ② 已经在本图，但人不在安全区（刷怪点边上）：自己一步步走回绑定点。
+            //    这条分支不能交给 AutoPathService —— 它只做跨图路线，同图目标点
+            //    TryStart 会直接失败，假人就会一声不响地站在原地。
+            //    实测踩过：BOT#05 在诺玛村落刷怪点触发降速，回城卷分支因为
+            //    「当前图 == 绑定图」被跳过，结果在怪物堆里站满 3 分钟（那次刷的是 1 级羊才没事）。
+            LogSlowBranch("同图走回 " + home.Description + " 安全区");
+
+            if (SEnvir.Now >= _nextSlowStep)
+            {
+                _nextSlowStep = SEnvir.Now.AddMilliseconds(SEnvir.Random.Next(400, 900));
+
+                Point target = HomePoint(home);
+
+                BotNavigator.TryStepTowards(_player, target);
+
+                LastDetail = string.Format("榜首降速，走回 {0} 安全区", home.Description);
+            }
+        }
+
+        /// <summary>
+        /// 降速期在安全区里做什么：<b>什么都不做，站着</b>。
+        /// <para>
+        /// 试过两种「看起来更活」的做法，都被实测否掉：
+        /// ① 复用 <c>ProcessTownStroll</c>（±6 格随机点）—— 会晃出安全区，被守卫踢回走回分支，30~100 秒拉锯一次；
+        /// ② 朝绑定点 <c>HomePoint</c> 小步走 —— <c>BindRegion.PointList</c> 是**出生区域**，
+        ///    不等于 <c>Cell.SafeZone</c>，走到区域边缘那几格就已经不是安全区了，照样拉锯（实测 9 次/3 分钟）。
+        /// </para>
+        /// <para>
+        /// 降速本来就是要「安静下来把名次让给真人」，真人挂机也是站着不动 —— 站着最像，也最安全。
+        /// </para>
+        /// </summary>
+        private void ProcessSlowRest()
+        {
+            if (SEnvir.Now >= _stateDeadline)
+                EnterState(BotState.Idle, "榜首降速中（在安全区待着）", TimeSpan.FromSeconds(10));
+        }
+
+        /// <summary>降速期分支变化时打一条 Debug 日志（每帧都打会刷屏，所以只在变化时打）。</summary>
+        private void LogSlowBranch(string branch)
+        {
+            if (_slowBranch == branch) return;
+
+            _slowBranch = branch;
+
+            BotLog.Debug(Profile.Seq, "降速期：" + branch);
+        }
+
+
+        /// <summary>
+        /// 红名 PK（P3-4）。
+        /// <para>
+        /// 决策：<b>红名就打，含真人</b>。所以这条路径是唯一会主动攻击真人的地方，
+        /// 守卫写得很死：只打红名（<c>Stats[Stat.PKPoint] &gt;= Config.RedPoint</c>）、
+        /// 只在自己血 &gt; 50%、只在非安全区、每次间隔 ≥ <see cref="BotOptions.PkIntervalMinutes"/> 分钟。
+        /// </para>
+        /// <para>
+        /// 而且<b>只吓唬不击杀</b>：目标血低于 30% 就收手。理由很实际 ——
+        /// 真打死了要爆装备、要结仇，两个假人互爆装备还会破坏养成感。
+        /// </para>
+        /// </summary>
+        private bool TryPk()
+        {
+            if (!Options.PkEnabled) return false;
+            if (SEnvir.Now < _nextPkTime) return false;
+            if (_player.Dead || _player.CurrentMap == null) return false;
+
+            // 打怪 / 传送 / 转生这些状态不掺 PK：正在做的事优先。
+            if (State == BotState.Fight || State == BotState.Teleport || State == BotState.Rebirth) return false;
+
+            if (BotPerception.HealthPercent(_player) < 50) return false;
+            if (BotPerception.InSafeZone(_player)) return false;
+
+            PlayerObject target = BotPerception.FindRedNameTarget(_player, Options.PkRadius, Config.RedPoint);
+
+            if (target == null) return false;
+
+            // 找到红名就排下一次（不论这一刀砍不砍得到），否则会每帧扫全图玩家。
+            _nextPkTime = SEnvir.Now.AddMinutes(Math.Max(1, Options.PkIntervalMinutes));
+
+            // 只吓唬：血已经很低了就别再补刀。
+            if (BotPerception.HealthPercent(target) <= 30) return false;
+
+            if (BotNavigator.Distance(_player.CurrentLocation, target.CurrentLocation) > 1)
+            {
+                BotNavigator.TryStepTowards(_player, target.CurrentLocation);
+                return true;
+            }
+
+            if (!BotActions.TryAttackPlayer(_player, target)) return false;
+
+            _pkCount++;
+
+            BotLog.Warn(Profile.Seq, string.Format("红名 PK：{0}（对方血量 {1}%）",
+                target.Name, BotPerception.HealthPercent(target)));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 说话（P2-1）。
+        /// <para>
+        /// 频道不自己拼包：普通频道直接 <c>Chat(text)</c>，世界频道拼 <c>!@</c> 前缀交给引擎，
+        /// 由引擎做等级（33 级）、账号级 30 秒冷却、屏蔽名单的全部校验 ——
+        /// 自己发包绕过校验，迟早会出现「30 级假人上世界频道」这种一眼假。
+        /// </para>
+        /// <para>
+        /// 排期是「说之前先排下一次」：语料为空、选句失败都不会退化成每帧重试。
+        /// </para>
+        /// </summary>
+        private void ProcessChat()
+        {
+            if (!Options.ChatEnabled)
+            {
+                // 关掉开关就把排期清空：重新打开后重新随机等 15~40 分钟，
+                // 而不是「一开就立刻集体开口」。
+                _nextChatTime = DateTime.MinValue;
+                return;
+            }
+
+            if (_nextChatTime == DateTime.MinValue)
+            {
+                _nextChatTime = SEnvir.Now.Add(Options.NextChatDelay());
+                return;
+            }
+
+            if (SEnvir.Now < _nextChatTime) return;
+
+            _nextChatTime = SEnvir.Now.Add(Options.NextChatDelay());
+
+            // 死亡 / 传送读条 / 转生流程里角色是"冻结"的，这时候开口很假。
+            if (_player.Dead || State == BotState.Teleport || State == BotState.Rebirth || State == BotState.Dead) return;
+
+            if (!BotChat.TryPick(_player, ChatKindForState(), out string text, out bool world)) return;
+
+            _player.Chat(world ? "!@" + text : text);
+        }
+
+        /// <summary>按当前状态挑说话场景（语料里没有这个场景时 BotChat 会自己放宽到任意类别）。</summary>
+        private BotChatKind ChatKindForState()
+        {
+            switch (State)
+            {
+                case BotState.Trade:
+                case BotState.Restock:
+                    return BotChatKind.Trade;
+                case BotState.Dead:
+                    return BotChatKind.Death;
+                case BotState.Idle:
+                    return SEnvir.Random.Next(2) == 0 ? BotChatKind.Greeting : BotChatKind.Feeling;
+                default:
+                    // 打怪途中偶尔"惊讶"（掉了东西、血掉太快），其余是感慨。
+                    return SEnvir.Random.Next(4) == 0 ? BotChatKind.Surprise : BotChatKind.Feeling;
+            }
+        }
+
+        #endregion
 
         /// <summary>后台展示用的一行快照。</summary>
         public string Snapshot()

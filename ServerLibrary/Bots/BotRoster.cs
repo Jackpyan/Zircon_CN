@@ -1,5 +1,6 @@
 ﻿using Library;
 using Library.SystemModels;
+using Server.DBModels;
 using Server.Envir;
 using Server.Models;
 using System;
@@ -34,6 +35,9 @@ namespace Server.Bots
         public string LastError { get; init; } = string.Empty;
         public bool Broken { get; init; }
 
+        /// <summary>是否在线（<see cref="Phase"/> 是给人看的文字，判断逻辑一律用这个布尔值）。</summary>
+        public bool IsOnline { get; init; }
+
         /// <summary>
         /// 本次在线期间成功补给的次数（D5 量化「断药能回城买」）。
         /// <para>只在真的买到东西时 +1，与跨重启的累计值分开看。</para>
@@ -66,6 +70,104 @@ namespace Server.Bots
 
         /// <summary>后台单人开关状态（false = 被运营关掉，调度器不再拉起）。</summary>
         public bool Enabled { get; init; } = true;
+
+        #region P5-1 数据补齐（照片里要显示、原来拿不到的字段）
+
+        /// <summary>当前 HP 绝对值（照片里的 <c>619/650</c> 前半段）。</summary>
+        public int CurrentHealth { get; init; }
+
+        /// <summary>最大 HP（<c>Stats[Stat.Health]</c>，随装备/等级变化，不是常量）。</summary>
+        public int MaxHealth { get; init; }
+
+        /// <summary>当前 MP 绝对值。</summary>
+        public int CurrentMana { get; init; }
+
+        /// <summary>最大 MP。</summary>
+        public int MaxMana { get; init; }
+
+        /// <summary>已背负重（<c>PlayerObject.BagWeight</c>）。</summary>
+        public int BagWeight { get; init; }
+
+        /// <summary>负重上限（<c>Stats[Stat.BagWeight]</c>）。</summary>
+        public int MaxBagWeight { get; init; }
+
+        /// <summary>背包已用格数。</summary>
+        public int UsedSlots { get; init; }
+
+        /// <summary>背包总格数（<c>Inventory.Length</c>）。</summary>
+        public int SlotCount { get; init; }
+
+        /// <summary>负重百分比（0~100+，超重会 &gt;100）。</summary>
+        public int BagWeightPercent => MaxBagWeight > 0 ? (int)Math.Min(int.MaxValue, BagWeight * 100L / MaxBagWeight) : 0;
+
+        /// <summary>全身装备里最差的那件还剩多少持久（%）。<c>-1</c> = 身上没装备。</summary>
+        public int WorstDurabilityPercent { get; init; } = -1;
+
+        /// <summary>最差持久那件装备的槽位名（如 <c>Helmet</c>），配合上面那个百分比显示。</summary>
+        public string WorstDurabilitySlot { get; init; } = string.Empty;
+
+        /// <summary>最近一次成功放出的攻击魔法（战士为空 —— 战士没有攻击魔法，靠平砍）。</summary>
+        public string LastMagic { get; init; } = string.Empty;
+
+        #endregion
+
+        #region P4-1 经济观测
+
+        /// <summary>本次在线期间赚到的金币（只累加正向差额，买药/修理不算负产出）。</summary>
+        public long GoldEarned { get; init; }
+
+        /// <summary>金币/小时（按本次在线时长折算；在线不足 60 秒时按 60 秒算，避免开头几分钟数字乱跳）。</summary>
+        public long GoldPerHour { get; init; }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// 假人整体总览（P5-1，给后台 6 张 KPI 卡用）。
+    /// <para>
+    /// 全部从 <see cref="BotSnapshot"/> 数组算出来，**不额外读 <c>PlayerObject</c>** ——
+    /// 页面每 2 秒刷新一次，聚合逻辑放在游戏线程的快照重建里做一次，
+    /// Blazor 线程只读这份现成的值（跨线程只读，安全）。
+    /// </para>
+    /// </summary>
+    public sealed class BotTotals
+    {
+        /// <summary>这份数据是什么时候采的（页面右上角「更新 12:00:00」）。</summary>
+        public DateTime SnapshotAt { get; init; }
+
+        /// <summary>在线假人数。</summary>
+        public int Online { get; init; }
+
+        /// <summary>调度器里的假人总数（含离线）。</summary>
+        public int Total { get; init; }
+
+        /// <summary>真人在线数（水位公式的另一半，页面上要能解释「为什么只上了 12 个」）。</summary>
+        public int RealPlayers { get; init; }
+
+        /// <summary>平均等级（按**在线**假人算，离线的不参与，否则刚撤下来几个就会拉低均值）。</summary>
+        public double AverageLevel { get; init; }
+
+        public int TotalKills { get; init; }
+
+        public int TotalDeaths { get; init; }
+
+        /// <summary>存活率（%）= <c>Kills / (Kills + Deaths)</c>；<c>-1</c> = 还没样本，页面显示 <c>—</c>。</summary>
+        public int SurvivalRate { get; init; } = -1;
+
+        /// <summary>负重 ≥100% 的人数（超重，捡不了东西）。</summary>
+        public int Overweight { get; init; }
+
+        /// <summary>负重 85%~100% 的人数（临界，快要捡不了）。</summary>
+        public int NearOverweight { get; init; }
+
+        /// <summary>全体金币存量。</summary>
+        public long TotalGold { get; init; }
+
+        /// <summary>本次在线期间赚到的金币合计（P4-1）。</summary>
+        public long GoldEarned { get; init; }
+
+        /// <summary>金币产出速度合计（金币/小时，P4-1 用来判断经济有没有被灌水）。</summary>
+        public long GoldPerHour { get; init; }
     }
 
     /// <summary>技能自检结果（D4 验收用，见 <see cref="BotRoster.SkillCheck"/>）。</summary>
@@ -92,6 +194,8 @@ namespace Server.Bots
 
         private static readonly object SnapshotSync = new object();
         private static BotSnapshot[] _snapshot = Array.Empty<BotSnapshot>();
+        private static BotTotals _totals = new BotTotals();
+        private static DateTime _nextOverviewLogTime = DateTime.MinValue;
 
         private static DateTime _nextEvaluateTime = DateTime.MinValue;
 
@@ -104,11 +208,33 @@ namespace Server.Bots
         public static int SessionCount => Sessions.Count;
         public static int OnlineCount => Sessions.Count(x => x.IsOnline);
 
+        /// <summary>全部 Session 的只读视图（社交 / 后台聚合用；不要在外部改它）。</summary>
+        public static IReadOnlyList<BotSession> AllSessions => Sessions;
+
         /// <summary>
         /// 最近一次快照时刻的真人在线数。后台页面直接读这个值，
         /// 免得每次刷新都要往游戏线程排一次任务（页面首屏也拿不到异步结果）。
         /// </summary>
         public static int RealPlayerCount { get; private set; }
+
+        /// <summary>
+        /// 现在是否处于「夜间时段」（P2-6 作息）。
+        /// <para>
+        /// 支持跨零点：<c>Min=22, Max=7</c> 时 23 点与 3 点都算夜间。
+        /// 两个值相等视为「不启用夜间」，返回 false。
+        /// </para>
+        /// </summary>
+        public static bool IsNightHour(DateTime now)
+        {
+            int min = Config.BotNightMinHour;
+            int max = Config.BotNightMaxHour;
+
+            if (min == max) return false;
+
+            int hour = now.Hour;
+
+            return min < max ? hour >= min && hour < max : hour >= min || hour < max;
+        }
 
         /// <summary>启动调度。按配置建满序号 1..BotMaxOnline 的 Session，是否上线由水位决定。</summary>
         public static void Start()
@@ -178,6 +304,9 @@ namespace Server.Bots
             foreach (BotSession session in Sessions)
                 session.Process(options);
 
+            // 社交（行会 / 组队 / 交易 / PK）：内部有 20 秒节流，每帧调也只是一次时间比较。
+            BotSocial.Process();
+
             if (SEnvir.Now >= _nextEvaluateTime)
             {
                 int changed = Evaluate(options);
@@ -236,6 +365,12 @@ namespace Server.Bots
             else
             {
                 target = Math.Clamp(options.TargetOnline - realPlayers, options.MinOnline, options.MaxOnline);
+
+                // 作息（P2-6）：夜里目标人数按比例缩水，白天恢复。
+                // 缩水不是"整点集体消失"—— 下线走 MaxChangePerTick（默认 1 个/轮），
+                // 30 人减到 15 人是十五分钟里一个一个走的，跟真人下线一个节奏。
+                if (options.NightEnabled && IsNightHour(SEnvir.Now))
+                    target = Math.Max(options.MinOnline, target * options.NightScalePercent / 100);
 
                 // 被后台单独关掉的序号不参与水位：可用 20 个就不能把目标定成 30，
                 // 否则永远 online < target，冷启动暖机标志永远清不掉，掉线补水要白等 45 秒。
@@ -318,14 +453,113 @@ namespace Server.Bots
             RealPlayerCount = SEnvir.Connections.Count(x => !x.IsBot && x.Stage == GameStage.Game);
 
             BotSnapshot[] items = Sessions.Select(ToSnapshot).ToArray();
+            BotTotals totals = BuildTotals(items);
 
             lock (SnapshotSync)
+            {
                 _snapshot = items;
+                _totals = totals;
+            }
+
+            LogTotals(totals);
+        }
+
+        /// <summary>
+        /// 每 5 分钟往 Logs.txt 打一行总览（Info 级，生产档 <c>BotLogLevel=2</c> 看不到，
+        /// 调成 0/1 才输出）。用途：后台页面打不开时，靠日志也能判断「经济有没有被灌水」。
+        /// </summary>
+        private static void LogTotals(BotTotals overview)
+        {
+            if (Config.BotLogLevel > 1) return;
+            if (SEnvir.Now < _nextOverviewLogTime) return;
+
+            _nextOverviewLogTime = SEnvir.Now.AddMinutes(5);
+
+            BotLog.System(string.Format(
+                "总览：在线 {0}/{1}（真人 {2}），平均 {3:0.#} 级，击杀 {4} / 复活 {5}，存活 {6}，超重 {7}/{8}，金币 {9:N0}（本次赚 {10:N0}，{11:N0}/小时）",
+                overview.Online, overview.Total, overview.RealPlayers, overview.AverageLevel,
+                overview.TotalKills, overview.TotalDeaths,
+                overview.SurvivalRate >= 0 ? overview.SurvivalRate + "%" : "—",
+                overview.Overweight, overview.NearOverweight,
+                overview.TotalGold, overview.GoldEarned, overview.GoldPerHour));
+        }
+
+        /// <summary>
+        /// 从快照数组算总览。纯函数式，不碰 <c>PlayerObject</c> —— 所以可以单独测。
+        /// </summary>
+        public static BotTotals BuildTotals(IReadOnlyList<BotSnapshot> items)
+        {
+            if (items == null || items.Count == 0)
+            {
+                return new BotTotals
+                {
+                    SnapshotAt = Library.Time.LocalNow,
+                    RealPlayers = RealPlayerCount,
+                };
+            }
+
+            int online = 0, kills = 0, deaths = 0, overweight = 0, nearOverweight = 0;
+            long totalGold = 0, goldEarned = 0, goldPerHour = 0;
+            double levelSum = 0;
+
+            foreach (BotSnapshot bot in items)
+            {
+                // 离线的不参与等级/存活率统计：它们的数据是「上次在线时的残影」。
+                if (!bot.IsOnline) continue;
+
+                online++;
+                kills += bot.Kills;
+                deaths += bot.Deaths;
+                totalGold += bot.Gold;
+                goldEarned += bot.GoldEarned;
+                goldPerHour += bot.GoldPerHour;
+                levelSum += bot.Level;
+
+                if (bot.MaxBagWeight > 0)
+                {
+                    if (bot.BagWeightPercent >= 100) overweight++;
+                    else if (bot.BagWeightPercent >= 85) nearOverweight++;
+                }
+            }
+
+            int samples = kills + deaths;
+
+            return new BotTotals
+            {
+                SnapshotAt = Library.Time.LocalNow,
+                Online = online,
+                Total = items.Count,
+                RealPlayers = RealPlayerCount,
+                AverageLevel = online > 0 ? Math.Round(levelSum / online, 1) : 0,
+                TotalKills = kills,
+                TotalDeaths = deaths,
+                SurvivalRate = samples > 0 ? kills * 100 / samples : -1,
+                Overweight = overweight,
+                NearOverweight = nearOverweight,
+                TotalGold = totalGold,
+                GoldEarned = goldEarned,
+                GoldPerHour = goldPerHour,
+            };
         }
 
         private static BotSnapshot ToSnapshot(BotSession session)
         {
             PlayerObjectHolder holder = PlayerObjectHolder.From(session);
+
+            // P4-1：每轮快照采一次金币（约 2 秒一次），只累加正向差额。
+            // **只在真的拿到 PlayerObject 时采** —— 离线/登录中的 session 取不到角色，
+            // Gold 会退化成 0；如果照样采，基线就被写成 0，等它上线时整笔余额会被当成「赚到的」
+            // （实测 8 个假人 5 分钟「赚」了 306 万，比全服金币存量还多）。
+            if (holder.HasPlayer)
+                session.SampleGold(holder.Gold);
+
+            long onlineSeconds = session.IsOnline && session.OnlineSince != DateTime.MinValue
+                ? (long)Math.Max(0, (SEnvir.Now - session.OnlineSince).TotalSeconds)
+                : 0;
+
+            long goldPerHour = onlineSeconds > 0
+                ? session.GoldEarned * 3600L / Math.Max(60L, onlineSeconds)
+                : 0;
 
             return new BotSnapshot
             {
@@ -343,6 +577,19 @@ namespace Server.Bots
                 Y = holder.Y,
                 HealthPercent = holder.HealthPercent,
                 ManaPercent = holder.ManaPercent,
+                CurrentHealth = holder.CurrentHealth,
+                MaxHealth = holder.MaxHealth,
+                CurrentMana = holder.CurrentMana,
+                MaxMana = holder.MaxMana,
+                BagWeight = holder.BagWeight,
+                MaxBagWeight = holder.MaxBagWeight,
+                UsedSlots = holder.UsedSlots,
+                SlotCount = holder.SlotCount,
+                WorstDurabilityPercent = holder.WorstDurabilityPercent,
+                WorstDurabilitySlot = holder.WorstDurabilitySlot,
+                LastMagic = session.Brain?.LastMagic ?? string.Empty,
+                GoldEarned = session.GoldEarned,
+                GoldPerHour = goldPerHour,
                 Kills = session.Brain?.Kills ?? 0,
                 Deaths = session.Brain?.Deaths ?? 0,
                 Gold = holder.Gold,
@@ -359,6 +606,7 @@ namespace Server.Bots
                 OnlineFor = session.IsOnline ? FormatDuration(SEnvir.Now - session.OnlineSince) : string.Empty,
                 LastError = session.LastError,
                 Broken = session.Phase == BotPhase.Broken,
+                IsOnline = session.IsOnline,
                 Enabled = session.Enabled,
             };
         }
@@ -368,6 +616,13 @@ namespace Server.Bots
         {
             lock (SnapshotSync)
                 return _snapshot;
+        }
+
+        /// <summary>后台读取总览（任意线程安全，和 <see cref="Snapshot"/> 是同一批数据算出来的）。</summary>
+        public static BotTotals Totals()
+        {
+            lock (SnapshotSync)
+                return _totals;
         }
 
         /// <summary>后台「全部重置」：把 Broken / 卡住的都拉回可调度状态。</summary>
@@ -547,6 +802,9 @@ namespace Server.Bots
         /// </summary>
         private readonly struct PlayerObjectHolder
         {
+            /// <summary>是否真的拿到了 <see cref="PlayerObject"/>（false = 离线/还在登录，其它字段都是退化值）。</summary>
+            public bool HasPlayer { get; init; }
+
             public int Level { get; init; }
             public int ExpPercent { get; init; }
             public string MapName { get; init; }
@@ -555,6 +813,16 @@ namespace Server.Bots
             public int Y { get; init; }
             public int HealthPercent { get; init; }
             public int ManaPercent { get; init; }
+            public int CurrentHealth { get; init; }
+            public int MaxHealth { get; init; }
+            public int CurrentMana { get; init; }
+            public int MaxMana { get; init; }
+            public int BagWeight { get; init; }
+            public int MaxBagWeight { get; init; }
+            public int UsedSlots { get; init; }
+            public int SlotCount { get; init; }
+            public int WorstDurabilityPercent { get; init; }
+            public string WorstDurabilitySlot { get; init; }
             public long Gold { get; init; }
             public int MagicCount { get; init; }
             public int TownScrollCount { get; init; }
@@ -572,6 +840,7 @@ namespace Server.Bots
                         Level = session.Character?.Level ?? 0,
                         MapName = "-",
                         HealthPercent = 0,
+                        WorstDurabilityPercent = -1,
                     };
                 }
 
@@ -591,6 +860,7 @@ namespace Server.Bots
 
                 return new PlayerObjectHolder
                 {
+                    HasPlayer = true,
                     Level = player.Level,
                     ExpPercent = expPercent,
                     MapName = player.CurrentMap?.Info?.Description ?? "-",
@@ -599,12 +869,62 @@ namespace Server.Bots
                     Y = player.CurrentLocation.Y,
                     HealthPercent = BotPerception.HealthPercent(player),
                     ManaPercent = manaPercent,
+                    CurrentHealth = player.CurrentHP,
+                    MaxHealth = player.Stats[Stat.Health],
+                    CurrentMana = player.CurrentMP,
+                    MaxMana = maxMana,
+                    BagWeight = player.BagWeight,
+                    MaxBagWeight = player.Stats[Stat.BagWeight],
+                    UsedSlots = BotPerception.UsedInventorySlots(player),
+                    SlotCount = player.Inventory?.Length ?? 0,
+                    WorstDurabilityPercent = WorstDurability(player, out string worstSlot),
+                    WorstDurabilitySlot = worstSlot,
                     Gold = gold,
                     MagicCount = BotSkills.KnownCount(player),
                     TownScrollCount = BotActions.CountTownScroll(player),
                     RedPotions = BotActions.CountPotion(player, Stat.Health),
                     BluePotions = BotActions.CountPotion(player, Stat.Mana),
                 };
+            }
+
+            /// <summary>
+            /// 全身装备里最差的那件还剩百分之多少持久，顺带带出槽位名。
+            /// <para>
+            /// 只统计**有耐久概念**的装备（<c>Info.Durability &gt; 0</c>）：戒指/项链这类
+            /// 本来就不掉持久的，按 100% 算会把「武器快碎了」这种信息淹掉。
+            /// 身上一件装备都没有时返回 <c>-1</c>，让页面显示 <c>—</c> 而不是 0%（0% 看起来像全碎了）。
+            /// </para>
+            /// </summary>
+            private static int WorstDurability(PlayerObject player, out string slot)
+            {
+                slot = string.Empty;
+
+                UserItem[] equipment = player.Equipment;
+
+                if (equipment == null) return -1;
+
+                int worst = -1;
+
+                for (int i = 0; i < equipment.Length; i++)
+                {
+                    UserItem item = equipment[i];
+
+                    if (item?.Info == null) continue;
+                    if (item.Info.Durability <= 0) continue;
+
+                    int max = item.MaxDurability > 0 ? item.MaxDurability : item.Info.Durability;
+
+                    if (max <= 0) continue;
+
+                    int percent = (int)Math.Min(100L, item.CurrentDurability * 100L / max);
+
+                    if (worst >= 0 && percent >= worst) continue;
+
+                    worst = percent;
+                    slot = ((EquipmentSlot)i).ToString();
+                }
+
+                return worst;
             }
         }
     }

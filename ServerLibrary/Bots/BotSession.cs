@@ -62,6 +62,20 @@ namespace Server.Bots
         /// </summary>
         public bool Enabled { get; private set; } = true;
 
+        /// <summary>
+        /// 本次在线期间「赚到」的金币（P4-1 经济观测）。
+        /// <para>
+        /// 靠快照采样算出来：每次采样拿当前金币和上一次比，**只累加正向差额**。
+        /// 这样买药/修理（负向）不会被当成负产出，而「卖货 + 打怪掉钱」都是正向，
+        /// 不需要在每条产出路径上埋点。缺点是一次采样窗口里「先买后赚」会低估一点，
+        /// 但 2 秒一次采样、买药几分钟一次，误差可以忽略。
+        /// </para>
+        /// </summary>
+        public long GoldEarned { get; private set; }
+
+        /// <summary>上一次采样到的金币；-1 = 还没采过（上线第一帧）。</summary>
+        private long _lastGoldSample = -1;
+
         private DateTime _phaseDeadline;
         private bool _newbieKitGranted;
 
@@ -74,6 +88,18 @@ namespace Server.Bots
         public bool IsBroken => Phase == BotPhase.Broken;
         public bool IsBusy => Phase != BotPhase.Offline && Phase != BotPhase.Broken;
 
+        /// <summary>
+        /// 采一次金币（快照重建时调用，约 2 秒一次）。
+        /// 必须在游戏线程调用 —— 调用方 <see cref="BotRoster"/> 的 RebuildSnapshot 就在游戏线程。
+        /// </summary>
+        public void SampleGold(long gold)
+        {
+            if (_lastGoldSample >= 0 && gold > _lastGoldSample)
+                GoldEarned += gold - _lastGoldSample;
+
+            _lastGoldSample = gold;
+        }
+
         #region 外部入口
 
         /// <summary>开始上线流程。已有连接/角色时复用（重启后等级装备都还在）。</summary>
@@ -85,6 +111,10 @@ namespace Server.Bots
             LastError = string.Empty;
             NextStepTime = SEnvir.Now;
             _phaseDeadline = SEnvir.Now + PhaseTimeout;
+
+            // 每次上线重新开始统计「本次在线赚了多少」（P4-1），不要跨重启累加。
+            GoldEarned = 0;
+            _lastGoldSample = -1;
 
             BotLog.Info(Profile.Seq, "开始上线");
         }
@@ -114,6 +144,8 @@ namespace Server.Bots
             _newbieKitGranted = false;
             Phase = BotPhase.Offline;
             LastError = string.Empty;
+            GoldEarned = 0;
+            _lastGoldSample = -1;
 
             BotLog.System(string.Format("BOT#{0:00} 已被后台重置", Profile.Seq));
         }
