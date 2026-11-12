@@ -351,3 +351,62 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 }
 .grid-filter-field input:focus,
 .grid-filter-field select:focus { border-color: var(--cyan); box-shadow: none; }
+
+/* ============================================================
+   假人管理（P5-2）：页头状态胶囊 / tab / KPI 卡 / 表格内微型条与胶囊
+   全部复用上面 :root 里的变量，不引入新主题。
+   ============================================================ */
+
+.page-status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--muted); border: 1px solid var(--line); background: var(--panel-2); font: 11px var(--mono); }
+.page-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.page-status.on { color: #9bf0c7; border-color: #286148; }
+.page-status.on i { background: var(--green); box-shadow: 0 0 10px var(--green); }
+.page-status.off { color: #ffaaa3; border-color: #7d302a; }
+.page-status.off i { background: var(--red); }
+.page-status.starting { color: #f3ca7d; border-color: #745a29; }
+.page-status.starting i { background: var(--amber); }
+
+.head-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; color: var(--muted); font: 11px var(--mono); }
+.head-meta b { color: var(--text); font-weight: 500; }
+
+.bot-tabs { display: flex; gap: 2px; margin: 0 0 16px; border-bottom: 1px solid var(--line); }
+.bot-tabs button { padding: 10px 18px; color: #93a3a8; border: 1px solid transparent; border-bottom: 0; background: transparent; cursor: pointer; font: 600 12px var(--mono); letter-spacing: .04em; }
+.bot-tabs button:hover { color: var(--text); background: #ffffff05; }
+.bot-tabs button.active { color: var(--amber); border-color: var(--line); background: var(--panel); box-shadow: inset 0 2px var(--amber); }
+.bot-tabs small { margin-left: 6px; color: #5d6d72; font: 10px var(--mono); }
+
+/* 表格里的迷你条：HP 绿 / 低血琥珀 / 危险红，MP 蓝，负重按阈值变色 */
+.bar { position: relative; display: block; height: 3px; margin-top: 5px; background: #1d272a; overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; display: block; }
+.bar.hp > i { background: var(--green); }
+.bar.hp.low > i { background: var(--amber); }
+.bar.hp.crit > i { background: var(--red); }
+.bar.mp > i { background: var(--cyan); }
+.bar.weight > i { background: #6f8187; }
+.bar.weight.near > i { background: var(--amber); }
+.bar.weight.over > i { background: var(--red); }
+
+.cell-stack { display: grid; gap: 1px; line-height: 1.4; }
+.cell-stack small { color: #6d7d82; font: 10px var(--mono); }
+.cell-stack b { font-weight: 500; }
+
+.state-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid; font: 10px var(--mono); }
+.state-pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.state-pill.fight { color: #9bf0c7; border-color: #286148; background: #1c503837; }
+.state-pill.move { color: #f3ca7d; border-color: #745a29; background: #5a441d42; }
+.state-pill.dead { color: #ffaaa3; border-color: #7d302a; background: #5e211d3b; }
+.state-pill.idle { color: #93a3a8; border-color: #334044; background: #ffffff05; }
+.state-pill.broken { color: #ff8f85; border-color: #a33; background: #5e211d3b; }
+
+.text-danger { color: #ffaaa3; }
+.text-warn { color: var(--amber); }
+.text-muted { color: var(--muted); }
+.metric-card.green strong { color: var(--green); }
+.metric-card.red strong { color: var(--red); }
+.metric-card small.metric-note { text-transform: none; letter-spacing: 0; }
+
+/* 配置文件 tab 里的只读参数一览 */
+.readonly-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; }
+.readonly-grid > div { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid #1d272a; background: #0d1315; font: 11px var(--mono); }
+.readonly-grid > div span { color: #8fa0a4; }
+.readonly-grid > div b { color: var(--cyan); font-weight: 500; }

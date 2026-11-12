@@ -10,6 +10,7 @@
 @inject BotAdminService Admin
 @inject IGameServerController GameServer
 @inject ServerMetricsService Metrics
+@inject LogBufferService Logs
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>AI 假人 · Zircon</PageTitle>
@@ -17,20 +18,232 @@
 <div class="page-heading compact">
     <div>
         <span class="eyebrow">运营 / 人气</span>
-        <h1>AI 假人</h1>
+        <h1>假人管理</h1>
         <p>
-            一律 <strong>0 级新号起号</strong>（引擎 <code>NewCharacter()</code> 自动置 1 级、发首装、绑主城），
-            用伪连接复用真人的登录 / 进图 / 走路 / 打怪 / 买卖全链路。在线数量按水位自动调节：
-            <strong>真人多了就撤、少了就补</strong>。
+            一律 <strong>0 级新号起号</strong>，用伪连接复用真人的登录 / 进图 / 走路 / 打怪 / 买卖全链路。
+            在线数量按水位自动调节：<strong>真人多了就撤、少了就补</strong>。
         </p>
     </div>
-    <AuthorizeView Policy="@AdminPermissions.PolicyOperate">
-        <div class="control-cluster">
+
+    <div class="head-meta">
+        <span class="page-status @ServerStateClass()"><i></i>@ServerStateText()</span>
+        <span>在线 <b>@Overview.Online</b> / @Overview.Sessions · 更新 <b>@SnapshotAtText()</b></span>
+
+        <AuthorizeView Policy="@AdminPermissions.PolicyOperate">
             <RadzenButton Text="@(Overview.Enabled ? "停用假人" : "启用假人")"
                           Icon="@(Overview.Enabled ? "pause_circle" : "play_circle")"
                           ButtonStyle="@(Overview.Enabled ? ButtonStyle.Warning : ButtonStyle.Success)"
                           Click="ToggleEnabled"
                           Disabled="@(GameServer.State != GameServerState.Running)" />
+        </AuthorizeView>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert @(_messageOk ? "success" : "danger")" style="margin-bottom:12px;">@_message</div>
+}
+
+@if (!Overview.Enabled)
+{
+    <div class="alert warning" style="margin-bottom:12px;">
+        假人调度当前<strong>已停用</strong>。点右上角「启用假人」后，调度器会在下一轮按水位开始拉人。
+        参数在「配置 → Bots」，改完即时生效，不用重启。
+    </div>
+}
+
+<div class="bot-tabs">
+    <button class="@(_tab == TabOverview ? "active" : "")" @onclick="@(() => _tab = TabOverview)">实时总览</button>
+    <button class="@(_tab == TabManage ? "active" : "")" @onclick="@(() => _tab = TabManage)">上线管理<small>@Overview.Online/@Overview.Sessions</small></button>
+    <button class="@(_tab == TabFiles ? "active" : "")" @onclick="@(() => _tab = TabFiles)">配置文件<small>@_nameCount/@_chatCount</small></button>
+    <button class="@(_tab == TabLogs ? "active" : "")" @onclick="@(() => _tab = TabLogs)">运行日志</button>
+</div>
+
+@* ============================ 实时总览 ============================ *@
+@if (_tab == TabOverview)
+{
+    <div class="metric-grid">
+        <div class="metric-card green">
+            <span>在线假人</span>
+            <strong>@Overview.Online<small style="font-size:16px;color:#6d7d82;"> / @Overview.Sessions</small></strong>
+            <small class="metric-note">水位目标 @Overview.Target · 真人 @Overview.RealPlayers</small>
+        </div>
+        <div class="metric-card cyan">
+            <span>平均等级</span>
+            <strong>@Overview.AverageLevel.ToString("0.#")</strong>
+            <small class="metric-note">只算在线</small>
+        </div>
+        <div class="metric-card amber">
+            <span>总击杀</span>
+            <strong>@Overview.TotalKills</strong>
+            <small class="metric-note">复活 @Overview.TotalDeaths</small>
+        </div>
+        <div class="metric-card">
+            <span>存活率</span>
+            <strong>@Overview.SurvivalRateText</strong>
+            <small class="metric-note">击杀 /（击杀 + 复活）</small>
+        </div>
+        <div class="metric-card amber">
+            <span>总金币</span>
+            <strong style="font-size:clamp(20px,2vw,30px);">@Overview.TotalGold.ToString("N0")</strong>
+            <small class="metric-note">本次赚 @Overview.GoldEarned.ToString("N0") · @Overview.GoldPerHour.ToString("N0")/时</small>
+        </div>
+        <div class="metric-card @(Overview.Overweight > 0 ? "red" : "")">
+            <span>超重 / 临界</span>
+            <strong>@Overview.Overweight / @Overview.NearOverweight</strong>
+            <small class="metric-note">负重 ≥100% / 85%</small>
+        </div>
+    </div>
+
+    @if (Rows.Length == 0)
+    {
+        <p style="opacity:.75;">
+            @(Overview.SchedulerStarted ? "调度器还没有产出快照，稍等一两秒。" : "调度器未启动（游戏服务器未运行或未初始化）。")
+        </p>
+    }
+    else
+    {
+        <div class="table-panel standalone">
+            <div class="table-scroll">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th style="width:40px;">#</th>
+                            <th style="width:110px;">角色</th>
+                            <th style="width:52px;">职业</th>
+                            <th style="width:62px;">等级</th>
+                            <th style="width:96px;">HP</th>
+                            <th style="width:88px;">MP</th>
+                            <th style="width:110px;">地图</th>
+                            <th style="width:76px;">坐标</th>
+                            <th style="width:88px;">状态</th>
+                            <th style="width:56px;">击杀</th>
+                            <th style="width:52px;">复活</th>
+                            <th style="width:66px;">在线</th>
+                            <th style="width:86px;">金币</th>
+                            <th style="width:104px;">负重</th>
+                            <th style="width:86px;">装备持久</th>
+                            <th style="width:96px;">最近技能</th>
+                            <th>最近动作 / 最后错误</th>
+                            <th style="width:200px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (BotSnapshot row in Rows)
+                        {
+                            <tr style="@RowStyle(row)">
+                                <td>@row.Seq</td>
+                                <td>@row.CharacterName</td>
+                                <td>@ClassText(row.ClassName)</td>
+                                <td>
+                                    <div class="cell-stack">
+                                        <b>@row.Level</b>
+                                        <small>@(row.ExpPercent)%</small>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="cell-stack">
+                                        <b>@row.CurrentHealth / @row.MaxHealth</b>
+                                        <span class="bar hp @HpBarClass(row.HealthPercent)"><i style="width:@BarWidth(row.HealthPercent)"></i></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="cell-stack">
+                                        <b>@row.CurrentMana / @row.MaxMana</b>
+                                        <span class="bar mp"><i style="width:@BarWidth(row.ManaPercent)"></i></span>
+                                    </div>
+                                </td>
+                                <td>@row.MapName</td>
+                                <td>@row.X, @row.Y</td>
+                                <td>
+                                    <span class="state-pill @StatePillClass(row)"><i></i>@StateText(row.State)</span>
+                                </td>
+                                <td>@row.Kills</td>
+                                <td>@row.Deaths</td>
+                                <td>@(string.IsNullOrEmpty(row.OnlineFor) ? "—" : row.OnlineFor)</td>
+                                <td>@row.Gold.ToString("N0")</td>
+                                <td>
+                                    <div class="cell-stack">
+                                        <b class="@WeightClass(row)">@row.BagWeight / @row.MaxBagWeight</b>
+                                        <small>@row.BagWeightPercent% · @row.UsedSlots/@row.SlotCount 格</small>
+                                        <span class="bar weight @WeightBarClass(row)"><i style="width:@BarWidth(Math.Min(100, row.BagWeightPercent))"></i></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    @if (row.WorstDurabilityPercent < 0)
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                    else
+                                    {
+                                        <div class="cell-stack">
+                                            <b class="@(row.WorstDurabilityPercent <= 20 ? "text-danger" : row.WorstDurabilityPercent <= 50 ? "text-warn" : "")">@row.WorstDurabilityPercent%</b>
+                                            <small>@SlotText(row.WorstDurabilitySlot)</small>
+                                        </div>
+                                    }
+                                </td>
+                                @* 技能名已在 BotBrain 落库时用 BotText.Magic 翻成中文，这里不再维护第二份映射表。 *@
+                                <td>@(string.IsNullOrEmpty(row.LastMagic) ? "—" : row.LastMagic)</td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(row.LastError))
+                                    {
+                                        <span class="text-danger">@row.LastError</span>
+                                    }
+                                    else
+                                    {
+                                        @row.Detail
+                                    }
+                                </td>
+                                <td>
+                                    @if (row.IsOnline)
+                                    {
+                                        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                                            <RadzenButton Text="补给" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                                          Click="@(() => Restock(row.Seq))" Disabled="@(!_canOperate)" />
+                                            <RadzenButton Text="传送" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                                          Click="@(() => Teleport(row.Seq))" Disabled="@(!_canOperate)" />
+                                            <RadzenButton Text="踢下线" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Warning"
+                                                          Click="@(() => Kick(row.Seq))" Disabled="@(!_canOperate)" />
+                                            @if (_canOwner && row.ClassName != "Warrior")
+                                            {
+                                                <RadzenButton Text="技能自检" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
+                                                              Click="@(() => SkillCheck(row.Seq))" />
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                                            <RadzenButton Text="启停" Size="ButtonSize.ExtraSmall"
+                                                          ButtonStyle="@(row.Enabled ? ButtonStyle.Light : ButtonStyle.Primary)"
+                                                          Click="@(() => ToggleOne(row))" Disabled="@(!_canOperate)" />
+                                            <RadzenButton Text="重置" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                                          Click="@(() => ResetOne(row.Seq))" Disabled="@(!_canOperate)" />
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <p style="opacity:.6;font-size:12px;margin:10px 0 0;">
+            状态胶囊：<span class="state-pill fight"><i></i>打怪</span>
+            <span class="state-pill move"><i></i>赶路/补给</span>
+            <span class="state-pill idle"><i></i>待机</span>
+            <span class="state-pill dead"><i></i>死亡</span>
+            —— 金色小字是经验进度；负重 ≥100% 时捡不了东西（引擎判定同源），要盯这张表。
+        </p>
+    }
+}
+
+@* ============================ 上线管理 ============================ *@
+@if (_tab == TabManage)
+{
+    <AuthorizeView Policy="@AdminPermissions.PolicyOperate">
+        <div class="control-cluster" style="margin-bottom:14px;">
             <RadzenButton Text="上 5 个" Icon="group_add" ButtonStyle="ButtonStyle.Light"
                           Click="@(() => ForceSpawn(5))"
                           Disabled="@(GameServer.State != GameServerState.Running || !Overview.SchedulerStarted)" />
@@ -41,324 +254,257 @@
                           Click="ResetAll"
                           Disabled="@(GameServer.State != GameServerState.Running || !Overview.SchedulerStarted)" />
         </div>
-    </AuthorizeView>
-</div>
 
-@if (!string.IsNullOrEmpty(_message))
-{
-    <div class="alert @(_messageOk ? "success" : "danger")" style="margin-bottom:12px;">@_message</div>
-}
-
-<div class="config-grid" style="margin-bottom:14px;">
-    <div class="config-field">
-        <span>调度器</span>
-        <strong>@(Overview.SchedulerStarted ? "运行中" : "未启动")</strong>
-    </div>
-    <div class="config-field">
-        <span>在线假人</span>
-        <strong>@Overview.Online / @Overview.Sessions</strong>
-    </div>
-    <div class="config-field">
-        <span>真人在线</span>
-        <strong>@Overview.RealPlayers</strong>
-    </div>
-    <div class="config-field">
-        <span>水位目标</span>
-        <strong>@Overview.Target</strong>
-    </div>
-    <div class="config-field">
-        <span>平均等级 / 击杀 / 死亡</span>
-        <strong>@Overview.AverageLevel / @Overview.TotalKills / @Overview.TotalDeaths</strong>
-    </div>
-    <div class="config-field">
-        <span>假人金币合计</span>
-        <strong>@Overview.TotalGold.ToString("N0")</strong>
-    </div>
-    <div class="config-field">
-        <span>主循环延迟（Con / Save）</span>
-        <strong>@Overview.ConnectionDelayMs ms / @Overview.SaveDelayMs ms</strong>
-    </div>
-    <div class="config-field">
-        <span>停用 / 故障</span>
-        <strong>@Overview.Disabled / @Overview.Broken</strong>
-    </div>
-    <div class="config-field">
-        <span>名单文件</span>
-        <strong>@_nameCount 条@(string.IsNullOrEmpty(_namesPath) ? "" : " · " + ShortPath(_namesPath))</strong>
-    </div>
-</div>
-
-@if (!Overview.Enabled)
-{
-    <div class="alert warning" style="margin-bottom:12px;">
-        假人调度当前<strong>已停用</strong>。点右上角「启用假人」后，调度器会在下一轮按水位开始拉人。
-        参数在「配置 → Bots」，改完即时生效，不用重启。
-    </div>
-}
-
-<AuthorizeView Policy="@AdminPermissions.PolicyOperate">
-    <div class="config-grid" style="margin-bottom:14px;padding-bottom:0;">
-        <div class="config-field">
-            <span>传送目标地图</span>
-            <select @bind="_teleportMapIndex" style="width:100%;padding:4px;background:#0d1315;color:#bac4c7;border:1px solid #24333a;">
-                @foreach (BotMapOption option in _mapOptions)
-                {
-                    <option value="@option.Index">@option.ToString()</option>
-                }
-            </select>
-        </div>
-        <div class="config-field">
-            <span>传送坐标（空 = 地图中心附近）</span>
-            <div style="display:flex;gap:6px;">
-                <input type="number" @bind="_teleportX" placeholder="X" style="width:80px;padding:4px;background:#0d1315;color:#bac4c7;border:1px solid #24333a;" />
-                <input type="number" @bind="_teleportY" placeholder="Y" style="width:80px;padding:4px;background:#0d1315;color:#bac4c7;border:1px solid #24333a;" />
-            </div>
-        </div>
-        <div class="config-field">
-            <span>提示</span>
-            <strong style="font-weight:400;">行内「传送」按钮用上面这张图 + 坐标；留 0 则落在图中心</strong>
-        </div>
-    </div>
-</AuthorizeView>
-
-@if (Rows.Length == 0)
-{
-    <p style="opacity:.75;">
-        @(Overview.SchedulerStarted ? "调度器还没有产出快照，稍等一两秒。" : "调度器未启动（游戏服务器未运行或未初始化）。")
-    </p>
-}
-else
-{
-    <div class="table-panel standalone">
-        <div class="table-scroll">
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th style="width:44px;">#</th>
-                        <th style="width:120px;">角色</th>
-                        <th style="width:56px;">职业</th>
-                        <th style="width:70px;">等级</th>
-                        <th style="width:80px;">HP / MP</th>
-                        <th style="width:56px;">金币</th>
-                        <th style="width:130px;">位置</th>
-                        <th style="width:64px;">阶段</th>
-                        <th style="width:70px;">行为</th>
-                        <th style="width:56px;">技</th>
-                        <th style="width:64px;">杀 / 死</th>
-                        <th style="width:96px;">补给 成/败</th>
-                        <th style="width:90px;">药 / 卷</th>
-                        <th style="width:80px;">交易/挖取</th>
-                        <th style="width:60px;">在线</th>
-                        <th>最近动作 / 最后错误</th>
-                        <th style="width:210px;">操作</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (BotSnapshot row in Rows)
+        <div class="config-grid" style="margin-bottom:14px;padding:0 0 14px;">
+            <div class="config-field">
+                <span>传送目标地图</span>
+                <select @bind="_teleportMapIndex">
+                    @foreach (BotMapOption option in _mapOptions)
                     {
-                        <tr style="@RowStyle(row)">
-                            <td>@row.Seq</td>
-                            <td>@row.CharacterName</td>
-                            <td>@ClassText(row.ClassName)</td>
-                            <td>@row.Level <span style="opacity:.55;">@(row.ExpPercent)%</span></td>
-                            <td>@row.HealthPercent% / @row.ManaPercent%</td>
-                            <td>@row.Gold.ToString("N0")</td>
-                            <td>@row.MapName（@row.X,@row.Y）</td>
-                            <td>@row.Phase</td>
-                            <td>@StateText(row.State)</td>
-                            <td>@row.MagicCount</td>
-                            <td>@row.Kills / @row.Deaths</td>
-                            <td>@row.Restocks / @row.RestockFails</td>
-                            <td>@row.RedPotions / @row.TownScrollCount</td>
-                            <td>@row.Trades / @row.Harvests</td>
-                            <td>@(string.IsNullOrEmpty(row.OnlineFor) ? "—" : row.OnlineFor)</td>
-                            <td>
-                                @if (!string.IsNullOrEmpty(row.LastError))
-                                {
-                                    <span style="color:#e08b84;">@row.LastError</span>
-                                }
-                                else
-                                {
-                                    @row.Detail
-                                }
-                            </td>
-                            <td>
-                                @if (row.Phase == "在线")
-                                {
-                                    <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                                        <RadzenButton Text="补给" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
-                                                      Click="@(() => Restock(row.Seq))" Disabled="@(!_canOperate)" />
-                                        <RadzenButton Text="传送" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
-                                                      Click="@(() => Teleport(row.Seq))" Disabled="@(!_canOperate)" />
-                                        <RadzenButton Text="踢下线" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Warning"
-                                                      Click="@(() => Kick(row.Seq))" Disabled="@(!_canOperate)" />
-                                        @if (_canOwner && row.ClassName != "Warrior")
-                                        {
-                                            <RadzenButton Text="技能自检" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
-                                                          Click="@(() => SkillCheck(row.Seq))" />
-                                        }
-                                    </div>
-                                }
-                                else
-                                {
-                                    <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                                        <RadzenButton Text="启停" Size="ButtonSize.ExtraSmall"
-                                                      ButtonStyle="@(row.Enabled ? ButtonStyle.Light : ButtonStyle.Primary)"
-                                                      Click="@(() => ToggleOne(row))" Disabled="@(!_canOperate)" />
-                                        <RadzenButton Text="重置" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
-                                                      Click="@(() => ResetOne(row.Seq))" Disabled="@(!_canOperate)" />
-                                    </div>
-                                }
-                            </td>
-                        </tr>
+                        <option value="@option.Index">@option.ToString()</option>
                     }
-                </tbody>
-            </table>
-        </div>
-    </div>
-}
-
-<h2 style="margin:22px 0 8px;font-size:16px;">假人档案（跨重启持久化）</h2>
-<p style="opacity:.75;font-size:13px;margin:0 0 10px;">
-    下面这张表读的是 <code>Users.db</code> 里的角色记录，<b>不依赖在线状态</b>：
-    假人下线、服务器重启之后，等级、累计击杀、累计在线时长都还在（真人角色这些列恒为 0）。
-</p>
-
-@if (Profiles.Count == 0)
-{
-    <p style="opacity:.75;">
-        @(Overview.SchedulerStarted ? "还没有假人档案（假人尚未建号，或服务器未运行）。" : "调度器未启动（游戏服务器未运行或未初始化）。")
-    </p>
-}
-else
-{
-    <div class="table-panel standalone">
-        <div class="table-scroll">
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th style="width:44px;">#</th>
-                        <th style="width:120px;">角色</th>
-                        <th style="width:56px;">职业</th>
-                        <th style="width:70px;">等级</th>
-                        <th style="width:110px;">经验</th>
-                        <th style="width:64px;">累计击杀</th>
-                        <th style="width:96px;">累计在线</th>
-                        <th style="width:96px;">补给 成/败</th>
-                        <th style="width:64px;">成功率</th>
-                        <th style="width:80px;">用卷/买卷</th>
-                        <th style="width:80px;">交易/挖取</th>
-                        <th style="width:64px;">金币</th>
-                        <th style="width:56px;">装备</th>
-                        <th style="width:56px;">状态</th>
-                        <th style="width:120px;">位置</th>
-                        <th style="width:130px;">上次登录</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (BotProfileRow row in Profiles)
-                    {
-                        <tr>
-                            <td>@row.Seq</td>
-                            <td>@row.CharacterName</td>
-                            <td>@ClassText(row.ClassName)</td>
-                            <td>@row.Level</td>
-                            <td>@row.ExpPercent%</td>
-                            <td>@row.Kills</td>
-                            <td>@row.OnlineTimeText</td>
-                            <td>@row.Restocks / @row.RestockFails</td>
-                            <td>@row.RestockRateText</td>
-                            <td>@row.TownScrollUses / @row.TownScrollBuys</td>
-                            <td>@row.Trades / @row.Harvests</td>
-                            <td>@row.Gold.ToString("N0")</td>
-                            <td>@row.Items</td>
-                            <td>@(row.Online ? "在线" : "离线")</td>
-                            <td>@row.MapName</td>
-                            <td>@row.LastLoginText</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-}
-
-<AuthorizeView Policy="@AdminPermissions.PolicyOwner">
-    <h2 style="margin:22px 0 8px;font-size:16px;">假人数据清理</h2>
-    <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
-        按账号上的 <code>IsBot</code> 标记精确删除<b>假人账号、角色及其全部关联数据</b>（背包 / 仓库 / 货币 / 宠物 / 邮件 / 寄售 / 任务等），
-        <b>真人账号一个都不碰</b>。这是不可逆操作，执行前会先给出预览；清理期间调度器会被停用。
-    </p>
-
-    <div class="table-panel standalone" style="padding:12px;">
-        @if (_cleanupPreview is null)
-        {
-            <RadzenButton Text="预览将清理的数据" Icon="preview" ButtonStyle="ButtonStyle.Light"
-                          Click="PreviewCleanup" Disabled="@(!ServerRunning)" />
-        }
-        else
-        {
-            <div style="margin-bottom:10px;line-height:1.9;">
-                @* 原本文案只显示「已下线可立即删」的账号数，30 个假人全在线时会显示「0 个假人账号」，
-                   看起来像查不到数据，运维不敢点。这里把在线数合并进总数，并说明拆分。 *@
-                将清理：<b>@(_cleanupPreview.Accounts + _cleanupPreview.Online)</b> 个假人账号
-                @if (_cleanupPreview.Online > 0)
-                {
-                    <span>（已下线 <b>@_cleanupPreview.Accounts</b> 个可立即删，在线 <b>@_cleanupPreview.Online</b> 个会先下线再删）</span>
-                }
-                、<b>@_cleanupPreview.Characters</b> 个角色、
-                物品 <b>@_cleanupPreview.Items</b>、货币记录 <b>@_cleanupPreview.Currencies</b>、
-                宠物 <b>@_cleanupPreview.Companions</b>、邮件 <b>@_cleanupPreview.Mails</b>、
-                寄售 <b>@_cleanupPreview.Auctions</b>、任务 <b>@_cleanupPreview.Quests</b>。
+                </select>
             </div>
-
-            @if (!_cleanupConfirming)
-            {
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <RadzenButton Text="清理并停用调度" Icon="delete_forever" ButtonStyle="ButtonStyle.Danger"
-                                  Click="@(() => RunCleanup(false))" Disabled="@(!ServerRunning)" />
-                    <RadzenButton Text="重置（清完重新开号）" Icon="restart_alt" ButtonStyle="ButtonStyle.Warning"
-                                  Click="@(() => RunCleanup(true))" Disabled="@(!ServerRunning)" />
-                    <RadzenButton Text="取消" ButtonStyle="ButtonStyle.Light" Click="CancelCleanup" />
+            <div class="config-field">
+                <span>传送坐标（空 = 地图中心附近）</span>
+                <div style="display:flex;gap:6px;">
+                    <input type="number" @bind="_teleportX" placeholder="X" style="width:80px;" />
+                    <input type="number" @bind="_teleportY" placeholder="Y" style="width:80px;" />
                 </div>
+            </div>
+            <div class="config-field">
+                <span>提示</span>
+                <strong style="font-weight:400;">行内「传送」按钮用上面这张图 + 坐标；X/Y 必须都 &gt; 0</strong>
+            </div>
+        </div>
+    </AuthorizeView>
+
+    <div class="config-grid" style="margin-bottom:14px;padding:0;">
+        <div class="config-field"><span>调度器</span><strong>@(Overview.SchedulerStarted ? "运行中" : "未启动")</strong></div>
+        <div class="config-field"><span>停用 / 故障</span><strong>@Overview.Disabled / @Overview.Broken</strong></div>
+        <div class="config-field"><span>主循环延迟（Con / Save）</span><strong>@Overview.ConnectionDelayMs ms / @Overview.SaveDelayMs ms</strong></div>
+    </div>
+
+    <h2 style="margin:22px 0 8px;font-size:16px;">假人档案（跨重启持久化）</h2>
+    <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
+        下面这张表读的是 <code>Users.db</code> 里的角色记录，<b>不依赖在线状态</b>：
+        假人下线、服务器重启之后，等级、累计击杀、累计在线时长都还在（真人角色这些列恒为 0）。
+    </p>
+
+    @if (Profiles.Count == 0)
+    {
+        <p style="opacity:.75;">
+            @(Overview.SchedulerStarted ? "还没有假人档案（假人尚未建号，或服务器未运行）。" : "调度器未启动（游戏服务器未运行或未初始化）。")
+        </p>
+    }
+    else
+    {
+        <div class="table-panel standalone">
+            <div class="table-scroll">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th style="width:44px;">#</th>
+                            <th style="width:120px;">角色</th>
+                            <th style="width:56px;">职业</th>
+                            <th style="width:70px;">等级</th>
+                            <th style="width:110px;">经验</th>
+                            <th style="width:64px;">累计击杀</th>
+                            <th style="width:96px;">累计在线</th>
+                            <th style="width:96px;">补给 成/败</th>
+                            <th style="width:64px;">成功率</th>
+                            <th style="width:80px;">用卷/买卷</th>
+                            <th style="width:80px;">交易/挖取</th>
+                            <th style="width:64px;">金币</th>
+                            <th style="width:56px;">装备</th>
+                            <th style="width:56px;">状态</th>
+                            <th style="width:120px;">位置</th>
+                            <th style="width:130px;">上次登录</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (BotProfileRow row in Profiles)
+                        {
+                            <tr>
+                                <td>@row.Seq</td>
+                                <td>@row.CharacterName</td>
+                                <td>@ClassText(row.ClassName)</td>
+                                <td>@row.Level</td>
+                                <td>@row.ExpPercent%</td>
+                                <td>@row.Kills</td>
+                                <td>@row.OnlineTimeText</td>
+                                <td>@row.Restocks / @row.RestockFails</td>
+                                <td>@row.RestockRateText</td>
+                                <td>@row.TownScrollUses / @row.TownScrollBuys</td>
+                                <td>@row.Trades / @row.Harvests</td>
+                                <td>@row.Gold.ToString("N0")</td>
+                                <td>@row.Items</td>
+                                <td>@(row.Online ? "在线" : "离线")</td>
+                                <td>@row.MapName</td>
+                                <td>@row.LastLoginText</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    <AuthorizeView Policy="@AdminPermissions.PolicyOwner">
+        <h2 style="margin:22px 0 8px;font-size:16px;">假人数据清理</h2>
+        <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
+            按账号上的 <code>IsBot</code> 标记精确删除<b>假人账号、角色及其全部关联数据</b>（背包 / 仓库 / 货币 / 宠物 / 邮件 / 寄售 / 任务等），
+            <b>真人账号一个都不碰</b>。这是不可逆操作，执行前会先给出预览；清理期间调度器会被停用。
+        </p>
+
+        <div class="table-panel standalone" style="padding:12px;">
+            @if (_cleanupPreview is null)
+            {
+                <RadzenButton Text="预览将清理的数据" Icon="preview" ButtonStyle="ButtonStyle.Light"
+                              Click="PreviewCleanup" Disabled="@(!ServerRunning)" />
             }
             else
             {
-                <div class="alert danger" style="margin-bottom:8px;">
-                    <b>最后确认：</b>此操作会永久删除上面列出的全部假人数据，无法撤销。
-                    清理后假人调度会@(_cleanupResumeScheduler ? "恢复，假人重新建号并从 1 级开始" : "保持停用，假人不再上线")。确定继续吗？
+                <div style="margin-bottom:10px;line-height:1.9;">
+                    @* 原本文案只显示「已下线可立即删」的账号数，30 个假人全在线时会显示「0 个假人账号」，
+                       看起来像查不到数据，运维不敢点。这里把在线数合并进总数，并说明拆分。 *@
+                    将清理：<b>@(_cleanupPreview.Accounts + _cleanupPreview.Online)</b> 个假人账号
+                    @if (_cleanupPreview.Online > 0)
+                    {
+                        <span>（已下线 <b>@_cleanupPreview.Accounts</b> 个可立即删，在线 <b>@_cleanupPreview.Online</b> 个会先下线再删）</span>
+                    }
+                    、<b>@_cleanupPreview.Characters</b> 个角色、
+                    物品 <b>@_cleanupPreview.Items</b>、货币记录 <b>@_cleanupPreview.Currencies</b>、
+                    宠物 <b>@_cleanupPreview.Companions</b>、邮件 <b>@_cleanupPreview.Mails</b>、
+                    寄售 <b>@_cleanupPreview.Auctions</b>、任务 <b>@_cleanupPreview.Quests</b>。
                 </div>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <RadzenButton Text="确定删除" Icon="check_circle" ButtonStyle="ButtonStyle.Danger" Click="ConfirmCleanup" />
-                    <RadzenButton Text="我再想想" ButtonStyle="ButtonStyle.Light" Click="CancelCleanup" />
-                </div>
-            }
-        }
-    </div>
-</AuthorizeView>
 
-<div style="margin-top:18px;opacity:.75;font-size:13px;line-height:1.75;">
-    <p>
-        <strong>阶段</strong>：建连接 → 等待入列 → 登录中 → 进图中 → 在线。四个前段每步之间随机停 300~1200ms，
-        避免 30 个假人同一帧涌进来把主循环顶住。
+                @if (!_cleanupConfirming)
+                {
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <RadzenButton Text="清理并停用调度" Icon="delete_forever" ButtonStyle="ButtonStyle.Danger"
+                                      Click="@(() => RunCleanup(false))" Disabled="@(!ServerRunning)" />
+                        <RadzenButton Text="重置（清完重新开号）" Icon="restart_alt" ButtonStyle="ButtonStyle.Warning"
+                                      Click="@(() => RunCleanup(true))" Disabled="@(!ServerRunning)" />
+                        <RadzenButton Text="取消" ButtonStyle="ButtonStyle.Light" Click="CancelCleanup" />
+                    </div>
+                }
+                else
+                {
+                    <div class="alert danger" style="margin-bottom:8px;">
+                        <b>最后确认：</b>此操作会永久删除上面列出的全部假人数据，无法撤销。
+                        清理后假人调度会@(_cleanupResumeScheduler ? "恢复，假人重新建号并从 1 级开始" : "保持停用，假人不再上线")。确定继续吗？
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <RadzenButton Text="确定删除" Icon="check_circle" ButtonStyle="ButtonStyle.Danger" Click="ConfirmCleanup" />
+                        <RadzenButton Text="我再想想" ButtonStyle="ButtonStyle.Light" Click="CancelCleanup" />
+                    </div>
+                }
+            }
+        </div>
+    </AuthorizeView>
+
+    <div style="margin-top:18px;opacity:.75;font-size:13px;line-height:1.75;">
+        <p>
+            <strong>阶段</strong>：建连接 → 等待入列 → 登录中 → 进图中 → 在线。四个前段每步之间随机停 300~1200ms，
+            避免 30 个假人同一帧涌进来把主循环顶住。
+        </p>
+        <p>
+            <strong>行为</strong>：待机 / 去刷怪点 / 打怪 / 捡东西 / 等复活 / 回城买药 / 回城卖货 / 挖取 / 跨图赶路 / 传送跨图。
+            法师道士<b>按引擎等级门槛补技能</b>（火球术 7 级、灵魂火符 13 级），1~6 级只有平砍 —— 与真人一致。
+        </p>
+        <p>
+            <strong>操作边界</strong>：单人「启停 / 重置 / 补给 / 传送 / 踢下线」不写审计（一秒能点十次）；
+            「关闭总开关」「全部重置」「清理假人」各写一条。「清理假人」是<b>不可逆</b>的删号操作，
+            只有主密码登录可见，执行前必须先看预览。
+        </p>
+        <p>
+            <strong>数据存哪</strong>：假人与真人共用同一个 <code>Users.db</code>，靠账号上的 <code>IsBot</code> 标记区分。
+            假人账号<b>不接受外部登录</b>（密码是固定值，登录会触发顶号保护甚至把账号封禁）。
+            <code>Users.db</code> 是唯一的数据文件，<b>删了等于清档</b>（真人和假人一起没）。
+        </p>
+    </div>
+}
+
+@* ============================ 配置文件 ============================ *@
+@if (_tab == TabFiles)
+{
+    <div class="config-grid" style="padding:0 0 16px;">
+        <div class="config-field">
+            <span>名单文件 <em>Bots/names.txt</em></span>
+            <strong>@_nameCount 条</strong>
+            <span style="color:#6d7d82;">@(string.IsNullOrEmpty(_namesPath) ? "未找到" : _namesPath)</span>
+        </div>
+        <div class="config-field">
+            <span>聊天语料 <em>Bots/chat.txt</em></span>
+            <strong>@_chatCount 条</strong>
+            <span style="color:#6d7d82;">格式：类别|地图|等级下限|文本</span>
+        </div>
+        <div class="config-field">
+            <span>生效方式</span>
+            <strong style="font-weight:400;">改文件保存后 <b>5 秒内热加载</b>，不用重启、不用重启调度</strong>
+        </div>
+    </div>
+
+    <div class="alert warning" style="margin-bottom:14px;">
+        这两个文件<b>不提供在线编辑</b>：它们是纯文本（UTF-8 / CRLF），在线编辑会把中文编码和换行改坏，
+        而坏掉的语料不会报错，只会让假人「突然不说话了」。请用编辑器改服务器目录下的文件。
+    </div>
+
+    <h2 style="margin:18px 0 8px;font-size:16px;">当前生效参数（只读）</h2>
+    <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
+        改这些要去「配置 → Bots」，保存后即时生效。这里只是让运营不用来回跳页就能确认现值。
     </p>
-    <p>
-        <strong>行为</strong>：待机 / 去刷怪点 / 打怪 / 捡东西 / 等复活 / 回城买药 / 回城卖货 / 挖取 / 跨图赶路 / 传送跨图。
-        法师道士<b>按引擎等级门槛补技能</b>（火球术 7 级、灵魂火符 13 级），1~6 级只有平砍 —— 与真人一致。
-    </p>
-    <p>
-        <strong>操作边界</strong>：单人「启停 / 重置 / 补给 / 传送 / 踢下线」不写审计（一秒能点十次）；
-        「关闭总开关」「全部重置」「清理假人」各写一条。「清理假人」是<b>不可逆</b>的删号操作，
-        只有主密码登录可见，执行前必须先看预览。
-    </p>
-    <p>
-        <strong>数据存哪</strong>：假人与真人共用同一个 <code>Users.db</code>，靠账号上的 <code>IsBot</code> 标记区分。
-        假人账号<b>不接受外部登录</b>（密码是固定值，登录会触发顶号保护甚至把账号封禁）。
-        <code>Users.db</code> 是唯一的数据文件，<b>删了等于清档</b>（真人和假人一起没）。
-    </p>
-</div>
+
+    <div class="readonly-grid">
+        <div><span>BotEnabled</span><b>@Config.BotEnabled</b></div>
+        <div><span>水位 目标/最小/最大</span><b>@Config.BotTargetOnline / @Config.BotMinOnline / @Config.BotMaxOnline</b></div>
+        <div><span>每轮变更上限</span><b>@Config.BotMaxChangePerTick</b></div>
+        <div><span>分图容量</span><b>@Config.BotMapCapacity</b></div>
+        <div><span>日志级别</span><b>@Config.BotLogLevel</b></div>
+        <div><span>聊天</span><b>@(Config.BotChatEnabled ? "开" : "关") @Config.BotChatIntervalMinSeconds~@Config.BotChatIntervalMaxSeconds 秒</b></div>
+        <div><span>社交总开关</span><b>@(Config.BotSocialEnabled ? "开" : "关")</b></div>
+        <div><span>行会</span><b>@(Config.BotGuildEnabled ? "开" : "关") · @Config.BotGuildCount 个 · ≥@Config.BotGuildMinLevel 级</b></div>
+        <div><span>红名 PK</span><b>@(Config.BotPkEnabled ? "开" : "关") · 每 @Config.BotPkIntervalMinutes 分钟</b></div>
+        <div><span>榜首降速</span><b>@(Config.BotTopSlowEnabled ? "开" : "关") · 前 @Config.BotTopRankLimit 名 / @Config.BotTopHoldMinutes 分钟后停 @Config.BotTopSlowMinutes 分钟</b></div>
+        <div><span>真人优先 / 跳过 BOSS</span><b>@(Config.BotRespectRealPlayerTags ? "开" : "关") / @(Config.BotSkipBoss ? "开" : "关")</b></div>
+        <div><span>夜间比例</span><b>@(Config.BotNightEnabled ? Config.BotNightScalePercent + "%（" + Config.BotNightMinHour + "~" + Config.BotNightMaxHour + " 点）" : "关")</b></div>
+    </div>
+}
+
+@* ============================ 运行日志 ============================ *@
+@if (_tab == TabLogs)
+{
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <p style="opacity:.7;font-size:12px;margin:0;">
+            只显示含 <code>BOT#</code> / <code>BOT</code> 的系统日志（最近 300 条）。要完整日志去服务器目录的 <code>Logs.txt</code>。
+        </p>
+        <span class="text-muted" style="font-size:11px;">@_logLines.Length 条</span>
+    </div>
+
+    @if (_logLines.Length == 0)
+    {
+        <p style="opacity:.75;">还没有假人日志。把 <code>BotLogLevel</code> 调成 1（Info）或 0（Debug）能看到更多。</p>
+    }
+    else
+    {
+        <div class="log-console">
+            @foreach (string line in _logLines)
+            {
+                <div class="log-line"><span>·</span>@line</div>
+            }
+        </div>
+    }
+}
 
 @code {
+    private const int TabOverview = 0;
+    private const int TabManage = 1;
+    private const int TabFiles = 2;
+    private const int TabLogs = 3;
+
+    private int _tab = TabOverview;
+
     private BotSnapshot[] Rows { get; set; } = Array.Empty<BotSnapshot>();
     private BotOverview Overview { get; set; } = BotOverview.Empty;
 
@@ -374,6 +520,9 @@ else
     private bool _messageOk = true;
     private string _namesPath = string.Empty;
     private int _nameCount;
+    private int _chatCount;
+
+    private string[] _logLines = Array.Empty<string>();
 
     /// <summary>清理前的 dry-run 预览；null = 还没点预览。</summary>
     private BotCleanupStats? _cleanupPreview;
@@ -419,6 +568,20 @@ else
         var files = Admin.DataFiles();
         _namesPath = files.Path;
         _nameCount = files.Count;
+        _chatCount = files.ChatCount;
+
+        // 日志只在「运行日志」tab 打开时才过滤，别在别的 tab 白烧 CPU。
+        if (_tab == TabLogs) RefreshLogs();
+    }
+
+    private void RefreshLogs()
+    {
+        IReadOnlyList<string> all = Logs.GetSystemLogs();
+
+        _logLines = all
+            .Where(x => x.Contains("BOT#", StringComparison.Ordinal) || x.Contains("BOT ", StringComparison.Ordinal))
+            .TakeLast(300)
+            .ToArray();
     }
 
     private async Task RefreshLoopAsync(CancellationToken token)
@@ -576,8 +739,84 @@ else
         "Trade" => "回城卖货",
         "Harvest" => "挖取",
         "Teleport" => "传送跨图",
+        "Rebirth" => "转生",
         _ => state,
     };
+
+    /// <summary>状态胶囊配色：打怪绿、赶路/补给琥珀、死亡红、待机灰。</summary>
+    private static string StatePillClass(BotSnapshot row)
+    {
+        if (row.Broken) return "broken";
+
+        return row.State switch
+        {
+            "Fight" => "fight",
+            "Loot" => "fight",
+            "Dead" => "dead",
+            "GoHunt" => "move",
+            "Travel" => "move",
+            "Teleport" => "move",
+            "Restock" => "move",
+            "Trade" => "move",
+            "Harvest" => "move",
+            "Rebirth" => "move",
+            _ => "idle",
+        };
+    }
+
+    private static string HpBarClass(int percent) => percent <= 30 ? "crit" : percent <= 60 ? "low" : string.Empty;
+
+    private static string WeightClass(BotSnapshot row) =>
+        row.BagWeightPercent >= 100 ? "text-danger" : row.BagWeightPercent >= 85 ? "text-warn" : string.Empty;
+
+    private static string WeightBarClass(BotSnapshot row) =>
+        row.BagWeightPercent >= 100 ? "over" : row.BagWeightPercent >= 85 ? "near" : string.Empty;
+
+    /// <summary>进度条宽度：钳到 0~100，防止 120% 负重把条撑出格子。</summary>
+    private static string BarWidth(int percent) => Math.Clamp(percent, 0, 100) + "%";
+
+    private static string SlotText(string slot) => slot switch
+    {
+        "Weapon" => "武器",
+        "Armour" => "衣服",
+        "Helmet" => "头盔",
+        "Torch" => "火把",
+        "Necklace" => "项链",
+        "BraceletL" => "左手镯",
+        "BraceletR" => "右手镯",
+        "RingL" => "左戒指",
+        "RingR" => "右戒指",
+        "Shoes" => "鞋子",
+        "Poison" => "毒药",
+        "Amulet" => "护身符",
+        "Flower" => "花",
+        "HorseArmour" => "马甲",
+        "Emblem" => "徽章",
+        "Shield" => "盾",
+        "Costume" => "时装",
+        _ => slot,
+    };
+
+    /// <summary>魔法枚举名 → 中文。表里只放常用攻击魔法，其它原样显示（英文也不会看不懂）。</summary>
+    private string ServerStateClass() => GameServer.State switch
+    {
+        GameServerState.Running => "on",
+        GameServerState.Starting => "starting",
+        GameServerState.Stopping => "starting",
+        _ => "off",
+    };
+
+    private string ServerStateText() => GameServer.State switch
+    {
+        GameServerState.Running => "已连接",
+        GameServerState.Starting => "启动中",
+        GameServerState.Stopping => "停止中",
+        GameServerState.Faulted => "故障",
+        _ => "未启动",
+    };
+
+    private string SnapshotAtText() =>
+        Overview.SnapshotAt == DateTime.MinValue ? "—" : Overview.SnapshotAt.ToString("HH:mm:ss");
 
     public void Dispose()
     {

@@ -22,10 +22,19 @@ public sealed record BotOverview(
     int TotalDeaths,
     long TotalGold,
     long ConnectionDelayMs,
-    long SaveDelayMs)
+    long SaveDelayMs,
+    int SurvivalRate,
+    int Overweight,
+    int NearOverweight,
+    long GoldEarned,
+    long GoldPerHour,
+    DateTime SnapshotAt)
 {
     /// <summary>首屏还没取到快照时的占位值（页面初始化用）。</summary>
-    public static BotOverview Empty { get; } = new(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static BotOverview Empty { get; } = new(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, DateTime.MinValue);
+
+    /// <summary>存活率文本：没有样本时显示 <c>—</c>，而不是 0%（0% 会被误读成「全死光了」）。</summary>
+    public string SurvivalRateText => SurvivalRate >= 0 ? $"{SurvivalRate}%" : "—";
 }
 
 /// <summary>命令结果：成功与否 + 一句能直接显示给运营的中文。</summary>
@@ -133,11 +142,11 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
     {
         BotSnapshot[] rows = BotRoster.Snapshot();
 
-        int online = rows.Count(x => x.Phase == "在线");
+        // 聚合口径统一交给 ServerLibrary.BotRoster.BuildTotals（同一份代码，页面和日志不会算出两个数）。
+        BotTotals totals = BotRoster.Totals();
+
         int disabled = rows.Count(x => !x.Enabled);
         int broken = rows.Count(x => x.Broken);
-
-        double avgLevel = online > 0 ? rows.Where(x => x.Phase == "在线").Average(x => (double)x.Level) : 0;
 
         int real = BotRoster.RealPlayerCount;
 
@@ -148,18 +157,24 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
         return new BotOverview(
             BotRoster.Started,
             Config.BotEnabled,
-            online,
+            totals.Online,
             BotRoster.SessionCount,
             disabled,
             broken,
             real,
             target,
-            Math.Round(avgLevel, 1),
-            rows.Sum(x => x.Kills),
-            rows.Sum(x => x.Deaths),
-            rows.Sum(x => x.Gold),
+            totals.AverageLevel,
+            totals.TotalKills,
+            totals.TotalDeaths,
+            totals.TotalGold,
             SEnvir.ConDelay,
-            SEnvir.SaveDelay);
+            SEnvir.SaveDelay,
+            totals.SurvivalRate,
+            totals.Overweight,
+            totals.NearOverweight,
+            totals.GoldEarned,
+            totals.GoldPerHour,
+            totals.SnapshotAt);
     }
 
     public BotSnapshot[] GetSnapshot() => BotRoster.Snapshot();
@@ -181,8 +196,8 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
         }
     }
 
-    /// <summary>假人名单文件的状态（给页面显示「名单 30 条 / chat.txt 未实现」）。</summary>
-    public (string Path, int Count, bool ChatReady, bool DirectoryReady) DataFiles()
+    /// <summary>假人名单 / 聊天语料的状态（给页面显示「名单 30 条 · 语料 70 条」）。</summary>
+    public (string Path, int Count, int ChatCount, bool DirectoryReady) DataFiles()
     {
         string path = BotData.NamesPath;
 
@@ -191,7 +206,14 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
         try { count = BotData.Names().Count; }
         catch { count = 0; }
 
-        return (path, count, BotData.ChatFileExists, Directory.Exists(BotData.Root));
+        // 语料条数走 BotChat.Count（内部按文件 mtime 热加载），
+        // 后台看到 0 就说明 chat.txt 没放对位置或被写坏了。
+        int chatCount;
+
+        try { chatCount = BotChat.Count; }
+        catch { chatCount = 0; }
+
+        return (path, count, chatCount, Directory.Exists(BotData.Root));
     }
 
     #region 命令
