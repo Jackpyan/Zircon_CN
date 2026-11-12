@@ -1,6 +1,7 @@
 ﻿using Library;
 using Library.SystemModels;
 using Server.DBModels;
+using Server.Envir;
 using Server.Models;
 using Server.Models.Monsters;
 using System.Collections.Generic;
@@ -264,6 +265,12 @@ namespace Server.Bots
         /// </summary>
         private static readonly Dictionary<NPCInfo, bool> TeleportStoneCache = new Dictionary<NPCInfo, bool>();
 
+        /// <summary>「带某种 NPC 动作」的 NPC 缓存（转生用）。null 是有效值（全服没有）。</summary>
+        private static readonly Dictionary<NPCActionType, NPCInfo> ActionNpcCache = new Dictionary<NPCActionType, NPCInfo>();
+
+        /// <summary>有六合圣石的地图集合（懒加载一次）。用来在挑练级图时优先选「能传送到的」。</summary>
+        private static HashSet<MapInfo> _stoneMaps;
+
         /// <summary>地图 → 这张图上的六合石（只缓存命中，见 <see cref="FindTeleportStone"/>）。</summary>
         private static readonly Dictionary<Map, NPCObject> TeleportStoneMapCache = new Dictionary<Map, NPCObject>();
 
@@ -411,7 +418,6 @@ namespace Server.Bots
         public static int CheapestTeleportCost(NPCInfo npc, int targetMapIndex)
         {
             if (npc?.EntryPage?.Buttons == null) return 0;
-
             foreach (NPCButton button in npc.EntryPage.Buttons)
             {
                 NPCPage dest = button.DestinationPage;
@@ -435,6 +441,107 @@ namespace Server.Bots
             }
 
             return 0;
+        }
+
+        #endregion
+
+        #region 转生 / 特殊动作
+
+        /// <summary>
+        /// 这张地图上有没有六合圣石（只看 NPC 数据，不加载地图）。
+        /// 挑练级图时优先挑有石头的 —— 传过去 1 秒，走 A* 过去要 1~3 分钟还容易被怪打死。
+        /// </summary>
+        public static bool HasTeleportStone(MapInfo info)
+        {
+            if (info == null) return false;
+
+            if (_stoneMaps == null)
+            {
+                HashSet<MapInfo> set = new HashSet<MapInfo>();
+
+                foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+                {
+                    if (npc?.Region?.Map == null) continue;
+                    if (!IsTeleportStone(npc)) continue;
+
+                    set.Add(npc.Region.Map);
+                }
+
+                _stoneMaps = set;
+            }
+
+            return _stoneMaps.Contains(info);
+        }
+
+        /// <summary>
+        /// 找出「进哪个对话框能触发 <paramref name="type"/> 动作」的 NPC（全服唯一命中，带缓存）。
+        /// 实测（mapq action:Rebirth）：全服只有 1 处 —— 市政厅[2] 的「管理员」，
+        /// 路径是「入口页 按钮5 转生主页 → 按钮1 执行转生[Rebeath 动作]」。
+        /// </summary>
+        public static NPCInfo FindActionNpc(NPCActionType type)
+        {
+            if (ActionNpcCache.TryGetValue(type, out NPCInfo cached)) return cached;
+
+            NPCInfo found = null;
+
+            foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+            {
+                if (npc?.EntryPage == null) continue;
+
+                if (FindButtonToward(npc.EntryPage, type) > 0 || PageHasAction(npc.EntryPage, type))
+                {
+                    found = npc;
+                    break;
+                }
+            }
+
+            ActionNpcCache[type] = found;
+
+            return found;
+        }
+
+        /// <summary>这一页（含其 SuccessPage 链）里有没有该动作。</summary>
+        public static bool PageHasAction(NPCPage page, NPCActionType type)
+        {
+            foreach (NPCPage p in PageChain(page))
+            {
+                if (p.Actions == null) continue;
+
+                foreach (NPCAction action in p.Actions)
+                    if (action?.ActionType == type)
+                        return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 在当前页里找「点下去能走到带该动作的页」的按钮。返回 ButtonID，找不到返回 -1。
+        /// 一次只走一层，调用方循环点，比一次性算整条路径更抗页面结构变化。
+        /// </summary>
+        public static int FindButtonToward(NPCPage page, NPCActionType type)
+        {
+            if (page?.Buttons == null) return -1;
+
+            foreach (NPCButton button in page.Buttons)
+            {
+                if (button == null) continue;
+
+                if (PageHasAction(button.DestinationPage, type))
+                    return button.ButtonID;
+            }
+
+            // 再深一层（最多 3 层）：转生主页 → 执行转生 就是两层。
+            foreach (NPCButton button in page.Buttons)
+            {
+                if (button?.DestinationPage?.Buttons == null) continue;
+
+                foreach (NPCButton inner in button.DestinationPage.Buttons)
+                    if (inner != null && PageHasAction(inner.DestinationPage, type))
+                        return button.ButtonID;
+            }
+
+            return -1;
         }
 
         #endregion

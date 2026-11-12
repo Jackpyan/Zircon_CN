@@ -194,7 +194,12 @@ namespace Server.Models
                         ob.NPCSpecialRefine(action.StatParameter1, action.IntParameter1);
                         break;
                     case NPCActionType.Rebirth:
-                        if (ob.Level >= 86 + ob.Character.Rebirth)
+                        // 门槛必须跟着全服等级上限走。
+                        // 原来写死 86：而 Config.MaxLevel 默认 75、生产也配 75，
+                        // 「升级到此为止」的判定在 75 就 return 了，永远到不了 86 ——
+                        // 也就是**转生功能实际不可用**（点「执行转生」什么都不发生）。
+                        // 改成 MaxLevel 后，每一轮都是「练满 → 转生 → 从 0 再来」。
+                        if (Config.MaxLevel > 0 && ob.Level >= Config.MaxLevel)
                             ob.NPCRebirth();
                         break;
                     case NPCActionType.PromoteFame:

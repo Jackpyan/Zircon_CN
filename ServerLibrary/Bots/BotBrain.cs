@@ -35,6 +35,8 @@ namespace Server.Bots
         Harvest = 8,
         /// <summary>用主城的六合圣石传送到目标图（跨图首选，避免走路被打死）。</summary>
         Teleport = 9,
+        /// <summary>满级（Config.MaxLevel）后去市政厅找管理员转生，转生后从 0 级重来。</summary>
+        Rebirth = 10,
     }
 
     /// <summary>
@@ -57,6 +59,17 @@ namespace Server.Bots
         /// <summary>去刷怪点的最长时限。实测从主城走到城外刷怪区要 60 秒以上（每格约 0.6 秒），
         /// 30 秒会导致「永远走不到、一直换点」，假人在城里原地打转。</summary>
         private const int HuntTimeoutSeconds = 90;
+
+        /// <summary>
+        /// 离 NPC 超过这么多格，就改用引擎的 <see cref="AutoPathService"/> 走过去。
+        /// <para>
+        /// 为什么不能一直用贪心走格：<see cref="BotNavigator.TryStepTowardsNear"/> 只按方向逼近，
+        /// 城内拐角 / 城墙 / 房屋会让它原地打转。实测（2026-11-12，生产配置）
+        /// 有假人卡在「走不到药店 凯茜（117 格外始终过不去）」，5 分钟都走不到，
+        /// 补给直接失败。AutoPath 是按格子图算最短路，终点还取 NPC 的相邻格。
+        /// </para>
+        /// </summary>
+        private const int AutoPathToNpcDistance = 20;
         /// <summary>同一张图上最多同时有几个假人在练级，超了就分流（后台可调）。</summary>
         private int MapCapacity => Math.Max(1, Options.MapCapacity);
         /// <summary>本图连续几次找不到怪才考虑跨图（避免刷怪间隙就乱跑）。</summary>
@@ -163,8 +176,22 @@ namespace Server.Bots
         /// <summary>本轮交易是修理模式（P1-3）还是卖货模式（P1-2）。</summary>
         private bool _tradeIsRepair;
 
+        /// <summary>
+        /// 本轮交易的**目的地地图**（不一定是绑定主城）。
+        ///
+        /// 为什么需要：不是每座主城都收所有货 —— 沙漠土城、诺玛村落、沙巴克城堡
+        /// **没有肉类收购商**（实测 mapq traders：收 Meat 的只有 比奇城墨菲 / 失乐园雷尼尔 / 潘夜村帕克）。
+        /// 而假人的挖取物全是 Meat，硬回沙漠土城卖 → "里没有收 Meat 的商人" →
+        /// 收尾冷却 → 又触发 → 每帧重进 Trade，实测单个假人交易计数 4100+、30 个假人 66,635 次
+        /// 交易全是空跑，18 个假人被判定 stuck。
+        /// </summary>
+        private MapInfo _tradeDest;
+
         /// <summary>回城交易的冷却：卖完 / 修完别马上又跑一趟。</summary>
         private DateTime _tradeCooldown;
+
+        /// <summary>转生失败后的冷却（满级但去不了市政厅时，别每帧重试）。</summary>
+        private DateTime _rebirthCooldown;
 
         /// <summary>
         /// 本轮「补给」要办的事：买药之外，**还要不要顺路买回城卷**。
@@ -297,6 +324,9 @@ namespace Server.Bots
                         break;
                     case BotState.Trade:
                         ProcessTrade();
+                        break;
+                    case BotState.Rebirth:
+                        ProcessRebirth();
                         break;
                     case BotState.Harvest:
                         ProcessHarvest();
@@ -589,6 +619,21 @@ namespace Server.Bots
                     return;
                 }
 
+                // 负重也要留余量。引擎的 CanGainItems 只拦「装不下」，允许**刚好装满** ——
+                // 于是假人捡到 66/66，之后去药店余量 0，一瓶药都买不到（NPCBuy 静默 return）。
+                // 2026-11-12 生产配置（11 倍爆率）实测：这是补给失败的最后一条尾巴。
+                if (!isCurrency && item.Item?.Info != null)
+                {
+                    long capacity = _player.Stats[Stat.BagWeight];
+                    long after = _player.BagWeight + (long)item.Item.Info.Weight * Math.Max(1, item.Item.Count);
+
+                    if (capacity > 0 && after > capacity * 9 / 10)
+                    {
+                        EnterState(BotState.Idle, "负重快满了，先回去卖东西", TimeSpan.FromSeconds(3));
+                        return;
+                    }
+                }
+
                 bool picked = BotActions.TryPickUp(_player, item);
 
                 if (!picked)
@@ -702,7 +747,12 @@ namespace Server.Bots
                 .Where(x => x.Region.Map.MinimumLevel <= _player.Level)
                 .GroupBy(x => x.Region.Map)
                 .Select(g => g.OrderBy(x => Math.Abs(x.Monster.Level - _player.Level)).First())
-                .OrderBy(x => Math.Abs(x.Region.Map.Index - current.Info.Index))
+                // 排序三要素：① 怪等级最贴近自己（经验效率）② 有六合石（能传送，不用腿儿着）
+                // ③ 地图索引距离（近似「离得近」）。
+                // 全服练级图有 60 多张，只按索引距离排会挑到八竿子打不着的地图。
+                .OrderBy(x => Math.Abs(x.Monster.Level - _player.Level))
+                .ThenByDescending(x => BotPerception.HasTeleportStone(x.Region.Map))
+                .ThenBy(x => Math.Abs(x.Region.Map.Index - current.Info.Index))
                 .Take(12)
                 .ToList();
 
@@ -952,6 +1002,26 @@ namespace Server.Bots
             }
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, stone.CurrentLocation);
+
+            // 石头在城另一头时（主城动辄上百格）同样交给 AutoPath，贪心走格会卡在拐角。
+            if (distance > AutoPathToNpcDistance)
+            {
+                if (_player.AutoPath != null)
+                {
+                    LastDetail = string.Format("自动寻路走向{0}（{1} 格）", stone.Name, distance);
+                    return;
+                }
+
+                if (AutoPathService.Instance.TryStart(_player, stone.NPCInfo))
+                {
+                    _blockedCount = 0;
+                    LastDetail = string.Format("自动寻路走向{0}（{1} 格）", stone.Name, distance);
+                    return;
+                }
+            }
+
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
 
             // 同补给流程：NPC 自己是阻挡物，终点用「周围一格」，距离门槛 2。
             if (distance > 2)
@@ -1225,6 +1295,19 @@ namespace Server.Bots
         /// </summary>
         private bool ProcessSurvival()
         {
+            // 0) 满级 → 转生。
+            // 全服等级上限 Config.MaxLevel（生产 75），满级后打怪一点收益都没有；
+            // 转生会加各项属性并回到 0 级重新练，是设计上的「循环」。
+            // 不加这一条，假人 75 级后就只会站在那儿空砍，永远不成长。
+            if (Config.MaxLevel > 0 && _player.Level >= Config.MaxLevel
+                && State != BotState.Rebirth && State != BotState.Trade
+                && SEnvir.Now >= _rebirthCooldown)
+            {
+                EnterState(BotState.Rebirth, "满级了，去市政厅转生", TimeSpan.FromMinutes(10));
+
+                return true;
+            }
+
             // 1) 道士血低先自愈（7 级才有治愈术；比喝药省，还能顺带涨技能熟练度）
             if (BotPerception.HealthPercent(_player) <= 55 && BotSkills.TrySelfHeal(_player))
                 LastDetail = "给自己加血";
@@ -1255,16 +1338,14 @@ namespace Server.Bots
                 return true;
             }
 
-            // 5) P1：背包满了要回城卖货腾格子 —— 否则假人会永久卡在拾取态。
-            //    修理同理：耐久归零的装备会被引擎整件跳过（攻击力变 0），假人就打不动怪了。
-            if (State != BotState.Trade && SEnvir.Now >= _tradeCooldown && TryStartTrade())
-                return true;
-
-            // 6) 药见底就回城补，别等喝完才想起（0 = 关闭自动补给）
+            // 5) 药见底就回城补，别等喝完才想起（0 = 关闭自动补给）
+            //
+            // ⚠ 顺序：补给判定必须排在「背包满了就去卖」**之前**。
+            // 实测（2026-11-12 12:17，30 假人 35 分钟）：11 倍爆率下背包长期接近满，
+            // 原来那条 TryStartTrade 每帧抢先返回 true → 补给永远轮不到 ——
+            // 35 分钟只补给 6 次，20 多个假人药 0/0 还在外面硬打，死亡 98 次。
+            // 补给分支内部本来就「先卖货、再买药」，不需要外面的卖货抢在最前面。
             BotOptions options = Options;
-
-            if (options.RestockPotionLow <= 0) return false;
-            if (State == BotState.Restock) return false;
 
             // 卖货 / 修理优先跑完，别被补给打断。
             //
@@ -1275,49 +1356,254 @@ namespace Server.Bots
             //
             // 实测（2026-11-11 23:20）：12 个假人卡在「回城卖货」、12 个卡在「回城买药」，
             // 交易次数恒为 0，后台状态文字永远停在进入时那句「负重快满了，回城卖东西」。
-            if (State == BotState.Trade) return false;
-
-            if (SEnvir.Now < _restockCooldown) return false;
-
-            int red = BotActions.CountPotion(_player, Stat.Health);
-
-            if (red > options.RestockPotionLow) return false;
-
-            // 钱包连一瓶最便宜的药都买不起时，去药店也是空手而归。
             //
-            // 实测（D5 主压测 126 分钟 + 千倍率探针 30 分钟）：金币 0 的假人每 60 秒
-            // 空跑一趟补给，日志连续刷「补给结束：红 5 蓝 21，金币 0」，一趟一瓶都没买到。
-            // 这种空转把「补给失败」抬到 785 次，而真实原因只是没钱。
-            // 正确做法是去练级 / 卖货攒钱，而不是反复回城。
-            int floorPrice = BotActions.FloorPotionPrice(Stat.Health);
+            // 注意：这里不能用 `return false` —— 后面的「日常卖货」还要跑。
+            // 用条件包裹整段，任何一条不满足就往下落到日常卖货。
+            bool tryRestock = options.RestockPotionLow > 0
+                              && State != BotState.Restock
+                              && State != BotState.Trade
+                              && SEnvir.Now >= _restockCooldown;
 
-            if (floorPrice > 0 && GoldAmount() < floorPrice) return false;
+            int red = tryRestock ? BotActions.CountPotion(_player, Stat.Health) : int.MaxValue;
 
-            // 负重快满时去药店也是空手而归：CanGainItems 按 Weight × 瓶数 校验，
-            // 超重直接拒绝，且假人收不到任何提示（无 socket）。
-            //
-            // 但只在**有东西可卖**时才袖手旁观 —— 否则纯装备超重的假人会永远不补给，
-            // 断药 → 打不了怪 → 更卖不了东西，死锁更狠。
-            long capacity = _player.Stats[Stat.BagWeight];
-
-            if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10 && HasSellableItems())
+            if (tryRestock && red <= options.RestockPotionLow)
             {
-                LastDetail = "负重快满了，先卖货再补给";
-                return false;
+                // 钱包连一瓶最便宜的药都买不起时，去药店也是空手而归。
+                //
+                // 实测（D5 主压测 126 分钟 + 千倍率探针 30 分钟）：金币 0 的假人每 60 秒
+                // 空跑一趟补给，日志连续刷「补给结束：红 5 蓝 21，金币 0」，一趟一瓶都没买到。
+                // 这种空转把「补给失败」抬到 785 次，而真实原因只是没钱。
+                int floorPrice = BotActions.FloorPotionPrice(Stat.Health);
+
+                if (floorPrice <= 0 || GoldAmount() >= floorPrice)
+                {
+                    // 补给前先清背包 —— 顺序定死「先卖、再买」，这是人补药的自然做法：
+                    // 只留药和回城卷，装备/材料/矿石全卖掉，腾出负重和格子之后再买药。
+                    //
+                    // 为什么必须前置、而且不能只在「负重 ≥90%」时才做：
+                    //   · 引擎的 CanGainItems 按 Weight × 瓶数 校验，余量为 0 就**静默 return**，
+                    //     假人是无 socket 伪连接，收不到任何提示 → 走到药店也一瓶买不到；
+                    //   · 11 倍爆率下负重几乎一直是满的（实测 66/66、110/84、117/84），
+                    //     等它自己降到 90% 以下基本等不到。
+                    // 阈值取 70%：留 30% 余量，够买一轮药（20 瓶 × 2 重量 = 40，上限 66 时约 60%）。
+                    long capacity = _player.Stats[Stat.BagWeight];
+                    int freeSlots = BotPerception.FreeInventorySlots(_player);
+
+                    bool needClear = capacity > 0 && (_player.BagWeight >= capacity * 7 / 10 || freeSlots < 10);
+
+                    if (needClear && HasSellableItems())
+                    {
+                        _tradeIsRepair = false;
+
+                        // 卖货冷却中就先别跑 —— **不能**因为「药空了」就每帧重进 Trade：
+                        // 实测那样会形成热循环（进门 → 卖不掉 → 收尾冷却 → 下一帧又进门），
+                        // 30 个假人 30 分钟刷出 66,635 次空交易、18 个被判定 stuck。
+                        // 冷却只有 20 秒，等得起。
+                        if (SEnvir.Now >= _tradeCooldown && SetTradeTarget(SellableItemType()))
+                        {
+                            // 5 分钟：这一趟可能要跑好几类商人才卖得干净（装备/矿石/材料各一个 NPC）。
+                            EnterState(BotState.Trade, "补给前先清背包（只留药和卷）", TimeSpan.FromMinutes(5));
+
+                            return true;
+                        }
+
+                        LastDetail = "等卖货冷却，之后先清背包再补给";
+                    }
+                    else
+                    {
+                        // 5 分钟而不是 3 分钟：一次补给要「AutoPath 跨图回城 → 走到药店买药 →
+                        // 再走到杂货商买卷」三段，城外 60 格、两个 NPC 各 20~40 格。
+                        // 3 分钟实测经常卡在最后一段（2026-11-12：6 次失败里 4 次是「补给超时」）。
+                        EnterState(BotState.Restock, string.Format("红药只剩 {0} 瓶，回城补给", red), TimeSpan.FromMinutes(5));
+
+                        return true;
+                    }
+                }
             }
 
-            // 5 分钟而不是 3 分钟：一次补给要「AutoPath 跨图回城 → 走到药店买药 →
-            // 再走到杂货商买卷」三段，城外 60 格、两个 NPC 各 20~40 格。
-            // 3 分钟实测经常卡在最后一段（2026-11-12：6 次失败里 4 次是「补给超时」）。
-            EnterState(BotState.Restock, string.Format("红药只剩 {0} 瓶，回城补给", red), TimeSpan.FromMinutes(5));
+            // 6) 日常：背包满了要回城卖货腾格子（否则会永久卡在拾取态）；
+            //    装备耐久归零会被引擎整件跳过（攻击力变 0），也要修。
+            if (State != BotState.Trade && SEnvir.Now >= _tradeCooldown && TryStartTrade())
+                return true;
 
-            return true;
+            return false;
         }
 
         /// <summary>
         /// 回城买药。全程走真人路径：AutoPath 跨图 → 走到 NPC 旁 → NPCCall → NPCButton → NPCBuy。
         /// 任何一步失败都退回练级并给 60 秒冷却，避免「没钱 → 反复回城 → 永远不练级」的死循环。
         /// </summary>
+        /// <summary>
+        /// 满级转生：市政厅[2] 的「管理员」→ 按钮「转生主页」→ 按钮「执行转生」。
+        /// <para>
+        /// 为什么要有这条：全服等级上限 75（<c>[System] MaxLevel</c>），满级后再打怪没有任何收益，
+        /// 而转生会给各项属性加成并回到 0 级重新练 —— 假人不转生就等于「到顶即报废」。
+        /// 实测（mapq action:Rebirth）：全服只有 1 处转生动作，在市政厅。
+        /// </para>
+        /// </summary>
+        private void ProcessRebirth()
+        {
+            if (Config.MaxLevel <= 0 || _player.Level < Config.MaxLevel)
+            {
+                FinishRebirth("等级没到上限，回去练级");
+
+                return;
+            }
+
+            if (SEnvir.Now >= _stateDeadline)
+            {
+                FinishRebirth("转生超时（10 分钟没走完），先回去练级");
+
+                return;
+            }
+
+            NPCInfo info = BotPerception.FindActionNpc(NPCActionType.Rebirth);
+
+            if (info?.Region?.Map == null)
+            {
+                FinishRebirth("全服找不到转生 NPC（检查市政厅的管理员）");
+
+                return;
+            }
+
+            // 对话已打开：一层层点到「执行转生」页；点进去的瞬间引擎就执行 Rebirth 动作。
+            if (_player.NPCPage != null)
+            {
+                if (BotPerception.PageHasAction(_player.NPCPage, NPCActionType.Rebirth))
+                {
+                    FinishRebirth(string.Format("转生完成，现在是 {0} 级", _player.Level));
+
+                    return;
+                }
+
+                int button = BotPerception.FindButtonToward(_player.NPCPage, NPCActionType.Rebirth);
+
+                if (button <= 0)
+                {
+                    FinishRebirth("转生页里找不到通往「执行转生」的按钮");
+
+                    return;
+                }
+
+                BotActions.TryPressButton(_player, button);
+
+                LastDetail = "点「转生」按钮";
+
+                return;
+            }
+
+            MapInfo dest = info.Region.Map;
+
+            // 不在市政厅：交给 AutoPath 跨图走过去（它能识别 NPC 所在的区域）。
+            if (_player.CurrentMap?.Info != dest)
+            {
+                if (_player.AutoPath != null)
+                {
+                    LastDetail = string.Format("前往 {0} 转生", dest.Description);
+
+                    return;
+                }
+
+                if (!AutoPathService.Instance.TryStart(_player, info))
+                {
+                    FinishRebirth(string.Format("去 {0} 的路线规划失败", dest.Description));
+
+                    return;
+                }
+
+                LastDetail = string.Format("前往 {0} 转生", dest.Description);
+
+                return;
+            }
+
+            // 到了市政厅：找管理员本体（NPC 是阻挡物，走到它旁边再开口）
+            NPCObject npc = null;
+
+            foreach (NPCObject obj in _player.CurrentMap.NPCs)
+            {
+                if (obj?.NPCInfo != info) continue;
+
+                npc = obj;
+                break;
+            }
+
+            if (npc == null)
+            {
+                FinishRebirth("市政厅里找不到管理员");
+
+                return;
+            }
+
+            int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
+
+            if (distance > AutoPathToNpcDistance)
+            {
+                if (_player.AutoPath != null)
+                {
+                    LastDetail = string.Format("自动寻路走向 {0}（{1} 格）", npc.Name, distance);
+
+                    return;
+                }
+
+                if (AutoPathService.Instance.TryStart(_player, info))
+                {
+                    LastDetail = string.Format("自动寻路走向 {0}（{1} 格）", npc.Name, distance);
+
+                    return;
+                }
+            }
+
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
+            if (distance > 2)
+            {
+                BotMoveResult move = BotNavigator.TryStepTowardsNear(_player, npc.CurrentLocation, 1);
+
+                if (move == BotMoveResult.Moved)
+                {
+                    LastDetail = string.Format("走向 {0}（{1} 格）", npc.Name, distance);
+
+                    return;
+                }
+
+                if (move == BotMoveResult.Busy) return;
+
+                if (BotNavigator.TryStepAdjacent(_player, npc.CurrentLocation))
+                {
+                    LastDetail = string.Format("贴近 {0}", npc.Name);
+
+                    return;
+                }
+            }
+
+            if (!BotActions.TryOpenNpc(_player, npc))
+            {
+                LastDetail = string.Format("还差 {1} 格才够到 {0}", npc.Name, distance);
+
+                return;
+            }
+
+            LastDetail = "打开管理员，准备转生";
+        }
+
+        private void FinishRebirth(string detail)
+        {
+            BotActions.CloseNpc(_player);
+
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
+            // 失败退避 5 分钟；成功时等级已经归零，下一帧条件自然不成立。
+            _rebirthCooldown = SEnvir.Now.AddMinutes(5);
+
+            _blockedCount = 0;
+
+            BotLog.Warn(Profile.Seq, detail);
+
+            EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(5));
+        }
+
         private void ProcessRestock()
         {
             if (SEnvir.Now >= _stateDeadline)
@@ -1402,6 +1688,31 @@ namespace Server.Bots
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
 
+            string npcKind = _restockStage == RestockStage.TownScroll ? "杂货商" : "药店";
+
+            // 远距离先交给引擎 AutoPath：贪心走格在城内拐角/城墙会原地打转，
+            // 实测有假人卡在「走不到药店 117 格外始终过不去」直到补给超时。
+            if (distance > AutoPathToNpcDistance)
+            {
+                if (_player.AutoPath != null)
+                {
+                    LastDetail = string.Format("自动寻路走向{0} {1}（{2} 格）", npcKind, npc.Name, distance);
+                    return;
+                }
+
+                if (AutoPathService.Instance.TryStart(_player, npc.NPCInfo))
+                {
+                    _blockedCount = 0;
+                    LastDetail = string.Format("自动寻路走向{0} {1}（{2} 格）", npcKind, npc.Name, distance);
+                    return;
+                }
+            }
+
+            // 走到附近了：AutoPath 还挂着就撤掉，接管成逐格逼近（NPC 是阻挡物，
+            // A* 的终点只能是它周围的可走格）。
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
             // NPC 本身是阻挡物：A* 的终点是它站的格子，贴身那一步永远迈不进去。
             // 所以走向 NPC 时，终点用「NPC 周围的可走格」（半径 1），
             // 而不是 NPC 自己那格 —— 否则永远算得出路径、却一步都迈不出去。
@@ -1416,7 +1727,7 @@ namespace Server.Bots
                 if (move == BotMoveResult.Moved)
                 {
                     _blockedCount = 0;
-                    LastDetail = string.Format("走向{0} {1}（{2} 格）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance);
+                    LastDetail = string.Format("走向{0} {1}（{2} 格）", npcKind, npc.Name, distance);
                     return;
                 }
 
@@ -1426,7 +1737,7 @@ namespace Server.Bots
                 if (BotNavigator.TryStepAdjacent(_player, npc.CurrentLocation))
                 {
                     _blockedCount = 0;
-                    LastDetail = string.Format("贴近{0} {1}（{2} 格）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance);
+                    LastDetail = string.Format("贴近{0} {1}（{2} 格）", npcKind, npc.Name, distance);
                     return;
                 }
             }
@@ -1437,11 +1748,11 @@ namespace Server.Bots
 
                 if (_blockedCount > 20)
                 {
-                    FinishRestock(string.Format("走不到{0} {1}（{2} 格外始终过不去）", _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name, distance));
+                    FinishRestock(string.Format("走不到{0} {1}（{2} 格外始终过不去）", npcKind, npc.Name, distance));
                     return;
                 }
 
-                LastDetail = string.Format("还差 {0} 格才够到{1} {2}", distance, _restockStage == RestockStage.TownScroll ? "杂货商" : "药店", npc.Name);
+                LastDetail = string.Format("还差 {0} 格才够到{1} {2}", distance, npcKind, npc.Name);
                 return;
             }
 
@@ -1810,6 +2121,11 @@ namespace Server.Bots
         private void FinishRestock(string detail)
         {
             BotActions.CloseNpc(_player);
+
+            // 补给过程中可能用 AutoPath 走过 NPC，收尾必须撤掉，
+            // 否则假人会一边「待机」一边沿着旧路线继续走。
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
 
             _blockedCount = 0;
             _target = null;
@@ -2209,7 +2525,7 @@ namespace Server.Bots
             if (HasBrokenEquipment())
             {
                 _tradeIsRepair = true;
-                _tradeItemType = BrokenEquipmentType();
+                SetTradeTarget(BrokenEquipmentType());
 
                 EnterState(BotState.Trade, "装备耐久没了，回城修理", TimeSpan.FromMinutes(3));
 
@@ -2223,11 +2539,13 @@ namespace Server.Bots
             if (free <= 8 && HasSellableItems())
             {
                 _tradeIsRepair = false;
-                _tradeItemType = SellableItemType();
 
-                EnterState(BotState.Trade, "背包快满了，回城卖东西", TimeSpan.FromMinutes(3));
+                if (SetTradeTarget(SellableItemType()))
+                {
+                    EnterState(BotState.Trade, "背包快满了，回城卖东西", TimeSpan.FromMinutes(3));
 
-                return true;
+                    return true;
+                }
             }
 
             // 3) 钱包买不起下一轮药 → 去卖货赚钱
@@ -2241,11 +2559,13 @@ namespace Server.Bots
             if (NeedsMoneyForRestock() && HasSellableItems())
             {
                 _tradeIsRepair = false;
-                _tradeItemType = SellableItemType();
 
-                EnterState(BotState.Trade, "没钱买药了，回城卖东西", TimeSpan.FromMinutes(3));
+                if (SetTradeTarget(SellableItemType()))
+                {
+                    EnterState(BotState.Trade, "没钱买药了，回城卖东西", TimeSpan.FromMinutes(3));
 
-                return true;
+                    return true;
+                }
             }
 
             // 4) 负重快满 → 去卖货减重
@@ -2263,11 +2583,13 @@ namespace Server.Bots
             if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10 && HasSellableItems())
             {
                 _tradeIsRepair = false;
-                _tradeItemType = SellableItemType();
 
-                EnterState(BotState.Trade, "负重快满了，回城卖东西", TimeSpan.FromMinutes(3));
+                if (SetTradeTarget(SellableItemType()))
+                {
+                    EnterState(BotState.Trade, "负重快满了，回城卖东西", TimeSpan.FromMinutes(3));
 
-                return true;
+                    return true;
+                }
             }
 
             return false;
@@ -2412,6 +2734,57 @@ namespace Server.Bots
         /// </summary>
         private ItemType SellableItemType()
         {
+            // 按**件数**排序：优先卖掉占位最多的那一类（挖取物 Meat 常常是几十件，
+            // 随便挑一件装备卖掉毫无意义，背包还是满的，会变成「卖一件→又满→再卖」的循环）。
+            Dictionary<ItemType, int> counts = SellableTypeCounts();
+
+            if (counts.Count == 0) return ItemType.Nothing;
+
+            // 优先挑「**当前地图**就能卖」的类型：卖货最怕跑一趟还是卖不掉，
+            // 沙漠土城/诺玛村落 都没有肉类收购商，而挖取物恰恰全是 Meat。
+            Map current = _player.CurrentMap;
+
+            ItemType pick = PickByMap(counts, current);
+
+            if (pick != ItemType.Nothing) return pick;
+
+            // 退一步：绑定主城能卖的
+            MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
+            Map homeMap = home == null ? null : SEnvir.GetMap(home);
+
+            pick = PickByMap(counts, homeMap);
+
+            if (pick != ItemType.Nothing) return pick;
+
+            // 都不行就交给目的地解析去挑一张能收的图（宁可跑一趟，也别抱着背包不动）
+            return counts.OrderByDescending(x => x.Value).First().Key;
+        }
+
+        /// <summary>在 <paramref name="map"/> 收得下的类型里，挑件数最多的那类。</summary>
+        private static ItemType PickByMap(Dictionary<ItemType, int> counts, Map map)
+        {
+            if (map == null) return ItemType.Nothing;
+
+            ItemType best = ItemType.Nothing;
+            int bestCount = 0;
+
+            foreach (KeyValuePair<ItemType, int> pair in counts)
+            {
+                if (pair.Value <= bestCount) continue;
+                if (BotPerception.FindTrader(map, pair.Key) == null) continue;
+
+                best = pair.Key;
+                bestCount = pair.Value;
+            }
+
+            return best;
+        }
+
+        /// <summary>背包里每种「可卖」物品各有多少件。</summary>
+        private Dictionary<ItemType, int> SellableTypeCounts()
+        {
+            Dictionary<ItemType, int> result = new Dictionary<ItemType, int>();
+
             foreach (UserItem item in _player.Inventory)
             {
                 if (item?.Info == null) continue;
@@ -2422,10 +2795,74 @@ namespace Server.Bots
                 if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) continue;
                 if (IsKeepItem(item)) continue;
 
-                return item.Info.ItemType;
+                ItemType type = item.Info.ItemType;
+
+                result.TryGetValue(type, out int count);
+                result[type] = count + 1;
             }
 
-            return ItemType.Nothing;
+            return result;
+        }
+
+        /// <summary>设置本轮交易目标（类型 + 目的地地图）。返回 false = 没地方卖，别白跑。</summary>
+        private bool SetTradeTarget(ItemType type)
+        {
+            _tradeItemType = type;
+            _tradeDest = ResolveTradeDestination(type);
+
+            return _tradeDest != null;
+        }
+
+        /// <summary>
+        /// 挑一张**真正收这种货**的地图：当前图 → 绑定主城 → 白名单里最近的图。
+        /// 全都收不了就返回 null（调用方放弃卖货，避免每帧重试烧 CPU）。
+        /// </summary>
+        private MapInfo ResolveTradeDestination(ItemType type)
+        {
+            Map current = _player.CurrentMap;
+            MapInfo home = _player.Character?.BindPoint?.BindRegion?.Map;
+
+            if (_tradeIsRepair)
+            {
+                if (current != null && BotPerception.FindRepairShop(current) != null) return current.Info;
+                return home;
+            }
+
+            if (type == ItemType.Nothing) return home;
+
+            // ① 就地能卖 → 一步都不用跑
+            if (current != null && BotPerception.FindTrader(current, type) != null)
+                return current.Info;
+
+            // ② 绑定主城（回城卷直达，1 秒）
+            Map homeMap = home == null ? null : SEnvir.GetMap(home);
+
+            if (homeMap != null && BotPerception.FindTrader(homeMap, type) != null)
+                return home;
+
+            // ③ 白名单里（练级图，有六合石直达）按索引距离挑最近的一张
+            MapInfo best = null;
+            int bestDist = int.MaxValue;
+
+            foreach (int index in Options.HuntMaps)
+            {
+                MapInfo info = SEnvir.MapInfoList.Binding.FirstOrDefault(x => x.Index == index);
+
+                if (info == null || info == home) continue;
+
+                Map map = SEnvir.GetMap(info);
+
+                if (map == null || BotPerception.FindTrader(map, type) == null) continue;
+
+                int dist = Math.Abs(info.Index - (current?.Info?.Index ?? home?.Index ?? 0));
+
+                if (dist >= bestDist) continue;
+
+                bestDist = dist;
+                best = info;
+            }
+
+            return best;
         }
 
         /// <summary>回城交易的主流程：走回主城 → 找到对应 NPC → 卖货或修理。</summary>
@@ -2452,20 +2889,27 @@ namespace Server.Bots
                 return;
             }
 
-            MapInfo home = _player.Character.BindPoint?.BindRegion?.Map;
+            // 目的地不一定是绑定主城：沙漠土城/诺玛村落没有肉类收购商，
+            // 硬回主城只会「里没有收 Meat 的商人」然后每帧重试（实测 66,635 次空跑）。
+            MapInfo home = _tradeDest;
 
             if (home == null)
             {
-                FinishTrade("角色没有绑定主城，无法交易");
+                FinishTrade(string.Format("没有任何地图收 {0}，放弃这趟卖货", _tradeItemType));
                 return;
             }
 
-            // 不在主城：**优先用回城卷瞬移**（和补给流程同一套逻辑）。
+            // 不在目的地：**优先用回城卷瞬移**（和补给流程同一套逻辑）。
             // 不用卷的话只能跨图走回去 —— 低级假人在路上会被打死，
             // 30 个假人里有 12 个同时卡在「回城卖货」走不回来就是这么来的。
             if (_player.CurrentMap?.Info != home)
             {
-                if (TryReturnHomeByScroll(home)) return;
+                // ⚠ 回城卷只会把人送回**绑定主城**。目的地不是主城时用卷 =
+                // 「传过去 → 还是不在目的地 → 再传」，几分钟就能把卷烧光，
+                // 而且位置原地踏步。这种情形只能走 AutoPath。
+                MapInfo bind = _player.Character?.BindPoint?.BindRegion?.Map;
+
+                if (bind == home && TryReturnHomeByScroll(home)) return;
 
                 if (_player.AutoPath != null)
                 {
@@ -2484,7 +2928,7 @@ namespace Server.Bots
                 return;
             }
 
-            // 在主城：找对应的 NPC
+            // 在目的地：找对应的 NPC
             NPCObject npc = _tradeIsRepair
                 ? BotPerception.FindRepairShop(_player.CurrentMap)
                 : BotPerception.FindTrader(_player.CurrentMap, _tradeItemType);
@@ -2499,6 +2943,26 @@ namespace Server.Bots
             }
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
+
+            // 和补给同一套：远距离交给 AutoPath，贪心走格在城内会原地打转。
+            if (distance > AutoPathToNpcDistance)
+            {
+                if (_player.AutoPath != null)
+                {
+                    LastDetail = string.Format("自动寻路走向 {0}（{1} 格）", npc.Name, distance);
+                    return;
+                }
+
+                if (AutoPathService.Instance.TryStart(_player, npc.NPCInfo))
+                {
+                    _blockedCount = 0;
+                    LastDetail = string.Format("自动寻路走向 {0}（{1} 格）", npc.Name, distance);
+                    return;
+                }
+            }
+
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
 
             // NPC 本身是阻挡物：贴身那一步永远迈不进去，
             // 所以走不动就直接开口（NPCCall 只要 18 格视野内）。
@@ -2711,16 +3175,25 @@ namespace Server.Bots
         {
             BotActions.CloseNpc(_player);
 
+            // 同补给：可能用 AutoPath 走过 NPC，收尾必须撤掉。
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
             // 冷却：卖完别马上又跑一趟（但背包还满的话下一拍就要再卖，得留短冷却）；
             // 修完给长一点 —— 耐久掉得慢，不用频繁跑。
-            _tradeCooldown = SEnvir.Now.AddMinutes(_tradeIsRepair ? 10 : 1);
+            // 卖货 20 秒：原来 1 分钟太长，而「药空了 → 等冷却」这一分钟正好是被打死的时候。
+            _tradeCooldown = SEnvir.Now.AddMinutes(_tradeIsRepair ? 10 : 1.0 / 3.0);
             _blockedCount = 0;
             _target = null;
+            _tradeDest = null;
 
             TradeCount++;
             _player.Character.BotTrades++;
 
-            BotLog.Info(Profile.Seq, detail);
+            // Warn 而不是 Info：BotLogLevel=2（生产默认）会把 Info 全部过滤掉。
+            // 本次排查就吃过这个亏 —— 「没有收 Meat 的商人」在日志里一个字都没有，
+            // 只能从后台面板的 detail 里看到。
+            BotLog.Warn(Profile.Seq, detail);
 
             EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(3));
         }
@@ -2778,10 +3251,10 @@ namespace Server.Bots
                 return false;
             }
 
-            // 把本图所有「怪等级打得过」的刷怪点摊平，按「离自己近」排序。
+            // 把本图所有「怪等级打得过」的刷怪区摊平，按「怪等级合适 → 离自己近」排序。
             // 之前不过滤等级：最近的刷怪区常常是 5 级以上的怪，1 级号走到那里一只都打不了，
             // 表现是「到达 → 附近全是高级怪 → 空等」的循环。
-            List<Point> candidates = new List<Point>();
+            List<(Point Point, int Level)> candidates = new List<(Point, int)>();
 
             foreach (RespawnInfo region in SEnvir.RespawnInfoList.Binding)
             {
@@ -2798,7 +3271,8 @@ namespace Server.Bots
 
                 if (points == null || points.Count == 0) continue;
 
-                candidates.AddRange(points);
+                foreach (Point p in points)
+                    candidates.Add((p, resident.Level));
             }
 
             if (candidates.Count == 0)
@@ -2809,20 +3283,35 @@ namespace Server.Bots
                 return false;
             }
 
+            // 先只留「有经验价值」的怪（≥ 自己 -3），不够再退回全部。
+            //
+            // 为什么必须加：原来只按距离取最近 40 个点，10 级的假人天天在城门口砍
+            // 羊和鸡（1~2 级怪，经验约等于 0），实测 30 个假人跑了一个多小时
+            // 平均等级一直卡在 9.37 —— 不是打不动，是在刷没经验的东西。
+            List<(Point Point, int Level)> worthwhile = candidates
+                .Where(x => x.Level >= _player.Level - 3)
+                .ToList();
+
+            if (worthwhile.Count == 0) worthwhile = candidates;
+
             Point origin = _player.CurrentLocation;
 
             // 排除脚边 8 格以内的点：那样的「到达刷怪点」意味着原地转一圈又回来，
             // 表现就是「到达 → 没怪 → 再到达同一个点」死循环，人也不动。
-            List<Point> pool = candidates
-                .Where(x => BotNavigator.Distance(origin, x) >= 8)
+            List<(Point Point, int Level)> pool = worthwhile
+                .Where(x => BotNavigator.Distance(origin, x.Point) >= 8)
                 .ToList();
 
-            if (pool.Count == 0) pool = candidates;
+            if (pool.Count == 0) pool = worthwhile;
 
+            // 排序：先靠近自己等级的怪（同等级段里怪越高级经验越多），再按距离。
             List<Point> nearest = pool
-                .OrderBy(x => BotNavigator.Distance(origin, x))
+                .OrderBy(x => Math.Abs(x.Level - _player.Level - 1))
+                .Take(60)
+                .OrderBy(x => BotNavigator.Distance(origin, x.Point))
                 .Take(40)
                 .OrderBy(x => SEnvir.Random.Next())
+                .Select(x => x.Point)
                 .ToList();
 
             // 最近的一批点里也有走不通的（隔河、被墙围住），逐个算一次路，通了才用。
