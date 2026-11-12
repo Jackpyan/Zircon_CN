@@ -194,6 +194,14 @@ namespace Server.Bots
         private DateTime _rebirthCooldown;
 
         /// <summary>
+        /// 进入转生流程时的转生次数基线。
+        /// 判据必须用它而不是「等级归 1 / 点没点按钮」：Rebirth 动作在**进入「执行转生」页的那一瞬**
+        /// 就执行了（等级当场变 1），等下一拍再检查页面时，等级早就不是满级了 ——
+        /// 之前就是这样把「已成功」误报成「等级没到上限」。
+        /// </summary>
+        private int _rebirthBaseCount;
+
+        /// <summary>
         /// 本轮「补给」要办的事：买药之外，**还要不要顺路买回城卷**。
         /// <para>
         /// 两种东西分属两个 NPC（药店卖药、杂货商卖卷），所以一次回城要跑两趟。
@@ -577,9 +585,56 @@ namespace Server.Bots
                 return;
             }
 
-            // 这只真的够不到，换一只。
+            // 这只真的够不到，换一片区域。
+            //
+            // 只清 _target 是不够的：怪就在旁边，下一帧又会重新选中同一只，
+            // 形成「够不到 → 换怪 → 又选中它」的死循环。实测 BOT#25 连续 57 次采样
+            // （整轮 40 分钟）一直停在「目标够不到，换怪」，一动不动、零击杀。
+            // 所以这里连刷怪点一起弃掉，并累积计数：连续多次就随机挪一步脱困。
             _target = null;
-            EnterState(BotState.Fight, "目标够不到，换怪", TimeSpan.FromSeconds(10));
+            _huntPoint = default;
+            _stuckCount++;
+
+            if (_stuckCount >= 3)
+            {
+                _stuckCount = 0;
+
+                TryShuffleStep();
+
+                EnterState(BotState.GoHunt, "连续够不到怪，换个区域", TimeSpan.FromSeconds(2));
+
+                return;
+            }
+
+            EnterState(BotState.GoHunt, "目标够不到，换个刷怪点", TimeSpan.FromSeconds(10));
+        }
+
+        /// <summary>
+        /// 随机往附近挪一步（走不通就换方向）。
+        /// 用来把「贴着墙/河岸原地打转」的假人从死点弹出来。
+        /// </summary>
+        private bool TryShuffleStep()
+        {
+            Point origin = _player.CurrentLocation;
+
+            for (int i = 0; i < 8; i++)
+            {
+                int dx = SEnvir.Random.Next(-6, 7);
+                int dy = SEnvir.Random.Next(-6, 7);
+
+                if (dx == 0 && dy == 0) continue;
+
+                Point target = new Point(origin.X + dx, origin.Y + dy);
+
+                if (BotNavigator.TryStepTowards(_player, target) == BotMoveResult.Moved)
+                {
+                    TrackStuck();
+
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void ProcessLoot()
@@ -1295,6 +1350,12 @@ namespace Server.Bots
         /// </summary>
         private bool ProcessSurvival()
         {
+            // 转生进行中：不要再被补给 / 卖货 / 跨图抢走。
+            // 实测（2026-11-12 14:35）：BOT#01 走到市政厅、刚打开管理员，
+            // 就被「负重快满了先卖货」切到 Trade，转生流程被打断，
+            // 结果在市政厅里找卖 Meat 的商人，然后被跨图中转又送回比奇城。
+            if (State == BotState.Rebirth) return false;
+
             // 0) 满级 → 转生。
             // 全服等级上限 Config.MaxLevel（生产 75），满级后打怪一点收益都没有；
             // 转生会加各项属性并回到 0 级重新练，是设计上的「循环」。
@@ -1303,6 +1364,11 @@ namespace Server.Bots
                 && State != BotState.Rebirth && State != BotState.Trade
                 && SEnvir.Now >= _rebirthCooldown)
             {
+                _rebirthBaseCount = _player.Character.Rebirth;
+
+                BotLog.Warn(Profile.Seq, string.Format("满级（{0} 级），去市政厅找管理员转生（已转生 {1} 次）",
+                    _player.Level, _player.Character.Rebirth));
+
                 EnterState(BotState.Rebirth, "满级了，去市政厅转生", TimeSpan.FromMinutes(10));
 
                 return true;
@@ -1445,6 +1511,15 @@ namespace Server.Bots
         {
             if (Config.MaxLevel <= 0 || _player.Level < Config.MaxLevel)
             {
+                // 转生次数变多了 = 成功（等级已被引擎打回 1 级，不能再拿「等级是否满」判断）。
+                if (_player.Character.Rebirth > _rebirthBaseCount)
+                {
+                    FinishRebirth(string.Format("转生完成：等级回到 {0}，累计转生 {1} 次",
+                        _player.Level, _player.Character.Rebirth));
+
+                    return;
+                }
+
                 FinishRebirth("等级没到上限，回去练级");
 
                 return;
@@ -1471,7 +1546,8 @@ namespace Server.Bots
             {
                 if (BotPerception.PageHasAction(_player.NPCPage, NPCActionType.Rebirth))
                 {
-                    FinishRebirth(string.Format("转生完成，现在是 {0} 级", _player.Level));
+                    // 已进入「执行转生」页：动作已经生效，下一拍按 Rebirth 计数判定成功。
+                    LastDetail = "已进入「执行转生」页";
 
                     return;
                 }
@@ -2871,6 +2947,12 @@ namespace Server.Bots
             if (SEnvir.Now >= _stateDeadline)
             {
                 FinishTrade("交易超时，先回去练级");
+
+                // 走不回城（没卷 + 路线又远）时，20 秒冷却会让它立刻再跑一趟，
+                // 结果整段时间都在路上。实测 BOT#11 连续 12 次采样「正在走回 潘夜村 交易」。
+                // 超时属于「这趟不划算」，给 5 分钟冷却，先回去练级攒卷。
+                _tradeCooldown = SEnvir.Now.AddMinutes(5);
+
                 return;
             }
 
