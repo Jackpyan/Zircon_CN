@@ -1392,6 +1392,14 @@ namespace Server.Bots
                     LastDetail = "喝蓝药";
             }
 
+            // 3.5) 传送中：不要切到卖货 / 补给。
+            //
+            // 为什么必须挡：传送是**跨图动作**，而卖货判定每帧都会问「背包满了吗」，
+            // 一旦在传送途中被判成「要卖货」，就会重新进入 Trade → 又发起一次传送 ——
+            // 状态来回弹跳、每帧发一次传送。实测 11 分钟刷出 5,585 次
+            // 「卖货用六合石传送去 …」，传送其实一次都没成功。
+            if (State == BotState.Teleport) return false;
+
             // 4) 后台点了「立即补给」：清冷却直接回城，不用等红药见底
             if (_restockRequested)
             {
@@ -1848,6 +1856,44 @@ namespace Server.Bots
         /// 返回 true = 本帧已经处理完（要么已回城，要么正在尝试），调用方应直接 return。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 卖货跨图：优先用**六合圣石**直达目的地（1 秒），而不是腿儿着走过去。
+        /// <para>
+        /// 卖货目的地常常是另一座城 —— 挖取物全是 Meat，而诺玛村落/沙漠土城没有肉类收购商，
+        /// 只能去比奇城/失乐园/潘夜村/比奇城堡卖。走过去要 3~5 分钟，
+        /// 实测 29 分钟内「交易超时」21 次，假人整段时间都在赶路而不是在练级。
+        /// </para>
+        /// </summary>
+        private bool TryTradeTeleport(MapInfo dest)
+        {
+            if (dest == null || _player.CurrentMap == null) return false;
+
+            NPCObject stone = BotPerception.FindTeleportStoneFor(_player.CurrentMap, dest.Index);
+
+            if (stone == null) return false;
+
+            int button = BotPerception.FindTeleportButton(stone.NPCInfo, dest.Index);
+
+            if (button < 0) return false;
+
+            int cost = BotPerception.CheapestTeleportCost(stone.NPCInfo, dest.Index);
+
+            if (cost > 0 && GoldAmount() < cost) return false;
+
+            _travelMap = dest;
+            _travelPoint = default;
+            _travelFailures = 0;
+            _emptyHunts = 0;
+            _teleportViaHome = false;
+
+            BotLog.Warn(Profile.Seq, string.Format("卖货用六合石传送去 {0}（花费 {1}）",
+                dest.Description, cost > 0 ? cost.ToString() : "免费"));
+
+            EnterState(BotState.Teleport, string.Format("传送去 {0} 卖货", dest.Description), TimeSpan.FromMinutes(5));
+
+            return true;
+        }
+
         private bool TryReturnHomeByScroll(MapInfo home)
         {
             if (BotActions.CountTownScroll(_player) <= 0) return false;
@@ -2986,7 +3032,12 @@ namespace Server.Bots
             // 30 个假人里有 12 个同时卡在「回城卖货」走不回来就是这么来的。
             if (_player.CurrentMap?.Info != home)
             {
-                // ⚠ 回城卷只会把人送回**绑定主城**。目的地不是主城时用卷 =
+                // ① 先试**六合石直达**（1 秒）。
+                //    为什么必须先于走路：卖货目的地常常是另一座城（诺玛村落没有收 Meat 的商人），
+                //    走过去要好几分钟，实测 29 分钟里「交易超时」21 次 —— 假人整段时间都在赶路。
+                if (TryTradeTeleport(home)) return;
+
+                // ② 回城卷只会把人送回**绑定主城**。目的地不是主城时用卷 =
                 // 「传过去 → 还是不在目的地 → 再传」，几分钟就能把卷烧光，
                 // 而且位置原地踏步。这种情形只能走 AutoPath。
                 MapInfo bind = _player.Character?.BindPoint?.BindRegion?.Map;
