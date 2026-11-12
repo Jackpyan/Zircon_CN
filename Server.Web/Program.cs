@@ -29,6 +29,26 @@ System.Net.IPAddress adminAddress = AdminEndpointValidator.ValidateAndResolve();
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
+// 静态资源解析（后台页面「全是文字、没有样式」的根因就在这里）：
+// 框架默认只在 Development 环境加载 *.staticwebassets.runtime.json 清单，而本程序是 Production。
+// 于是 app.MapStaticAssets() 的端点虽然能匹配，但底下的文件提供器是空的 ——
+// /css/app.css、/_framework/blazor.web.js、/_content/Radzen.Blazor/* 全部返回 200 + 0 字节。
+// 这里不依赖环境变量，只要清单文件在就显式加载一次。
+// 注意：清单里记的是**构建机的绝对路径**，所以跨机部署（尤其 Windows 构建拷到 Linux）必须用
+// dotnet publish —— 发布产物自带 wwwroot，不依赖这份清单。
+if (File.Exists(Path.Combine(AppContext.BaseDirectory, "Server.Web.staticwebassets.runtime.json")))
+{
+    try
+    {
+        Microsoft.AspNetCore.Hosting.StaticWebAssets.StaticWebAssetsLoader
+            .UseStaticWebAssets(builder.Environment, builder.Configuration);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"静态资源清单加载失败（CSS/JS 可能返回 0 字节）：{ex.GetType().Name}: {ex.Message}");
+    }
+}
+
 // 停服流程：游戏服停机 + 存库放在 ApplicationStopping 里同步完成（见文件末尾）。
 // 这里的 ShutdownTimeout 只影响「Kestrel 等浏览器长连接关闭」的时间。
 // 实测存库仅 0.3s，而默认 30s 全耗在等 Blazor 的 WebSocket 上 → 收到 3s。

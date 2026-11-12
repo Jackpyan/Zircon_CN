@@ -22,6 +22,16 @@
   </ItemGroup>
 
   <!--
+    静态文件：把 wwwroot 一并复制到输出目录。
+    Sdk.Web 默认只在 *发布* 时把 wwwroot 放进输出目录，dotnet build 的产物里没有 →
+    Production 环境下 WebRootFileProvider 为空 → /css/app.css 返回 200 + 0 字节，后台页面变成纯文字。
+    PreserveNewest：只覆盖比输出新的文件，不会在每次构建时重刷一遍大文件。
+  -->
+  <ItemGroup>
+    <Content Update="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
     假人数据文件模板：首次构建/发布时复制到输出目录的 Bots/ 下。
     PreserveNewest = 运营改过的名单不会被下一次构建冲掉；删掉输出目录里的文件会从模板恢复。
   -->
