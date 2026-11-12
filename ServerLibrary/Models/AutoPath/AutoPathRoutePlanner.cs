@@ -1,8 +1,9 @@
-using Library;
+﻿using Library;
 using Library.SystemModels;
 using Server.Envir;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 
@@ -20,18 +21,78 @@ namespace Server.Models.AutoPath
         private const int PathGuideDistance = 48;
         private const int NormalPathCost = 8;
 
+        /// <summary>一「跳」最多试几个候选出口（每个候选要跑一次整图 A*，这是唯一的重活）。</summary>
+        private const int MaxHopCandidates = 6;
+
+        /// <summary>单次规划超过这么久就打一行日志（用来盯回归）。</summary>
+        private const long SlowPlanMilliseconds = 8;
+
+        /// <summary>
+        /// 启发式权重（百分比）。100 = 标准 A*（路径最短，但迷宫图上展开得多）。
+        ///
+        /// <para>
+        /// 这里用 150：迷宫型大地图（剧毒之地 800×800 / 38 万可走格）从一头走到另一头，
+        /// 标准 A* 的启发式在墙里估不准，会退化成 Dijkstra 铺满整张图。
+        /// 加权后展开量大幅下降，代价是路径可能比最短的长几个百分点 —— 玩家感知不到，
+        /// 但省下的是主线程上几十毫秒。
+        /// </para>
+        /// </summary>
+        private const int HeuristicWeightPercent = 150;
+
+        /// <summary>本次规划里跑了几次 A*（只在游戏主线程用，所以 thread-static 就够）。</summary>
+        [ThreadStatic] private static int _AStarCalls;
+
+        /// <summary>A* 的复用缓冲，按地图尺寸懒分配。</summary>
+        [ThreadStatic] private static SearchScratch _scratch;
+
         private static readonly MirDirection[] Directions =
         {
             MirDirection.Up, MirDirection.UpRight, MirDirection.Right, MirDirection.DownRight,
             MirDirection.Down, MirDirection.DownLeft, MirDirection.Left, MirDirection.UpLeft
         };
 
+        /// <summary>
+        /// <see cref="Directions"/> 每一项对应的坐标偏移。
+        /// 必须和数组一一对应 —— 顺手把 <c>Functions.Move</c> 从热循环里拿掉，
+        /// 一次寻路要调它上百万次。
+        /// </summary>
+        private static readonly int[] DirectionOffsetX = { 0, 1, 1, 1, 0, -1, -1, -1 };
+        private static readonly int[] DirectionOffsetY = { -1, -1, 0, 1, 1, 1, 0, -1 };
+
         public static bool TryBuild(MapObject actor, AutoPathDestination destination, bool avoidLiveObjects, out AutoPathPlan plan)
             => TryBuild(actor, actor?.CurrentMap?.Info, actor?.CurrentLocation ?? Point.Empty, destination, avoidLiveObjects, out plan);
 
+        /// <summary>
+        /// 规划一条到目标的路。
+        ///
+        /// <para>
+        /// <b>只规划「当前这张图」这一段</b>：走到本图通往下一张图的门口就结束，剩下的等玩家真的
+        /// 走进下一张图再算（<c>AutoPathService</c> 一旦发现 <c>RouteMap != CurrentMap</c> 就会重建）。
+        /// </para>
+        ///
+        /// <para>
+        /// <b>为什么不是一次算完整条跨图路线</b>：老实现是「(地图, 格子) 上的 Dijkstra」，
+        /// 每弹出一个节点就要对它那张图的每个出口跑一次整图 A*，而每个出口的落地区域里
+        /// <b>每一个可走格都会变成一个节点</b>（实测落地区域平均 7~14 格、最大 32 格，
+        /// 出口最多的图有 58 个出口）。于是 A* 调用次数 ≈ 节点数 × 出口数，
+        /// 一条 5 张图的路线能跑到几百次整图 A* —— D5 压测里最坏 76.9 ms 卡在主线程上。
+        /// </para>
+        ///
+        /// <para>
+        /// 改成逐跳之后，单次规划的 A* 次数上界是 <see cref="MaxHopCandidates"/>，
+        /// 和路线长度无关；总工作量摊到「每跨一张图算一次」上，每帧最多一次 A* 的钱。
+        /// </para>
+        ///
+        /// <para>
+        /// <b>代价</b>：① 路线选择从「全局最优」退成「每跳最优」（地图图几乎是一棵树，实测无差别）；
+        /// ② <c>Route.Legs</c> 只剩当前图的这一段，所以在大地图里翻到路线后面的地图时看不到引导线
+        /// （客户端本来就只画 <c>MapIndex == 当前显示图</c> 的那一段，走路完全不受影响）。
+        /// </para>
+        /// </summary>
         public static bool TryBuild(MapObject actor, MapInfo startMap, Point startLocation, AutoPathDestination destination, bool avoidLiveObjects, out AutoPathPlan plan)
         {
             plan = null;
+
             if (actor?.CurrentMap == null ||
                 startMap == null ||
                 destination?.Map == null ||
@@ -39,136 +100,194 @@ namespace Server.Models.AutoPath
                 !destination.Map.CanAutoPath)
                 return false;
 
-            Dictionary<MapInfo, int> mapDistances = GetMapDistances(actor, destination.Map);
-            if (!mapDistances.ContainsKey(startMap)) return false;
+            MapInfo destinationMapInfo = destination.Map;
+            long startedAt = Stopwatch.GetTimestamp();
+            long mapsDoneAt = startedAt;
+            long startMapDoneAt = startedAt;
+            int hops = 0;
+            bool changesMap = false;
 
-            SearchNode start = new SearchNode
+            _AStarCalls = 0;
+
+            try
             {
-                Map = startMap,
-                Location = startLocation,
-            };
+                Dictionary<MapInfo, int> mapDistances = GetMapDistances(actor, destinationMapInfo);
+                mapsDoneAt = Stopwatch.GetTimestamp();
+                if (!mapDistances.TryGetValue(startMap, out int startDistance)) return false;
 
-            PriorityQueue<SearchNode, int> open = new PriorityQueue<SearchNode, int>();
-            open.Enqueue(start, 0);
+                Map startMapInstance = SEnvir.GetMap(startMap);
+                startMapDoneAt = Stopwatch.GetTimestamp();
+                if (startMapInstance == null) return false;
 
-            Dictionary<(MapInfo Map, Point Location), int> bestCosts =
-                new Dictionary<(MapInfo Map, Point Location), int>
+                bool avoidObjectsHere = avoidLiveObjects && startMap == actor.CurrentMap.Info;
+
+                // ① 已经在目标图上：直接算到目标点，一次成型。
+                if (startMap == destinationMapInfo)
                 {
-                    [(start.Map, start.Location)] = 0
-                };
+                    NPCObject destinationNPC = GetDestinationNPC(actor, startMapInstance, destination);
+                    HashSet<Point> targets = GetDestinationTargets(startMapInstance, destination, destinationNPC);
+                    if (targets.Count == 0) return false;
 
-            AutoPathPlan bestPlan = null;
-            int bestRouteCost = int.MaxValue;
+                    if (!TryFindPreferredPath(actor, startMapInstance, startLocation, targets, avoidObjectsHere, out List<Point> path))
+                        return false;
 
-            while (open.TryDequeue(out SearchNode node, out _))
-            {
-                var nodeKey = (node.Map, node.Location);
-                if (!bestCosts.TryGetValue(nodeKey, out int knownCost) || node.Cost != knownCost)
-                    continue;
-                if (node.Cost >= bestRouteCost) continue;
-
-                Map map = SEnvir.GetMap(node.Map);
-                if (map == null) continue;
-
-                bool avoidObjectsOnMap = avoidLiveObjects && node.Map == actor.CurrentMap.Info;
-
-                if (node.Map == destination.Map)
-                {
-                    NPCObject destinationNPC = GetDestinationNPC(actor, map, destination);
-                    HashSet<Point> targets = GetDestinationTargets(map, destination, destinationNPC);
-                    if (TryFindPreferredPath(actor, map, node.Location, targets,
-                            avoidObjectsOnMap, out List<Point> finalPath))
+                    plan = new AutoPathPlan
                     {
-                        int finalCost = node.Cost + Math.Max(0, finalPath.Count - 1);
-                        if (finalCost < bestRouteCost)
+                        Route = new AutoPathRoute
                         {
-                            List<AutoPathRouteLeg> legs = ReconstructLegs(node);
-                            legs.Add(new AutoPathRouteLeg
+                            Legs = new List<AutoPathRouteLeg>
                             {
-                                MapIndex = node.Map.Index,
-                                Points = finalPath
-                            });
-                            legs = MergeLegs(legs);
-
-                            bestRouteCost = finalCost;
-                            bestPlan = new AutoPathPlan
-                            {
-                                Route = new AutoPathRoute
-                                {
-                                    Legs = legs,
-                                    DestinationMapIndex = node.Map.Index,
-                                    Destination = finalPath[finalPath.Count - 1],
-                                    DisplayDestination = GetDisplayDestination(destination, map, destinationNPC, finalPath[finalPath.Count - 1]),
-                                },
-                                CurrentPath = legs[0].Points,
-                                ChangesMap = node.Previous != null,
-                            };
-                        }
-                    }
+                                new AutoPathRouteLeg { MapIndex = startMap.Index, Points = path }
+                            },
+                            DestinationMapIndex = startMap.Index,
+                            Destination = path[path.Count - 1],
+                            DisplayDestination = GetDisplayDestination(destination, startMapInstance, destinationNPC, path[path.Count - 1]),
+                        },
+                        CurrentPath = path,
+                        ChangesMap = false,
+                    };
+                    return true;
                 }
 
-                if (!mapDistances.TryGetValue(node.Map, out int currentMapDistance))
-                    continue;
+                // ② 跨图：只算「走到本图出口」这一段。
+                changesMap = true;
 
-                foreach (MovementInfo movement in GetOutgoingMovements(node.Map))
+                List<Point> hopPath = null;
+
+                int examined = 0;
+                foreach (MovementInfo movement in GetOutgoingMovements(startMap))
                 {
-                    if (!CanUseMovement(actor, movement, node.Map)) continue;
+                    if (examined >= MaxHopCandidates) break;
+                    if (!CanUseMovement(actor, movement, startMap)) continue;
 
-                    MapInfo destinationMap = movement.DestinationRegion?.Map;
-                    if (destinationMap == null ||
-                        !mapDistances.TryGetValue(destinationMap, out int destinationMapDistance) ||
-                        destinationMapDistance != currentMapDistance - 1)
+                    MapInfo nextMapInfo = movement.DestinationRegion?.Map;
+                    if (nextMapInfo == null ||
+                        !mapDistances.TryGetValue(nextMapInfo, out int nextDistance) ||
+                        nextDistance != startDistance - 1)
                         continue;
 
                     HashSet<Point> sourcePoints = GetValidPoints(
-                        map, GetRegionPoints(movement.SourceRegion, map));
-                    if (!TryFindPreferredPath(actor, map, node.Location, sourcePoints,
-                            avoidObjectsOnMap, out List<Point> legPath))
+                        startMapInstance, GetRegionPoints(movement.SourceRegion, startMapInstance));
+                    if (sourcePoints.Count == 0) continue;
+
+                    examined++;
+                    if (!TryFindPreferredPath(actor, startMapInstance, startLocation, sourcePoints, avoidObjectsHere, out List<Point> candidate))
                         continue;
 
-                    if (movement.NeedHole && (node.Map != actor.CurrentMap.Info ||
+                    if (movement.NeedHole && (startMap != actor.CurrentMap.Info ||
                         !actor.CurrentMap.Objects.OfType<SpellObject>().Any(x =>
                             x.Effect == SpellEffect.ZombieHole &&
-                            x.CurrentLocation == legPath[legPath.Count - 1])))
+                            x.CurrentLocation == candidate[candidate.Count - 1])))
                         continue;
 
-                    Map destinationMapInstance = SEnvir.GetMap(destinationMap);
-                    if (destinationMapInstance == null) continue;
+                    Map nextMapInstance = SEnvir.GetMap(nextMapInfo);
+                    if (nextMapInstance == null) continue;
+                    if (GetValidPoints(nextMapInstance, GetRegionPoints(movement.DestinationRegion, nextMapInstance)).Count == 0)
+                        continue;
 
-                    HashSet<Point> destinationPoints = GetValidPoints(
-                        destinationMapInstance,
-                        GetRegionPoints(movement.DestinationRegion, destinationMapInstance));
-                    if (destinationPoints.Count == 0) continue;
-
-                    int cost = node.Cost + Math.Max(1, legPath.Count - 1);
-                    foreach (Point destinationPoint in destinationPoints)
-                    {
-                        var key = (destinationMap, destinationPoint);
-                        if (bestCosts.TryGetValue(key, out int oldCost) && oldCost <= cost)
-                            continue;
-
-                        bestCosts[key] = cost;
-
-                        SearchNode next = new SearchNode
-                        {
-                            Map = destinationMap,
-                            Location = destinationPoint,
-                            Cost = cost,
-                            Previous = node,
-                            IncomingLeg = new AutoPathRouteLeg
-                            {
-                                MapIndex = node.Map.Index,
-                                Points = legPath
-                            },
-                        };
-
-                        open.Enqueue(next, cost);
-                    }
+                    if (hopPath == null || candidate.Count < hopPath.Count)
+                        hopPath = candidate;
                 }
+
+                if (hopPath == null) return false;
+
+                hops = 1;
+
+                plan = new AutoPathPlan
+                {
+                    Route = new AutoPathRoute
+                    {
+                        Legs = new List<AutoPathRouteLeg>
+                        {
+                            new AutoPathRouteLeg { MapIndex = startMap.Index, Points = hopPath }
+                        },
+                        DestinationMapIndex = destinationMapInfo.Index,
+                        Destination = hopPath[hopPath.Count - 1],
+                        DisplayDestination = GetDisplayDestinationOn(destinationMapInfo, destination),
+                    },
+                    CurrentPath = hopPath,
+                    ChangesMap = true,
+                };
+                return true;
+            }
+            finally
+            {
+                LogSlowPlan(actor, startMap, destinationMapInfo, hops, changesMap,
+                    startedAt, mapsDoneAt, startMapDoneAt);
+            }
+        }
+
+        /// <summary>
+        /// 慢计划日志。**别删** —— 这一行是「逐跳规划」的唯一回归探针：
+        /// 一旦哪天有人往出口循环里加了「每个落地点都试一遍」这类改动，这里会立刻响。
+        ///
+        /// <para>
+        /// 分段计时是必须的：第一次实测出现过「A* 只有 1 次却花了 12 ms」，
+        /// 原因是<b>第一次踩到一张没加载过的地图</b>（<c>Config.LazyLoadMaps</c> 延迟加载，
+        /// <c>SEnvir.GetMap</c> 现场读 .map 文件 + 建格子 + 建 NPC/刷怪）。
+        /// 光看总耗时会误判成 A* 慢。
+        /// </para>
+        /// </summary>
+        private static void LogSlowPlan(MapObject actor, MapInfo startMap, MapInfo destinationMap,
+            int hops, bool changesMap, long startedAt, long mapsDoneAt, long startMapDoneAt)
+        {
+            long elapsed = Elapsed(startedAt, Stopwatch.GetTimestamp());
+            if (elapsed < SlowPlanMilliseconds) return;
+
+            SEnvir.Log($"[AUTO PATH SLOW] {actor?.Name ?? "?"} {startMap?.Description}[{startMap?.FileName}] → " +
+                       $"{destinationMap?.Description}[{destinationMap?.FileName}]，耗时 {elapsed} ms" +
+                       $"（地图梯度 {Elapsed(startedAt, mapsDoneAt)} / 取起点图 {Elapsed(mapsDoneAt, startMapDoneAt)} / 其余 {Elapsed(startMapDoneAt, Stopwatch.GetTimestamp())}），" +
+                       $"A* {_AStarCalls} 次，跳数 {hops}，跨图 {changesMap}");
+        }
+
+        private static long Elapsed(long from, long to)
+            => (to - from) * 1000 / Stopwatch.Frequency;
+
+        /// <summary>
+        /// 目标图上的「显示用终点」——不跑 A*，只按目标类型取一个点。
+        /// <para>
+        /// 逐跳规划时手上没有目标图的路径，所以 <c>Route.Destination</c> 是「本图出口」的坐标，
+        /// 不能直接拿去当 <c>DisplayDestination</c>（客户端只在「显示图 == 目标图」时用它画终点标记，
+        /// 坐标必须是目标图上的）。这里单独按区域 / NPC / 指定点算一次。
+        /// </para>
+        /// </summary>
+        private static Point GetDisplayDestinationOn(MapInfo destinationMapInfo, AutoPathDestination destination)
+        {
+            Map map = SEnvir.GetMap(destinationMapInfo);
+
+            if (map == null) return destination.Point;
+
+            if (destination.NPC != null)
+            {
+                NPCObject npc = map.NPCs.FirstOrDefault(x => x.NPCInfo == destination.NPC && x.Visible);
+                if (npc != null) return npc.CurrentLocation;
             }
 
-            plan = bestPlan;
-            return plan != null;
+            if (destination.Region != null)
+            {
+                Point centre = RegionCentre(map, destination.Region);
+                if (centre != Point.Empty) return centre;
+            }
+
+            return destination.Point;
+        }
+
+        private static Point RegionCentre(Map map, MapRegion region)
+        {
+            int minX = int.MaxValue, maxX = int.MinValue;
+            int minY = int.MaxValue, maxY = int.MinValue;
+            bool any = false;
+
+            foreach (Point point in GetRegionPoints(region, map))
+            {
+                any = true;
+                if (point.X < minX) minX = point.X;
+                if (point.X > maxX) maxX = point.X;
+                if (point.Y < minY) minY = point.Y;
+                if (point.Y > maxY) maxY = point.Y;
+            }
+
+            return any ? new Point((minX + maxX) / 2, (minY + maxY) / 2) : Point.Empty;
         }
 
         public static bool TryBuildCurrentPath(MapObject actor, Point destination, bool avoidLiveObjects, out List<Point> path)
@@ -264,47 +383,6 @@ namespace Server.Models.AutoPath
                 foreach (MovementInfo movement in region.DestinationMovements)
                     yield return movement;
             }
-        }
-
-        private static List<AutoPathRouteLeg> ReconstructLegs(SearchNode node)
-        {
-            List<AutoPathRouteLeg> legs = new List<AutoPathRouteLeg>();
-
-            while (node?.Previous != null)
-            {
-                legs.Add(node.IncomingLeg);
-                node = node.Previous;
-            }
-
-            legs.Reverse();
-            return legs;
-        }
-
-        private static List<AutoPathRouteLeg> MergeLegs(List<AutoPathRouteLeg> legs)
-        {
-            List<AutoPathRouteLeg> result = new List<AutoPathRouteLeg>();
-
-            foreach (AutoPathRouteLeg leg in legs)
-            {
-                AutoPathRouteLeg existing = result.LastOrDefault();
-                if (existing?.MapIndex != leg.MapIndex)
-                {
-                    result.Add(new AutoPathRouteLeg
-                    {
-                        MapIndex = leg.MapIndex,
-                        Points = new List<Point>(leg.Points)
-                    });
-                    continue;
-                }
-
-                if (existing.Points.Count > 0 && leg.Points.Count > 0 &&
-                    existing.Points[existing.Points.Count - 1] == leg.Points[0])
-                    existing.Points.AddRange(leg.Points.Skip(1));
-                else
-                    existing.Points.AddRange(leg.Points);
-            }
-
-            return result;
         }
 
         private static bool CanUseMovement(MapObject actor, MovementInfo movement, MapInfo sourceMap)
@@ -489,60 +567,218 @@ namespace Server.Models.AutoPath
             return result;
         }
 
+        /// <summary>
+        /// 单张图上的 A*。**这是整个自动寻路里唯一的重活**，所以实现上刻意避开了
+        /// <c>Dictionary&lt;Point, ...&gt;</c> / <c>HashSet&lt;Point&gt;</c>：
+        ///
+        /// <para>
+        /// 老实现用三个 <c>Point</c> 为键的字典 + 没有 decrease-key 的
+        /// <c>PriorityQueue</c>。迷宫型大地图（剧毒之地、西部荒地、潘夜神殿 8 层）
+        /// 从一头走到另一头要展开十几万个格子，每个格子 8 个邻居、每个邻居都要做
+        /// 哈希查找和一次入队 —— 离线基准实测最坏 <b>101 ms</b>，而且同一个节点会被
+        /// 反复入队，队列长度爆炸。
+        /// </para>
+        ///
+        /// <para>
+        /// 现在改成：一维数组 + 访问代次戳（免清零）+ 带 decrease-key 的二叉堆，
+        /// 每个节点只入队一次。坐标用 <c>y * Width + x</c> 编码成 int，邻居用
+        /// 预置偏移量算，格子直接查 <c>Map.Cells</c>。语义完全不变（8 方向、步长代价
+        /// 1 或 <see cref="NormalPathCost"/>、可选避让活物、可选偏好格）。
+        /// </para>
+        /// </summary>
         private static bool TryFindPath(MapObject actor, Map map,
             Point start, HashSet<Point> targets, bool avoidLiveObjects,
             HashSet<Point> preferredPoints, out List<Point> path)
         {
             path = null;
+
+            // 计数只服务于「慢计划日志」，别拿它做业务判断。
+            _AStarCalls++;
+
             if (targets.Contains(start))
             {
                 path = new List<Point> { start };
                 return true;
             }
 
-            GetBounds(targets, out int minimumX, out int maximumX,
-                out int minimumY, out int maximumY);
+            int width = map.Width;
+            int height = map.Height;
 
-            PriorityQueue<Point, (int Cost, long Distance)> open = new PriorityQueue<Point, (int Cost, long Distance)>();
-            Dictionary<Point, Point> previous = new Dictionary<Point, Point>();
-            Dictionary<Point, int> costs = new Dictionary<Point, int> { [start] = 0 };
-            HashSet<Point> closed = new HashSet<Point>();
-            open.Enqueue(start, (0, DistanceSquaredToBounds(start, minimumX, maximumX, minimumY, maximumY)));
+            if (width <= 0 || height <= 0) return false;
+            if (start.X < 0 || start.X >= width || start.Y < 0 || start.Y >= height) return false;
 
-            while (open.TryDequeue(out Point current, out _))
+            GetBounds(targets, out int minimumX, out int maximumX, out int minimumY, out int maximumY);
+
+            SearchScratch scratch = _scratch ??= new SearchScratch();
+            scratch.Ensure(width * height);
+
+            int generation = scratch.NextGeneration();
+            scratch.Reset();
+
+            Cell[,] cells = map.Cells;
+            bool avoid = avoidLiveObjects && actor.CurrentMap == map;
+
+            int startIndex = start.Y * width + start.X;
+
+            scratch.Cost[startIndex] = 0;
+            scratch.Previous[startIndex] = -1;
+            scratch.Stamp[startIndex] = generation;
+
+            int startHeuristic = DistanceToBounds(start.X, start.Y, minimumX, maximumX, minimumY, maximumY);
+
+            HeapPush(scratch, startIndex, HeapKey(startHeuristic * HeuristicWeightPercent / 100, startHeuristic));
+
+            while (scratch.HeapCount > 0)
             {
-                if (!closed.Add(current)) continue;
+                int index = HeapPop(scratch);
 
-                if (targets.Contains(current))
+                if (scratch.Closed[index] == generation) continue;
+                scratch.Closed[index] = generation;
+
+                int x = index % width;
+                int y = index / width;
+
+                if (targets.Contains(new Point(x, y)))
                 {
-                    path = Reconstruct(previous, current);
+                    path = ReconstructPath(scratch, index, width, generation);
                     return true;
                 }
 
-                foreach (MirDirection direction in Directions)
-                {
-                    Point next = Functions.Move(current, direction);
-                    if (closed.Contains(next) || map.GetCell(next) == null ||
-                        avoidLiveObjects && IsBlockedByLiveObject(actor, map, next))
-                        continue;
+                int currentCost = scratch.Cost[index];
 
-                    int stepCost = preferredPoints == null || preferredPoints.Contains(next)
+                for (int direction = 0; direction < 8; direction++)
+                {
+                    int nextX = x + DirectionOffsetX[direction];
+                    int nextY = y + DirectionOffsetY[direction];
+
+                    if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+
+                    Cell cell = cells[nextX, nextY];
+                    if (cell == null) continue;
+                    if (avoid && cell.IsBlocking(actor, false)) continue;
+
+                    int nextIndex = nextY * width + nextX;
+                    if (scratch.Closed[nextIndex] == generation) continue;
+
+                    int stepCost = preferredPoints == null || preferredPoints.Contains(new Point(nextX, nextY))
                         ? 1
                         : NormalPathCost;
-                    int newCost = costs[current] + stepCost;
-                    if (costs.TryGetValue(next, out int oldCost) && oldCost <= newCost)
+
+                    int newCost = currentCost + stepCost;
+
+                    if (scratch.Stamp[nextIndex] == generation && scratch.Cost[nextIndex] <= newCost)
                         continue;
 
-                    costs[next] = newCost;
-                    previous[next] = current;
+                    scratch.Stamp[nextIndex] = generation;
+                    scratch.Cost[nextIndex] = newCost;
+                    scratch.Previous[nextIndex] = index;
 
-                    int heuristic = DistanceToBounds(next, minimumX, maximumX, minimumY, maximumY);
-                    long distance = DistanceSquaredToBounds(next, minimumX, maximumX, minimumY, maximumY);
-                    open.Enqueue(next, (newCost + heuristic, distance));
+                    int heuristic = DistanceToBounds(nextX, nextY, minimumX, maximumX, minimumY, maximumY);
+                    long key = HeapKey(newCost + heuristic * HeuristicWeightPercent / 100, heuristic);
+
+                    if (scratch.HeapPosition[nextIndex] >= 0)
+                        HeapDecreaseKey(scratch, nextIndex, key);
+                    else
+                        HeapPush(scratch, nextIndex, key);
                 }
             }
 
             return false;
+        }
+
+        /// <summary>堆键：主键是 f 值，同 f 时优先 h 更小的（更贴近目标），减少无谓展开。</summary>
+        private static long HeapKey(int total, int heuristic)
+            => ((long)total << 32) | (uint)heuristic;
+
+        private static void HeapPush(SearchScratch scratch, int node, long key)
+        {
+            int position = scratch.HeapCount++;
+
+            scratch.HeapNode[position] = node;
+            scratch.HeapKey[position] = key;
+            scratch.HeapPosition[node] = position;
+
+            SiftUp(scratch, position);
+        }
+
+        private static void HeapDecreaseKey(SearchScratch scratch, int node, long key)
+        {
+            int position = scratch.HeapPosition[node];
+
+            if (position < 0 || scratch.HeapKey[position] <= key) return;
+
+            scratch.HeapKey[position] = key;
+            SiftUp(scratch, position);
+        }
+
+        private static void SiftUp(SearchScratch scratch, int position)
+        {
+            while (position > 0)
+            {
+                int parent = (position - 1) >> 1;
+
+                if (scratch.HeapKey[parent] <= scratch.HeapKey[position]) return;
+
+                HeapSwap(scratch, parent, position);
+                position = parent;
+            }
+        }
+
+        private static void SiftDown(SearchScratch scratch, int position)
+        {
+            while (true)
+            {
+                int left = position * 2 + 1;
+
+                if (left >= scratch.HeapCount) return;
+
+                int right = left + 1;
+
+                int smallest = right < scratch.HeapCount && scratch.HeapKey[right] < scratch.HeapKey[left]
+                    ? right
+                    : left;
+
+                if (scratch.HeapKey[position] <= scratch.HeapKey[smallest]) return;
+
+                HeapSwap(scratch, position, smallest);
+                position = smallest;
+            }
+        }
+
+        private static void HeapSwap(SearchScratch scratch, int a, int b)
+        {
+            int nodeA = scratch.HeapNode[a];
+            int nodeB = scratch.HeapNode[b];
+
+            long keyA = scratch.HeapKey[a];
+            long keyB = scratch.HeapKey[b];
+
+            scratch.HeapNode[a] = nodeB;
+            scratch.HeapKey[a] = keyB;
+            scratch.HeapPosition[nodeB] = a;
+
+            scratch.HeapNode[b] = nodeA;
+            scratch.HeapKey[b] = keyA;
+            scratch.HeapPosition[nodeA] = b;
+        }
+
+        private static int HeapPop(SearchScratch scratch)
+        {
+            int node = scratch.HeapNode[0];
+
+            scratch.HeapPosition[node] = -1;
+            scratch.HeapCount--;
+
+            if (scratch.HeapCount > 0)
+            {
+                scratch.HeapNode[0] = scratch.HeapNode[scratch.HeapCount];
+                scratch.HeapKey[0] = scratch.HeapKey[scratch.HeapCount];
+                scratch.HeapPosition[scratch.HeapNode[0]] = 0;
+
+                SiftDown(scratch, 0);
+            }
+
+            return node;
         }
 
         private static void GetBounds(HashSet<Point> points,
@@ -563,58 +799,114 @@ namespace Server.Models.AutoPath
         }
 
         private static int DistanceToBounds(
-            Point point, int minimumX, int maximumX, int minimumY, int maximumY)
+            int x, int y, int minimumX, int maximumX, int minimumY, int maximumY)
         {
-            int xDistance = point.X < minimumX
-                ? minimumX - point.X
-                : point.X > maximumX
-                    ? point.X - maximumX
+            int xDistance = x < minimumX
+                ? minimumX - x
+                : x > maximumX
+                    ? x - maximumX
                     : 0;
-            int yDistance = point.Y < minimumY
-                ? minimumY - point.Y
-                : point.Y > maximumY
-                    ? point.Y - maximumY
+            int yDistance = y < minimumY
+                ? minimumY - y
+                : y > maximumY
+                    ? y - maximumY
                     : 0;
 
             return Math.Max(xDistance, yDistance);
         }
 
-        private static long DistanceSquaredToBounds(Point point, int minimumX, int maximumX, int minimumY, int maximumY)
+        private static List<Point> ReconstructPath(SearchScratch scratch, int end, int width, int generation)
         {
-            int xDistance = point.X < minimumX ? minimumX - point.X : point.X > maximumX ? point.X - maximumX : 0;
-            int yDistance = point.Y < minimumY ? minimumY - point.Y : point.Y > maximumY ? point.Y - maximumY : 0;
-            return (long)xDistance * xDistance + (long)yDistance * yDistance;
-        }
+            List<Point> result = new List<Point>();
 
-        private static bool IsBlockedByLiveObject(MapObject actor, Map map, Point point)
-        {
-            if (actor.CurrentMap != map) return false;
+            int index = end;
 
-            Cell cell = map.GetCell(point);
-            return cell == null || cell.IsBlocking(actor, false);
-        }
-
-        private static List<Point> Reconstruct(
-            Dictionary<Point, Point> previous, Point end)
-        {
-            List<Point> result = new List<Point> { end };
-            while (previous.TryGetValue(end, out Point point))
+            while (index >= 0 && scratch.Stamp[index] == generation)
             {
-                end = point;
-                result.Add(end);
+                result.Add(new Point(index % width, index / width));
+                index = scratch.Previous[index];
             }
 
             result.Reverse();
             return result;
         }
 
-        private sealed class SearchNode
+        /// <summary>
+        /// A* 的可复用缓冲。按地图尺寸分配一次，之后靠「访问代次戳」区分本次/上次，
+        /// 免得每次寻路都清零几十万个 int（那本身就是一次可见的卡顿）。
+        /// <para>只在游戏主线程用，所以 thread-static 一个就够，不需要锁。</para>
+        /// </summary>
+        private sealed class SearchScratch
         {
-            public MapInfo Map;
-            public Point Location;
-            public int Cost;
-            public SearchNode Previous;
-            public AutoPathRouteLeg IncomingLeg;
+            public int[] Cost;
+            public int[] Previous;
+            public int[] Stamp;
+            public int[] Closed;
+
+            /// <summary>节点在堆里的位置；-1 = 不在堆里。</summary>
+            public int[] HeapPosition;
+
+            public int[] HeapNode;
+            public long[] HeapKey;
+            public int HeapCount;
+
+            private int _generation;
+
+            /// <summary>
+            /// 只增不减地保证容量。
+            /// <para>
+            /// <b>别按「尺寸完全相同」来判断复用</b>：索引是 <c>y * width + x</c>，
+            /// 只要容量够大就能容纳任何更小的地图，而按尺寸判断会导致
+            /// 「大地图 → 小地图 → 大地图」时反复重新分配（800×800 一次就是 20 MB，
+            /// 分分钟变成 GC 尖峰 —— 离线基准里小地图出现 16 ms 假尖峰就是这么来的）。
+            /// </para>
+            /// </summary>
+            public void Ensure(int size)
+            {
+                if (Cost != null && Cost.Length >= size) return;
+
+                // 留一点余量，免得地图比上一张大一点点就重新分配。
+                size = Math.Max(size, 1024) * 5 / 4;
+
+                Cost = new int[size];
+                Previous = new int[size];
+                Stamp = new int[size];
+                Closed = new int[size];
+                HeapPosition = new int[size];
+                HeapNode = new int[size];
+                HeapKey = new long[size];
+
+                // HeapPosition 默认 0 会被误判成「已经在堆里」，必须全部置 -1。
+                Array.Fill(HeapPosition, -1);
+
+                HeapCount = 0;
+                _generation = 0;
+            }
+
+            /// <summary>
+            /// 开始新一轮搜索。**必须先把上一轮还留在堆里的节点的位置标记清掉**，
+            /// 否则新一轮的 decrease-key 会写到越界位置，把堆写坏。
+            /// </summary>
+            public void Reset()
+            {
+                for (int i = 0; i < HeapCount; i++)
+                    HeapPosition[HeapNode[i]] = -1;
+
+                HeapCount = 0;
+            }
+
+            public int NextGeneration()
+            {
+                if (_generation == int.MaxValue)
+                {
+                    Array.Clear(Stamp);
+                    Array.Clear(Closed);
+                    _generation = 0;
+                }
+
+                return ++_generation;
+            }
         }
+
     }
 }
