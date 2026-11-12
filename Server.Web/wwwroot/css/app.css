@@ -410,3 +410,139 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .readonly-grid > div { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid #1d272a; background: #0d1315; font: 11px var(--mono); }
 .readonly-grid > div span { color: #8fa0a4; }
 .readonly-grid > div b { color: var(--cyan); font-weight: 500; }
+
+/* ============================ P5-3 角色详情弹窗 ============================ */
+/* 纸娃娃的槽位坐标来自客户端 CharacterDialog，页面按 1.6 倍缩放后写死 left/top，
+   所以这里只负责「长什么样」，不负责「在哪」——位置由 .razor 内联样式给。 */
+
+.bot-modal-mask {
+    position: fixed; inset: 0; z-index: 200;
+    display: grid; place-items: center;
+    padding: 24px;
+    background: #04070ab8;
+    backdrop-filter: blur(3px);
+    outline: none;
+}
+
+.bot-modal {
+    width: min(1040px, 96vw);
+    max-height: 90vh;
+    display: flex; flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 24px 70px #000000a6;
+    overflow: hidden;
+}
+
+.bot-modal-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    background: #0c1113;
+}
+.bot-modal-title { display: flex; align-items: baseline; gap: 7px; font-size: 13px; color: #b9c6ca; }
+.bot-modal-title b { font-size: 16px; color: var(--text); }
+.bot-modal-title .dot { color: #405055; }
+.bot-modal-close {
+    padding: 5px 12px; border: 1px solid var(--line); border-radius: 4px;
+    background: transparent; color: #a8b4b8; font-size: 12px; cursor: pointer; transition: .16s ease;
+}
+.bot-modal-close:hover { border-color: var(--amber); color: var(--amber); }
+
+.bot-modal-tabs { display: flex; gap: 8px; padding: 12px 18px 0; }
+.bot-modal-tabs button {
+    padding: 6px 18px; border: 1px solid var(--line); border-bottom: none;
+    border-radius: 5px 5px 0 0; background: #0d1315; color: #8fa0a4;
+    font-size: 12px; cursor: pointer;
+}
+.bot-modal-tabs button.active { background: #16202a; border-color: #2f6d86; color: var(--cyan); }
+
+.bot-detail-body {
+    display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 18px; padding: 16px 18px;
+    overflow: auto; min-height: 0;
+}
+
+.bot-modal-foot {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 9px 18px; border-top: 1px solid var(--line);
+    background: #0c1113; color: var(--muted); font: 11px var(--mono);
+}
+
+/* ---------- 纸娃娃 ---------- */
+.doll-panel { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.doll-name {
+    min-width: 220px; padding: 7px 18px;
+    border: 1px solid var(--line); border-radius: 5px;
+    background: #0d1315; text-align: center;
+    font: 600 14px var(--sans); letter-spacing: .05em;
+}
+.doll-heart { color: var(--red); }
+.doll-canvas { position: relative; flex: 0 0 auto; }
+.doll-body {
+    position: absolute; left: 26%; top: 13%; width: 48%; height: 68%;
+    color: #33454b; opacity: .95; pointer-events: none;
+}
+.doll-slot {
+    position: absolute;
+    display: grid; place-items: center;
+    padding: 0; overflow: hidden;
+    border: 1px solid var(--line); border-radius: 4px;
+    background: #0c1214; cursor: pointer; transition: border-color .14s ease, box-shadow .14s ease;
+}
+.doll-slot:hover { border-color: #4a6b74; }
+.doll-slot.selected { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber) inset, 0 0 12px #f1b84b3d; }
+.doll-slot img { max-width: 92%; max-height: 92%; object-fit: contain; pointer-events: none; }
+.doll-slot-text { padding: 0 3px; color: #74898f; font: 10px/1.2 var(--sans); text-align: center; }
+.doll-slot.empty { background: #0a0f11; border-style: dashed; border-color: #222e32; }
+.doll-worn {
+    position: absolute; top: 2px; right: 2px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--red); box-shadow: 0 0 5px var(--red);
+}
+.doll-hint { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* ---------- 物品卡 ---------- */
+.item-card {
+    padding: 14px; border: 1px solid var(--line); border-radius: 8px;
+    background: linear-gradient(180deg, #16202a, #0d1315);
+    align-self: start;
+}
+.item-card-empty { padding: 26px 10px; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.7; }
+.item-card-head { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #223034; }
+.item-card-head img { width: 46px; height: 46px; object-fit: contain; flex: 0 0 auto; }
+.item-card-head b { display: block; font-size: 15px; color: #ffe2a8; }
+.item-card-head small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.item-card-rows { padding: 10px 0 4px; }
+.item-card-rows > div, .item-card-stats > div {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 4px 0; font-size: 12px;
+}
+.item-card-rows span, .item-card-stats span { color: #8fa0a4; }
+.item-card-rows b, .item-card-stats b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.item-card-bar { padding: 0 0 6px !important; }
+.item-card-bar .bar { flex: 1 1 100%; width: 100%; margin-top: 0; height: 4px; }
+.item-card-stats { margin-top: 8px; padding-top: 10px; border-top: 1px solid #223034; }
+.item-card-stats h4 { margin: 0 0 6px; color: #6d7d82; font: 600 10px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+
+/* 持久条（复用 .bar 的底子，单独一套配色，别和 HP/负重混） */
+.bar.dura > i { background: var(--green); }
+.bar.dura.low > i { background: var(--amber); }
+.bar.dura.crit > i { background: var(--red); }
+.text-gold { color: var(--amber); }
+
+/* ---------- 属性 tab ---------- */
+.detail-summary { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; }
+.detail-summary > div { display: flex; justify-content: space-between; gap: 10px; padding: 8px 11px; border: 1px solid #1d272a; background: #0d1315; font: 11px var(--mono); }
+.detail-summary span { color: #8fa0a4; }
+.detail-summary b { color: var(--cyan); font-weight: 500; }
+.detail-attrs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 2px 22px; }
+.detail-attrs > div { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-bottom: 1px dotted #1d272a; font-size: 12px; }
+.detail-attrs span { color: #8fa0a4; }
+.detail-attrs b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 900px) {
+    .bot-detail-body { grid-template-columns: 1fr; }
+    .item-card { width: 100%; }
+}

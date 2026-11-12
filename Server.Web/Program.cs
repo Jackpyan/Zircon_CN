@@ -644,6 +644,16 @@ app.MapPut("/api/map-regions/{regionIndex:int}", async (
     return Results.Json(new { etag });
 }).RequireAuthorization();
 
+// 物品图标包（P5-3 纸娃娃）是**构建后才生成**的一批静态文件（tools/iconpack 导出来的 PNG），
+// 它们不在 staticwebassets 清单里，MapStaticAssets 不一定认得。
+// 这里显式挂一个物理文件提供器：只要 wwwroot 下有这个文件就能取到，不依赖清单、也不依赖环境。
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
+        Path.Combine(builder.Environment.ContentRootPath, "wwwroot")),
+    RequestPath = "",
+});
+
 app.MapStaticAssets();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 

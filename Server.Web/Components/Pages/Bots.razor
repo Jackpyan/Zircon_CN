@@ -131,7 +131,12 @@
                     <tbody>
                         @foreach (BotSnapshot row in Rows)
                         {
-                            <tr style="@RowStyle(row)">
+                            BotSnapshot capturedRow = row;
+
+                            @* 整行可点：点开就是照片 2-1 那个角色详情弹窗（P5-3）。
+                               操作列必须 stopPropagation，否则点「踢下线」会顺手弹窗。 *@
+                            <tr style="@RowStyle(row);cursor:pointer;" title="点这一行看角色详情"
+                                @onclick="() => OpenDetail(capturedRow)">
                                 <td>@row.Seq</td>
                                 <td>@row.CharacterName</td>
                                 <td>@ClassText(row.ClassName)</td>
@@ -194,7 +199,7 @@
                                         @row.Detail
                                     }
                                 </td>
-                                <td>
+                                <td @onclick:stopPropagation="true">
                                     @if (row.IsOnline)
                                     {
                                         <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -497,6 +502,197 @@
     }
 }
 
+@* ============================ 角色详情弹窗（P5-3） ============================ *@
+@if (_detailOpen)
+{
+    @* tabindex + FocusAsync 是必须的：焦点不在这个容器上时 @onkeydown 收不到 Esc（见任务清单 §8.7 坑 3）。 *@
+    <div class="bot-modal-mask" tabindex="0" @ref="_detailRoot"
+         @onkeydown="OnDetailKeyDown" @onclick="CloseDetail">
+        <div class="bot-modal" @onclick:stopPropagation="true">
+
+            <div class="bot-modal-head">
+                <div class="bot-modal-title">
+                    <b>@(_detail?.CharacterName ?? "—")</b>
+                    <span>@ClassText(_detail?.ClassName ?? string.Empty)</span>
+                    <span class="dot">·</span>
+                    <span>Lv @(_detail?.Level ?? 0)</span>
+                    <span class="dot">·</span>
+                    <span>@(_detail?.MapName ?? "—")</span>
+                    @if (_detail != null)
+                    {
+                        <span class="text-muted" style="font-size:11px;margin-left:6px;">@_detail.X, @_detail.Y</span>
+                    }
+                </div>
+                <button class="bot-modal-close" @onclick="CloseDetail">关闭 (Esc)</button>
+            </div>
+
+            <div class="bot-modal-tabs">
+                <button class="@(_detailTab == 0 ? "active" : "")" @onclick="() => _detailTab = 0">角色</button>
+                <button class="@(_detailTab == 1 ? "active" : "")" @onclick="() => _detailTab = 1">属性</button>
+            </div>
+
+            @if (_detail == null)
+            {
+                <p style="opacity:.75;padding:24px 4px;">
+                    @(_detailSeq <= 0 ? "" : "这个假人当前不在线（还没拿到角色对象），看不到详情。")
+                </p>
+            }
+            else if (_detailTab == 0)
+            {
+                <div class="bot-detail-body">
+
+                    @* ---------- 左：纸娃娃 ---------- *@
+                    <div class="doll-panel">
+                        <div class="doll-name">@_detail.CharacterName <span class="doll-heart">❤</span></div>
+
+                        <div class="doll-canvas" style="width:@(DollPixelWidth)px;height:@(DollPixelHeight)px;">
+
+                            @* 人体轮廓：只做视觉参照，不参与任何逻辑（真角色精灵要在客户端才能渲染）。 *@
+                            <svg class="doll-body" viewBox="0 0 100 160" preserveAspectRatio="xMidYMid meet">
+                                <g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="50" cy="17" r="8.5" />
+                                    <path d="M50 26 L50 34" />
+                                    <path d="M36 40 Q50 33 64 40 L66 70 Q50 76 34 70 Z" />
+                                    <path d="M36 41 L27 66 L24 92" />
+                                    <path d="M64 41 L73 66 L76 92" />
+                                    <path d="M42 74 L41 112 L39 150" />
+                                    <path d="M58 74 L59 112 L61 150" />
+                                </g>
+                            </svg>
+
+                            @foreach (BotDetailSlot slot in _detail.Slots)
+                            {
+                                BotDetailSlot captured = slot;
+
+                                <button class="doll-slot @(IsSelectedSlot(slot) ? "selected" : "") @(slot.HasItem ? "filled" : "empty")"
+                                        style="left:@(SlotLeft(slot))px;top:@(SlotTop(slot))px;width:@(DollCell)px;height:@(DollCell)px;"
+                                        title="@SlotTitle(slot)"
+                                        @onclick="() => SelectSlot(captured)">
+                                    @if (slot.HasItem)
+                                    {
+                                        <img src="@ItemIconUrl(slot.Image)" alt="@slot.ItemName" loading="lazy" />
+                                        @if (slot.HasDurability && slot.DurabilityPercent <= 20)
+                                        {
+                                            <i class="doll-worn"></i>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="doll-slot-text">@SlotText(slot.SlotName)</span>
+                                    }
+                                </button>
+                            }
+                        </div>
+
+                        <p class="doll-hint">点槽位看物品详情 · 红点 = 持久 ≤20%</p>
+                    </div>
+
+                    @* ---------- 右：物品卡 ---------- *@
+                    <aside class="item-card">
+                        @if (_detailSlot == null)
+                        {
+                            <div class="item-card-empty">点左边的槽位查看这件装备的详细属性。</div>
+                        }
+                        else if (!_detailSlot.HasItem)
+                        {
+                            <div class="item-card-empty">
+                                <b>@SlotText(_detailSlot.SlotName)</b><br />
+                                这个槽位是空的。
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="item-card-head">
+                                <img src="@ItemIconUrl(_detailSlot.Image)" alt="@_detailSlot.ItemName" />
+                                <div>
+                                    <b>@_detailSlot.ItemName</b>
+                                    <small>@SlotText(_detailSlot.SlotName) · @_detailSlot.TypeName</small>
+                                </div>
+                            </div>
+
+                            <div class="item-card-rows">
+                                <div><span>需求等级</span><b>Lv @_detailSlot.RequiredLevel</b></div>
+
+                                @if (_detailSlot.HasDurability)
+                                {
+                                    <div>
+                                        <span>持久</span>
+                                        <b class="@DurabilityClass(_detailSlot.DurabilityPercent)">
+                                            @_detailSlot.CurrentDurability / @_detailSlot.MaxDurability
+                                        </b>
+                                    </div>
+                                    <div class="item-card-bar">
+                                        <span class="bar dura @DurabilityBarClass(_detailSlot.DurabilityPercent)">
+                                            <i style="width:@BarWidth(_detailSlot.DurabilityPercent)"></i>
+                                        </span>
+                                    </div>
+                                }
+
+                                @if (_detailSlot.EnhanceLevel > 0)
+                                {
+                                    <div><span>强化</span><b class="text-gold">+@_detailSlot.EnhanceLevel</b></div>
+                                }
+
+                                <div><span>重量</span><b>@_detailSlot.Weight</b></div>
+                                <div><span>价格</span><b>@_detailSlot.Price.ToString("N0")</b></div>
+
+                                @if (!string.IsNullOrEmpty(_detailSlot.FlagsText))
+                                {
+                                    <div><span>标记</span><b class="text-warn">@_detailSlot.FlagsText</b></div>
+                                }
+                            </div>
+
+                            @if (_detailSlot.Stats.Count > 0)
+                            {
+                                <div class="item-card-stats">
+                                    <h4>基础属性</h4>
+                                    @foreach (BotDetailLine line in _detailSlot.Stats)
+                                    {
+                                        <div><span>@line.Title</span><b>@line.Value</b></div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </aside>
+                </div>
+            }
+            else
+            {
+                @* ---------- 属性 tab ---------- *@
+                <div class="bot-detail-body">
+                    <div class="detail-summary">
+                        <div><span>HP</span><b>@_detail.CurrentHealth / @_detail.MaxHealth</b></div>
+                        <div><span>MP</span><b>@_detail.CurrentMana / @_detail.MaxMana</b></div>
+                        <div><span>金币</span><b>@_detail.Gold.ToString("N0")</b></div>
+                        <div><span>负重</span><b>@_detail.BagWeight / @_detail.MaxBagWeight</b></div>
+                        <div><span>背包</span><b>@_detail.UsedSlots / @_detail.SlotCount 格</b></div>
+                        <div><span>击杀 / 复活</span><b>@_detail.Kills / @_detail.Deaths</b></div>
+                    </div>
+
+                    @if (_detail.Attributes.Count == 0)
+                    {
+                        <p style="opacity:.7;padding:8px 4px;">这个角色当前没有任何属性条目。</p>
+                    }
+                    else
+                    {
+                        <div class="detail-attrs">
+                            @foreach (BotDetailLine line in _detail.Attributes)
+                            {
+                                <div><span>@line.Title</span><b>@line.Value</b></div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <div class="bot-modal-foot">
+                <span>@(_detail == null ? "" : $"更新 {_detail.SnapshotAt:HH:mm:ss} · 每 5 秒自动刷新")</span>
+                <span>@(_detail == null ? "" : _detail.Detail)</span>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private const int TabOverview = 0;
     private const int TabManage = 1;
@@ -537,6 +733,147 @@
     private bool _canOwner;
     private ClaimsPrincipal? _user;
 
+    #region P5-3 角色详情弹窗
+
+    /// <summary>纸娃娃的缩放系数：客户端格子是 28×28，放大 1.6 倍才好点。</summary>
+    private const double DollScale = 1.75;
+
+    /// <summary>格子的像素边长。</summary>
+    private static int DollCell => (int)Math.Round(28 * DollScale);
+
+    private static int DollPixelWidth => (int)Math.Round(BotDetail.DollWidth * DollScale);
+
+    private static int DollPixelHeight => (int)Math.Round(BotDetail.DollHeight * DollScale);
+
+    /// <summary>弹窗是否打开（和 <see cref="_detail"/> 分开：打开的那一刻详情还在路上）。</summary>
+    private bool _detailOpen;
+
+    /// <summary>当前正在看哪个假人（0 = 没开）。</summary>
+    private int _detailSeq;
+
+    private BotDetail? _detail;
+
+    /// <summary>0 = 角色 tab，1 = 属性 tab。</summary>
+    private int _detailTab;
+
+    /// <summary>当前选中的槽位（null = 还没点）。</summary>
+    private BotDetailSlot? _detailSlot;
+
+    /// <summary>上次拉详情的时刻，用来做 5 秒节流（见任务清单 §8.7 坑 2）。</summary>
+    private DateTime _detailLoadedAt;
+
+    /// <summary>
+    /// 深链：<c>/bots?detail=5</c> 直接打开 5 号假人的详情。
+    /// <para>运营可以把某个人的详情直接发给别人；自动化验证也靠它拿到真实渲染的弹窗 HTML。</para>
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "detail")]
+    private int? DetailSeq { get; set; }
+
+    /// <summary>深链直接落到某个 tab：<c>/bots?detail=5&amp;tab=1</c> 打开「属性」。</summary>
+    [SupplyParameterFromQuery(Name = "tab")]
+    private int? DetailTabQuery { get; set; }
+
+    private ElementReference _detailRoot;
+
+    /// <summary>弹窗刚打开，等下一帧渲染完再把焦点抢过来，否则 Esc 收不到。</summary>
+    private bool _detailFocusPending;
+
+    private async Task OpenDetail(BotSnapshot row)
+    {
+        _detailOpen = true;
+        _detailSeq = row.Seq;
+        _detailTab = 0;
+        _detailSlot = null;
+        _detail = null;
+        _detailFocusPending = true;
+
+        await LoadDetailAsync();
+    }
+
+    private void CloseDetail()
+    {
+        _detailOpen = false;
+        _detailSeq = 0;
+        _detail = null;
+        _detailSlot = null;
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        if (_detailSeq <= 0) return;
+
+        BotDetail? detail = await Admin.GetDetailAsync(_detailSeq);
+
+        // 拉的过程中用户可能已经关掉 / 换了人，别把过期数据贴回去。
+        if (!_detailOpen || detail == null || detail.Seq != _detailSeq)
+        {
+            if (_detailOpen && detail == null) _detail = null;
+            return;
+        }
+
+        bool firstLoad = _detail == null;
+
+        // 选中槽位要跟着新数据换一份引用，否则卡片会一直显示旧对象。
+        if (_detailSlot != null)
+        {
+            int index = _detailSlot.Index;
+
+            _detailSlot = detail.Slots.FirstOrDefault(x => x.Index == index) ?? _detailSlot;
+        }
+
+        _detail = detail;
+
+        // 首次打开默认选中武器（和游戏里角色窗口一致，卡片也不会一上来就是空的）。
+        // 只在首次生效：用户主动点了同一个槽位取消选中后，5 秒刷新不该又给他选回去。
+        if (firstLoad && _detailSlot == null)
+            _detailSlot = DefaultSlot(detail);
+
+        _detailLoadedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>默认选中的槽位：优先武器，没有武器就挑第一个穿了装备的。</summary>
+    private static BotDetailSlot? DefaultSlot(BotDetail detail)
+    {
+        BotDetailSlot? weapon = detail.Slots.FirstOrDefault(x => x.SlotName == "Weapon" && x.HasItem);
+
+        if (weapon != null) return weapon;
+
+        return detail.Slots.FirstOrDefault(x => x.HasItem);
+    }
+
+    private void SelectSlot(BotDetailSlot slot)
+    {
+        // 再点一次同一个槽位 = 取消选中（和客户端点格子开/关的体验一致）。
+        _detailSlot = _detailSlot != null && _detailSlot.Index == slot.Index ? null : slot;
+    }
+
+    private void OnDetailKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape") CloseDetail();
+    }
+
+    private bool IsSelectedSlot(BotDetailSlot slot) => _detailSlot != null && _detailSlot.Index == slot.Index;
+
+    private static int SlotLeft(BotDetailSlot slot) => (int)Math.Round(slot.X * DollScale);
+
+    private static int SlotTop(BotDetailSlot slot) => (int)Math.Round((slot.Y - BotDetail.DollTop) * DollScale);
+
+    private static string SlotTitle(BotDetailSlot slot) =>
+        slot.HasItem
+            ? $"{slot.ItemName}（{SlotText(slot.SlotName)}）{slot.DurabilityPercent}%"
+            : SlotText(slot.SlotName);
+
+    /// <summary>图标静态路径。<c>Image</c> 为负说明这件物品没配图标，返回空串让 img 自然不显示。</summary>
+    private static string ItemIconUrl(int image) => image < 0 ? string.Empty : $"/icons/items/{image}.png";
+
+    private static string DurabilityClass(int percent) =>
+        percent <= 20 ? "text-danger" : percent <= 50 ? "text-warn" : string.Empty;
+
+    private static string DurabilityBarClass(int percent) =>
+        percent <= 20 ? "crit" : percent <= 50 ? "low" : string.Empty;
+
+    #endregion
+
     private CancellationTokenSource? _refreshCts;
 
     private bool ServerRunning => Admin.ServerRunning;
@@ -556,8 +893,36 @@
 
         if (_mapOptions.Length > 0) _teleportMapIndex = _mapOptions[0].Index;
 
+        // 深链直接开详情（/bots?detail=5）。
+        if (DetailSeq.HasValue && DetailSeq.Value > 0)
+        {
+            _detailOpen = true;
+            _detailSeq = DetailSeq.Value;
+            _detailTab = DetailTabQuery == 1 ? 1 : 0;
+            _detailFocusPending = true;
+
+            await LoadDetailAsync();
+        }
+
         _refreshCts = new CancellationTokenSource();
         _ = RefreshLoopAsync(_refreshCts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // 弹窗是 tabindex 容器，必须真的拿到焦点，@onkeydown 才收得到 Esc。
+        if (!_detailFocusPending) return;
+
+        _detailFocusPending = false;
+
+        try
+        {
+            await _detailRoot.FocusAsync();
+        }
+        catch
+        {
+            // 弹窗在这一次渲染里已经被关掉时 FocusAsync 会抛，忽略即可。
+        }
     }
 
     private void Refresh()
@@ -608,6 +973,14 @@
                     Refresh();
                     StateHasChanged();
                 });
+
+                // 详情弹窗：点开时拉一次，之后每 5 秒刷一次。
+                // 别跟着 2 秒的主循环走 —— 详情要走游戏线程，频率高了会白占主循环时间。
+                if (_detailOpen && (DateTime.UtcNow - _detailLoadedAt).TotalSeconds >= 5)
+                {
+                    await InvokeAsync(LoadDetailAsync);
+                    await InvokeAsync(StateHasChanged);
+                }
             }
             catch (TaskCanceledException)
             {
@@ -790,9 +1163,9 @@
         "Poison" => "毒药",
         "Amulet" => "护身符",
         "Flower" => "花",
-        "HorseArmour" => "马甲",
+        "HorseArmour" => "马铠",
         "Emblem" => "徽章",
-        "Shield" => "盾",
+        "Shield" => "盾牌",
         "Costume" => "时装",
         _ => slot,
     };

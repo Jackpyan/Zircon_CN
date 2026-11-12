@@ -143,6 +143,31 @@ Check(BotItemRules.DurabilityPermille(current: 3000, max: 20000) <
     "武器 15% 比戒指 16% 更该修（按比例，不按绝对值）");
 
 Console.WriteLine();
+Console.WriteLine("—— 纸娃娃布局（BotDetail.DollLayout）——");
+Console.WriteLine();
+
+// 布局是手写坐标，最容易被后续改动改出「两个槽位叠在一起」或「槽位跑出画布」，
+// 而这两种错在页面上只表现为「有个格子点不到 / 有个格子看不见」，很难靠肉眼回归。
+
+Check(BotDetail.DollLayout.Length == 17, "17 个槽位（与客户端 CharacterDialog 建的一致）");
+
+Check(BotDetail.DollLayout.Select(x => x.Slot).Distinct().Count() == BotDetail.DollLayout.Length,
+    "没有重复槽位");
+
+Check(BotDetail.DollLayout.Select(x => (x.X, x.Y)).Distinct().Count() == BotDetail.DollLayout.Length,
+    "没有两个槽位落在同一个坐标");
+
+Check(BotDetail.DollLayout.All(x => x.X >= 0 && x.X + 28 <= BotDetail.DollWidth),
+    "所有槽位横向都在画布内（含一个格子宽）");
+
+Check(BotDetail.DollLayout.All(x => x.Y >= 0 && x.Y + 28 <= BotDetail.DollHeight),
+    "所有槽位纵向都在画布内（含一个格子高）");
+
+Check(BotDetail.DollLayout.Any(x => x.Slot == Library.EquipmentSlot.Weapon) &&
+      BotDetail.DollLayout.Any(x => x.Slot == Library.EquipmentSlot.Armour),
+    "武器 / 衣服这两个最常看的槽位都在布局里");
+
+Console.WriteLine();
 Console.WriteLine(failures == 0
     ? $"全部通过：{checks} 项"
     : $"失败 {failures} / {checks} 项");

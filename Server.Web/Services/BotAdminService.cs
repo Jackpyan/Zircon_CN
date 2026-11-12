@@ -179,6 +179,28 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
 
     public BotSnapshot[] GetSnapshot() => BotRoster.Snapshot();
 
+    /// <summary>
+    /// 读某个假人的角色详情（P5-3 详情弹窗）。
+    /// <para>
+    /// <b>必须走游戏线程</b>：详情直接读 <c>PlayerObject.Equipment</c>，在 Blazor 线程读是数据竞争
+    /// （见任务清单 §8.7 坑 1）。返回 <c>null</c> 表示「这个 Seq 不在线 / 还没进图」，页面据此显示提示。
+    /// </para>
+    /// <para>异常一律吞成 <c>null</c>：详情弹窗拉不到数据不该把整页 circuit 带崩。</para>
+    /// </summary>
+    public async Task<BotDetail?> GetDetailAsync(int seq)
+    {
+        if (!ServerRunning) return null;
+
+        try
+        {
+            return await SEnvir.InvokeOnGameThreadAsync(() => BotRoster.GetDetail(seq));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>传送目标下拉的数据源。地图库没加载（服务未启动）时返回空列表，页面显示「先启动服务器」。</summary>
     public IReadOnlyList<BotMapOption> MapOptions()
     {

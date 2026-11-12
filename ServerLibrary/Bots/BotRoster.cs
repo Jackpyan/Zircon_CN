@@ -625,6 +625,26 @@ namespace Server.Bots
                 return _totals;
         }
 
+        /// <summary>
+        /// 读某个假人的角色详情（P5-3）。
+        /// <para>
+        /// <b>必须在游戏线程调用</b>：它直接读 <c>PlayerObject.Equipment</c>，
+        /// 跨线程读会和主循环抢同一批对象（<c>BotAdminService.GetDetailAsync</c> 已经用
+        /// <c>SEnvir.InvokeOnGameThreadAsync</c> 包好了，页面别直接调这个）。
+        /// </para>
+        /// <para>找不到这个 Seq、或它当前不在线（还没拿到 <c>PlayerObject</c>）时返回 <c>null</c>。</para>
+        /// </summary>
+        public static BotDetail GetDetail(int seq)
+        {
+            BotSession session = Sessions.FirstOrDefault(x => x.Profile.Seq == seq);
+
+            if (session == null) return null;
+
+            BotSnapshot row = Snapshot().FirstOrDefault(x => x.Seq == seq);
+
+            return BotDetail.Build(session, row);
+        }
+
         /// <summary>后台「全部重置」：把 Broken / 卡住的都拉回可调度状态。</summary>
         public static void ResetAll()
         {
