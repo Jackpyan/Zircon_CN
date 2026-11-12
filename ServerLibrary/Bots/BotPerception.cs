@@ -4,6 +4,7 @@ using Server.DBModels;
 using Server.Envir;
 using Server.Models;
 using Server.Models.Monsters;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 
@@ -441,6 +442,215 @@ namespace Server.Bots
             }
 
             return 0;
+        }
+
+        #endregion
+
+        #region 刷怪价值
+
+        /// <summary>
+        /// 这张图上有没有「自己这个等级能打」的刷怪区（只看数据，不加载地图、不判可达性）。
+        /// <para>
+        /// 用途：决定「本图没怪了要不要跨图」。跨图一趟 1~3 分钟，没有六合石的洞穴图
+        /// 还得烧回城卷回主城再传，来回折返比留在本图等刷新更亏。
+        /// 只有本图**确实没有**这个等级的怪，才值得走。
+        /// </para>
+        /// <para>
+        /// 等级窗口与 <c>BotBrain.TryPickHuntPoint</c> / <c>TryTravelToHuntMap</c> 保持一致：
+        /// 怪等级 ≤ 自己 +4（打得动）、≥ 自己 -8（还有经验价值）。
+        /// </para>
+        /// </summary>
+        public static bool HasHuntValue(MapInfo map, int level)
+        {
+            if (map == null) return false;
+
+            foreach (RespawnInfo region in SEnvir.RespawnInfoList.Binding)
+            {
+                if (region?.Region?.Map != map) continue;
+
+                MonsterInfo monster = region.Monster;
+
+                if (monster == null) continue;
+
+                if (monster.Level > level + 4) continue;
+                if (monster.Level < level - 8) continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
+        #endregion
+
+        #region 传送图（两跳规划）
+
+        /// <summary>全服传送邻接表：出发图 → 能直达的地图索引集合。懒加载一次。</summary>
+        private static Dictionary<MapInfo, HashSet<int>> _teleportGraph;
+
+        /// <summary>地图索引 → <see cref="MapInfo"/>。懒加载一次。</summary>
+        private static Dictionary<int, MapInfo> _mapInfoByIndex;
+
+        /// <summary>「这张图没有直达按钮」时返回的空集合（避免每次 new）。</summary>
+        private static readonly HashSet<int> EmptyTeleportTargets = new HashSet<int>();
+
+        /// <summary>按索引取 <see cref="MapInfo"/>（找不到返回 null）。</summary>
+        public static MapInfo GetMapInfo(int index)
+        {
+            if (index <= 0) return null;
+
+            if (_mapInfoByIndex == null)
+            {
+                Dictionary<int, MapInfo> map = new Dictionary<int, MapInfo>();
+
+                foreach (MapInfo info in SEnvir.MapInfoList.Binding)
+                {
+                    if (info == null) continue;
+
+                    map[info.Index] = info;
+                }
+
+                // 空表说明数据还没加载完，别把空表缓存下来（否则整轮都以为全服没有地图）。
+                if (map.Count == 0) return null;
+
+                _mapInfoByIndex = map;
+            }
+
+            return _mapInfoByIndex.TryGetValue(index, out MapInfo found) ? found : null;
+        }
+
+        /// <summary>
+        /// 从 <paramref name="from"/> 这张图的六合石出发，能**一跳直达**哪些地图（索引集合，可能为空）。
+        /// <para>
+        /// 只看 NPC 数据（<see cref="SEnvir.NPCInfoList"/>），不加载地图、不需要玩家站在那儿，
+        /// 所以可以用来做「从 A 能不能经 B 到 C」的规划。
+        /// </para>
+        /// </summary>
+        public static HashSet<int> TeleportTargetsFrom(MapInfo from)
+        {
+            if (from == null) return EmptyTeleportTargets;
+
+            if (_teleportGraph == null)
+            {
+                Dictionary<MapInfo, HashSet<int>> graph = new Dictionary<MapInfo, HashSet<int>>();
+
+                foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+                {
+                    MapInfo map = npc?.Region?.Map;
+
+                    if (map == null) continue;
+                    if (!IsTeleportStone(npc)) continue;
+
+                    if (!graph.TryGetValue(map, out HashSet<int> targets))
+                        graph[map] = targets = new HashSet<int>();
+
+                    if (npc.EntryPage?.Buttons == null) continue;
+
+                    foreach (NPCButton button in npc.EntryPage.Buttons)
+                    {
+                        foreach (NPCPage page in PageChain(button.DestinationPage))
+                        {
+                            if (page.Actions == null) continue;
+
+                            foreach (NPCAction action in page.Actions)
+                            {
+                                if (action?.ActionType != NPCActionType.Teleport) continue;
+                                if (action.MapParameter1 == null) continue;
+
+                                targets.Add(action.MapParameter1.Index);
+                            }
+                        }
+                    }
+                }
+
+                // 同 _stoneMaps：空表说明数据没加载完，别缓存。
+                if (graph.Count == 0) return EmptyTeleportTargets;
+
+                _teleportGraph = graph;
+            }
+
+            return _teleportGraph.TryGetValue(from, out HashSet<int> set) ? set : EmptyTeleportTargets;
+        }
+
+        /// <summary>
+        /// <paramref name="from"/> 的六合石直达 <paramref name="target"/> 的最便宜票价（-1 = 没有直达）。
+        /// 0 表示免费或未知（引擎里免费传送不带 TakeGold）。
+        /// </summary>
+        public static int CheapestTeleportCostFrom(MapInfo from, int target)
+        {
+            if (from == null || target <= 0) return -1;
+
+            int best = -1;
+
+            foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+            {
+                if (npc?.Region?.Map != from) continue;
+                if (FindTeleportButton(npc, target) < 0) continue;
+
+                int cost = CheapestTeleportCost(npc, target);
+
+                if (best < 0 || cost < best) best = cost;
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// 两跳规划：<paramref name="from"/> 没有直达 <paramref name="target"/> 的按钮时，
+        /// 找一个中转图 <paramref name="viaIndex"/>，使 from→via→target 两跳都成立。
+        /// <para>
+        /// **为什么需要**：本服的六合石按钮是「按城给」的，不是全连通。
+        /// 实测沙漠土城只有「失乐园 / 沙巴克城 / 诺玛村庄」三个按钮，**没有潘夜村**；
+        /// 而诺玛村落的石头能到潘夜村。没有两跳规划时，假人只能「烧一张回城卷回比奇城再传」——
+        /// 白白多花一张卷 + 一次城内长途，还可能在路上被打死。
+        /// </para>
+        /// <para>
+        /// 选路顺序：先挑「总票价最低」，同价再挑「目标图怪等级更贴近」的（由调用方决定）。
+        /// 中转图不能是自己、也不能是目标图本身。
+        /// </para>
+        /// </summary>
+        public static bool TryFindTwoHopRoute(MapInfo from, int target, out int viaIndex)
+        {
+            viaIndex = 0;
+
+            if (from == null || target <= 0) return false;
+
+            // 已经能直达就不用两跳。
+            if (TeleportTargetsFrom(from).Contains(target)) return false;
+
+            int bestCost = int.MaxValue;
+            int bestVia = 0;
+
+            foreach (int via in TeleportTargetsFrom(from))
+            {
+                if (via == target) continue;
+                if (via == from.Index) continue;
+
+                MapInfo viaInfo = GetMapInfo(via);
+
+                if (viaInfo == null) continue;
+
+                // 中转图本身得有石头，且能直达目标。
+                if (!TeleportTargetsFrom(viaInfo).Contains(target)) continue;
+
+                int cost1 = CheapestTeleportCostFrom(from, via);
+                int cost2 = CheapestTeleportCostFrom(viaInfo, target);
+
+                if (cost1 < 0 || cost2 < 0) continue;
+
+                int total = cost1 + cost2;
+
+                if (total >= bestCost) continue;
+
+                bestCost = total;
+                bestVia = via;
+            }
+
+            if (bestVia <= 0) return false;
+
+            viaIndex = bestVia;
+
+            return true;
         }
 
         #endregion
