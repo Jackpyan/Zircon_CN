@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime;
 using System.Security.Claims;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.ResponseCompression;
 using Radzen;
 using Server.Envir;
 using Server.Web.Auth;
@@ -197,6 +199,25 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
+// 地图区域编辑器点一次区域要拉一整张地图的格子数据：500×500 的图光 JSON 就 42MB，
+// 大图（00.map）能到 345MB。原来这条链路完全没压缩，远程打开要几十秒才出图。
+// 实测同一份 JSON gzip 后只有 700KB~1.2MB（压缩比 35~60 倍），是这里唯一的瓶颈。
+// 注意：只压文本类响应，PNG/贴图本身就是压缩格式，列进来只会白烧 CPU。
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    // 顺序即优先级：浏览器同时接受 br 和 gzip 时用先注册的那个。
+    // 实测这份地图 JSON 用 gzip 能压到 1/35（42MB → 1.2MB），已够用；
+    // Brotli 的 Fastest 档在这种「大量重复字段」的数据上不一定比 gzip 小，
+    // 所以把它排在后面兜底，避免浏览器协商到反而更大的结果。
+    options.Providers.Add<GzipCompressionProvider>();
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(["application/json", "text/plain"]);
+});
+// 游戏服和后台同进程，压缩不能抢主循环的 CPU：Fastest 已经能压到 35 倍，够用了。
+builder.Services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+builder.Services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -217,6 +238,7 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<AdminA
 builder.Services.AddSingleton<LoginThrottleService>();
 builder.Services.AddSingleton<IGameServerController, GameServerController>();
 builder.Services.AddHostedService(provider => (GameServerController)provider.GetRequiredService<IGameServerController>());
+builder.Services.AddSingleton<HostResourceSampler>();
 builder.Services.AddSingleton<ServerMetricsService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ServerMetricsService>());
 builder.Services.AddSingleton<LogBufferService>();
@@ -271,6 +293,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+// 必须排在所有写响应的中间件之前（静态文件、Razor、API 都在后面）。
+app.UseResponseCompression();
 app.UseForwardedHeaders();
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -584,8 +608,21 @@ app.MapGet("/auth/whoami", (HttpContext context, AdminSessionRegistry sessions) 
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live", time = DateTimeOffset.UtcNow }));
 
-app.MapGet("/api/maps/{fileName}", async (string fileName, MapDataService maps, CancellationToken cancellationToken) =>
-    Results.Json(await maps.LoadAsync(fileName, cancellationToken))).RequireAuthorization();
+// 地图文件基本不变，用「大小+mtime」当 ETag：同一张图反复点区域只回 304，
+// 既不再传几十 MB，也不必重新读盘解析。
+app.MapGet("/api/maps/{fileName}", async (string fileName, MapDataService maps, HttpContext context,
+    CancellationToken cancellationToken) =>
+{
+    string? tag = maps.GetVersionTag(fileName);
+    if (tag is null) return Results.NotFound();
+
+    context.Response.Headers.ETag = $"\"map-{tag}\"";
+    context.Response.Headers.CacheControl = "private,max-age=300,must-revalidate";
+    if (context.Request.Headers.IfNoneMatch.ToString().Contains(tag, StringComparison.OrdinalIgnoreCase))
+        return Results.StatusCode(StatusCodes.Status304NotModified);
+
+    return Results.Json(await maps.LoadAsync(fileName, cancellationToken));
+}).RequireAuthorization();
 
 app.MapGet("/api/map-assets/status", (MapImageService images, HttpContext context) =>
     {

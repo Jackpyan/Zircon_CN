@@ -56,6 +56,44 @@
     <div><span>保存延迟</span><strong>@Snapshot.SaveDelayMilliseconds 毫秒</strong><small>数据库</small></div>
 </section>
 
+<div class="resource-head">
+    <span>主机资源</span>
+    <small>每秒采样 · 进程 = 游戏服与后台共用的这个进程</small>
+</div>
+
+<section class="resource-grid">
+    <div class="resource-cell @CpuClass">
+        <span>CPU 占用</span>
+        <strong>@Snapshot.CpuPercent.ToString("0.0")%</strong>
+        <small>@CpuNote</small>
+    </div>
+    <div class="resource-cell @MemoryClass">
+        <span>内存占用</span>
+        <strong>@FormatBytes(Snapshot.MemoryBytes)</strong>
+        <small>@MemoryNote</small>
+    </div>
+    <div class="resource-cell">
+        <span>网络流入</span>
+        <strong>@FormatRate(Snapshot.NetworkReceiveBytesPerSecond)</strong>
+        <small>主机网卡</small>
+    </div>
+    <div class="resource-cell">
+        <span>网络流出</span>
+        <strong>@FormatRate(Snapshot.NetworkSendBytesPerSecond)</strong>
+        <small>主机网卡</small>
+    </div>
+    <div class="resource-cell">
+        <span>运行时长</span>
+        <strong>@FormatUptime(Snapshot.ProcessUptime)</strong>
+        <small>服务进程</small>
+    </div>
+    <div class="resource-cell">
+        <span>游戏服运行</span>
+        <strong>@(Snapshot.GameServerUptime == TimeSpan.Zero ? "未运行" : FormatUptime(Snapshot.GameServerUptime))</strong>
+        <small>本轮启动至今</small>
+    </div>
+</section>
+
 @code {
     private readonly CancellationTokenSource _refreshCancellation = new();
     private ServerMetricsSnapshot Snapshot => Metrics.Current;
@@ -132,6 +170,48 @@
         (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
 
     private static string FormatRate(long value) => $"{FormatBytes(value)}/s";
+
+    /// <summary>CPU 超过 70% 变琥珀色、超过 90% 变红，扫一眼就知道要不要看。</summary>
+    private string CpuClass => Snapshot.CpuPercent >= 90 ? "crit" : Snapshot.CpuPercent >= 70 ? "warn" : string.Empty;
+
+    private string MemoryClass
+    {
+        get
+        {
+            double percent = MemoryPercent;
+            return percent >= 90 ? "crit" : percent >= 80 ? "warn" : string.Empty;
+        }
+    }
+
+    private double MemoryPercent => Snapshot.MemoryTotalBytes <= 0
+        ? 0
+        : Snapshot.MemoryBytes * 100.0 / Snapshot.MemoryTotalBytes;
+
+    private string CpuNote
+    {
+        get
+        {
+            string cores = $"{Environment.ProcessorCount} 核";
+            // 负载均值只有 Linux 有；Windows 下采样器返回 0，就不显示这一段。
+            return Snapshot.LoadAverage1 > 0
+                ? $"{cores} · 负载 {Snapshot.LoadAverage1:0.00}"
+                : cores;
+        }
+    }
+
+    private string MemoryNote => Snapshot.MemoryTotalBytes <= 0
+        ? "共 —"
+        : $"共 {FormatBytes(Snapshot.MemoryTotalBytes)} · {MemoryPercent:0.0}%";
+
+    private static string FormatUptime(TimeSpan value)
+    {
+        if (value <= TimeSpan.Zero) return "—";
+        if (value.TotalDays >= 1) return $"{(int)value.TotalDays} 天 {value.Hours} 小时";
+        if (value.TotalHours >= 1) return $"{(int)value.TotalHours} 小时 {value.Minutes} 分";
+        if (value.TotalMinutes >= 1) return $"{(int)value.TotalMinutes} 分 {value.Seconds} 秒";
+        return $"{value.Seconds} 秒";
+    }
+
     private static string FormatBytes(long value)
     {
         string[] suffix = ["B", "KB", "MB", "GB", "TB"];

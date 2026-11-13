@@ -14,6 +14,7 @@ namespace Server.Bots
     /// 假人的技能本。三件事：
     /// 1. <b>补技能</b>：法师/道士按引擎等级门槛直接建 <see cref="UserMagic"/>，不走「打书 → 用书」；
     /// 2. <b>选技能</b>：只挑<b>攻击型</b>（伤害）与<b>治疗型</b>，召唤/盾/隐身这些 P0 不放，补了也没用；
+    ///    选攻击技能时按<b>目标元素抗性</b>打分（免疫的绝不选，见 <see cref="ChooseBest"/>）；
     /// 3. <b>施法</b>：走真人同一条 <see cref="PlayerObject.Magic"/>（校验距离、蓝量、冷却），不做特权。
     /// <para>
     /// 数据事实（2026-11-10 用 tools/magiclist 查本服 System.db）：
@@ -281,33 +282,108 @@ namespace Server.Bots
         }
 
         /// <summary>
-        /// 挑一个当前能放的攻击魔法（等级够、蓝够、冷却好），取<b>门槛最高</b>的那个 —— 伤害最大。
+        /// 挑一个当前能放的攻击魔法（等级够、蓝够、冷却好），取**实际伤害期望最高**的那个。
         /// 返回 <see cref="MagicType.None"/> 表示这一刀只能用平的。
         /// <para>
         /// <paramref name="preferGroup"/> = true 时先挑**群攻**（周围怪 ≥2 只），
-        /// 群攻全部冷却中/蓝不够再退回单体 —— 这条「群攻不可用就退回单体，别干等」
+        /// 群攻全部冷却中/蓝不够/被抗性吃掉再退回单体 —— 这条「群攻不可用就退回单体，别干等」
         /// 是照客户端辅助挂机的 <c>MapControl.PickAutoSkillType</c> 抄的。
         /// </para>
+        /// <para>
+        /// <b>候选只取 <see cref="AttackSkillsOf"/>（纯伤害表）</b>，不能取 <see cref="Wanted"/> ——
+        /// 后者是「要学什么」的清单，含治疗与施毒术。以前这里传的是 <c>Wanted</c>，
+        /// 于是 12 级道士（还没有灵魂火符）会把施毒术当攻击技能选出来，
+        /// 站在 10 格外一直放毒、永远不贴脸砍（2026-11-13 用户报的那个 bug 的另一半）。
+        /// </para>
         /// </summary>
-        public static MagicType PickAttack(PlayerObject player, bool preferGroup = false)
+        public static MagicType PickAttack(PlayerObject player, MonsterObject target, bool preferGroup = false)
         {
-            if (player?.Character == null) return MagicType.None;
-
-            if (preferGroup)
-            {
-                MagicType group = PickBest(player, GroupWanted(player.Class));
-
-                if (group != MagicType.None) return group;
-            }
-
-            return PickBest(player, Wanted(player.Class));
+            return PickAttack(player, target, preferGroup, out _);
         }
 
-        /// <summary>从候选里挑门槛最高且当前放得出的那个。</summary>
-        private static MagicType PickBest(PlayerObject player, IEnumerable<MagicType> candidates)
+        /// <summary>
+        /// 同上，额外带出「为什么没选更强的那个」的说明（抗性跳过），供日志用。
+        /// </summary>
+        public static MagicType PickAttack(PlayerObject player, MonsterObject target, bool preferGroup, out string note)
+        {
+            note = null;
+
+            if (player?.Character == null) return MagicType.None;
+
+            List<string> notes = new List<string>();
+
+            MagicType best = MagicType.None;
+
+            if (preferGroup)
+                best = PickBest(player, GroupWanted(player.Class), target, notes);
+
+            if (best == MagicType.None)
+                best = PickBest(player, AttackSkillsOf(player.Class), target, notes);
+
+            if (notes.Count > 0) note = string.Join("；", notes);
+
+            return best;
+        }
+
+        /// <summary>
+        /// 抗性 → 魔法伤害系数，口径与引擎 <c>PlayerObject.MagicAttack</c> 完全一致：
+        /// 每个元素分支都是 <c>power -= power * res / 10</c>（含负抗，负抗就是加成）。
+        /// <para>
+        /// 所以 <b>res = 10 是免疫（系数 0）</b>、<b>res = 5 是减半</b>、
+        /// <b>res = -3 是弱点（系数 1.3，多受 30%）</b>。
+        /// </para>
+        /// <para>
+        /// ⚠️ 别照抄 <c>MonsterObject</c> 里那两行：那边（怪物打人 / 玩家平砍）负抗是
+        /// <c>res / 5</c>（多受 60%），<b>魔法这条路径只有 /10</b>。
+        /// 这个差异是 2026-11-13 对着源码逐个 case 核过的，抄错了只会让排序偏一点、不会崩，
+        /// 所以特别容易一直错下去。
+        /// </para>
+        /// </summary>
+        public static double ResistanceMultiplier(int res)
+        {
+            if (res >= 10) return 0;
+
+            return 1 - res / 10.0;
+        }
+
+        /// <summary>
+        /// 从候选里挑「期望伤害」最高的一个：评分 = 抗性系数 × (等级门槛 + 10)。
+        /// <para>
+        /// <b>为什么不是直接取门槛最高的</b>：本库 309 只怪里 204 只有非零抗性，
+        /// 最高到 10（完全免疫）。冰抗 +7 的怪被冰系技能打只剩 30% 伤害，
+        /// 这时低两阶但吃满伤害的技能反而更疼。等级门槛当「基础伤害」的代理
+        /// （本服技能强度基本随门槛单调上升），乘上抗性系数就是期望伤害的粗排。
+        /// </para>
+        /// <para>系数 ≤ 0（免疫）的候选**永远不选**；全部免疫时返回 <see cref="MagicType.None"/>，退回平砍。</para>
+        /// </summary>
+        public static MagicType ChooseBest(IEnumerable<(MagicType Type, int Need, double Mult)> candidates)
         {
             MagicType best = MagicType.None;
-            int bestLevel = -1;
+            double bestScore = 0;
+            int bestNeed = -1;
+
+            foreach ((MagicType type, int need, double mult) in candidates)
+            {
+                if (mult <= 0) continue;
+
+                double score = mult * (need + 10);
+
+                // 分高者胜；同分取门槛高的（同一档里更高级的那个通常更强）
+                if (score > bestScore + 1e-6 || (Math.Abs(score - bestScore) <= 1e-6 && need > bestNeed))
+                {
+                    best = type;
+                    bestScore = score;
+                    bestNeed = need;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>从候选里挑期望伤害最高的那个（抗性系数来自目标身上真实的抗性）。</summary>
+        private static MagicType PickBest(PlayerObject player, IEnumerable<MagicType> candidates, MonsterObject target, List<string> notes)
+        {
+            List<(MagicType Type, int Need, double Mult)> list = new List<(MagicType, int, double)>();
 
             foreach (MagicType type in candidates)
             {
@@ -323,27 +399,72 @@ namespace Server.Bots
                 // 弹药不够别选 —— 选了也是空放（见 AmmoCost 的注释）。
                 if (!HasAmmo(player, type)) continue;
 
-                int need = magic.Magic.Info.NeedLevel1;
+                Element element = magic.GetElement(Element.None);
+                int res = target?.Stats == null ? 0 : target.Stats.GetResistanceValue(element);
+                double mult = ResistanceMultiplier(res);
 
-                if (need <= bestLevel) continue;
+                if (mult <= 0)
+                {
+                    notes?.Add(string.Format("跳过 {0}（{1}，目标{1}抗 {2}，完全免疫）",
+                        BotText.Magic(type), ElementName(element), res));
 
-                best = type;
-                bestLevel = need;
+                    continue;
+                }
+
+                list.Add((type, magic.Magic.Info.NeedLevel1, mult));
             }
 
-            return best;
+            return ChooseBest(list);
         }
+
+        /// <summary>技能的元素名（中文，日志用）。</summary>
+        public static string ElementName(Element element)
+        {
+            switch (element)
+            {
+                case Element.Fire: return "火";
+                case Element.Ice: return "冰";
+                case Element.Lightning: return "雷";
+                case Element.Wind: return "风";
+                case Element.Holy: return "神圣";
+                case Element.Dark: return "暗黑";
+                case Element.Phantom: return "幻影";
+                default: return "物理";
+            }
+        }
+
+        /// <summary>
+        /// 给后台「最近动作」用的一句话：这个技能对这个怪的抗性关系。
+        /// 例：<c>火·目标火抗-3 弱点 +60%</c> / <c>冰·目标冰抗+5 减伤 50%</c>。
+        /// </summary>
+        public static string ElementNote(PlayerObject player, MonsterObject target, MagicType type)
+        {
+            if (player == null || target?.Stats == null || type == MagicType.None) return null;
+            if (!player.GetMagic(type, out MagicObject magic)) return null;
+
+            Element element = magic.GetElement(Element.None);
+            int res = target.Stats.GetResistanceValue(element);
+
+            if (res == 0) return string.Format("{0}·目标无{0}抗", ElementName(element));
+
+            if (res < 0)
+                return string.Format("{0}·目标{0}抗{1} 弱点 +{2:P0}", ElementName(element), res, -res / 10.0);
+
+            return string.Format("{0}·目标{0}抗+{1} 减伤 {2:P0}", ElementName(element), res, res / 10.0);
+        }
+
 
         /// <summary>
         /// 对怪放一个攻击魔法。距离由引擎校验（<c>Globals.MagicRange = 10</c>），
         /// 超出范围返回 false，调用方退回走近砍。
+        /// <para>会按目标元素抗性挑技能：被免疫的绝不放（放了也是 0 伤害 + 白扣蓝）。</para>
         /// </summary>
         public static bool TryCastAttack(PlayerObject player, MonsterObject monster, bool preferGroup = false)
         {
             if (player == null || monster == null) return false;
             if (player.Dead || monster.Dead || monster.Node == null) return false;
 
-            MagicType type = PickAttack(player, preferGroup);
+            MagicType type = PickAttack(player, monster, preferGroup);
 
             if (type == MagicType.None) return false;
 

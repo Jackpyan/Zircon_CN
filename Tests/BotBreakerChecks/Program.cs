@@ -296,6 +296,69 @@ foreach (MagicType ammo in BotSkills.AmmoSkillTypes)
         $"要弹药的 {ammo} 登记在 护身符/毒药 槽（实测 {slot}）");
 }
 
+// ── 按元素抗性选技能（2026-11-13）──────────────────────────────
+// 用户报：「怪物是有元素抗性的，别用怪物抗性高的技能，半天打不掉还浪费蓝药」。
+// 本库 309 只怪里 204 只有非零抗性（`tools/monq ... stat` 实测，最高 10 = 完全免疫），
+// 所以选技能不能只看等级门槛。下面把「抗性 → 系数 → 排序」三层都钉死。
+Console.WriteLine();
+Console.WriteLine("── 元素抗性 → 技能选择 ──");
+
+// ① 系数口径必须与引擎 PlayerObject.MagicAttack 一致（**魔法路径负抗也是 /10，不是 /5**）：
+//    res 0 → 1.0；+5 → 0.5；+10 → 0（免疫）；-3 → 1.3（弱点，多受 30%）
+Check(Math.Abs(BotSkills.ResistanceMultiplier(0) - 1.0) < 1e-9, "抗性 0 → 系数 1.0（无影响）");
+Check(Math.Abs(BotSkills.ResistanceMultiplier(5) - 0.5) < 1e-9, "抗性 +5 → 系数 0.5（减半）");
+Check(Math.Abs(BotSkills.ResistanceMultiplier(10) - 0.0) < 1e-9, "抗性 +10 → 系数 0（完全免疫）");
+Check(Math.Abs(BotSkills.ResistanceMultiplier(7) - 0.3) < 1e-9, "抗性 +7 → 系数 0.3（只剩三成伤害）");
+Check(Math.Abs(BotSkills.ResistanceMultiplier(-3) - 1.3) < 1e-9,
+    "抗性 -3 → 系数 1.3（魔法路径是 /10；只有平砍才 /5，抄错不会崩但会排错）");
+
+// ② 排序：免疫的绝不选；被抗的高阶 vs 吃满的低阶，看「系数 × (门槛+10)」
+Check(BotSkills.ChooseBest(new[]
+{
+    (MagicType.FireBall, 7, 1.0),
+    (MagicType.MeteorShower, 45, 0.0),
+}) == MagicType.FireBall, "高阶技能被完全免疫 → 退回低阶（免疫的永远不选）");
+
+Check(BotSkills.ChooseBest(new[]
+{
+    (MagicType.FireBall, 7, 1.0),
+    (MagicType.ThunderBolt, 26, 0.5),
+}) == MagicType.ThunderBolt, "高阶减伤 50% 仍胜过低阶吃满（0.5×36 > 1.0×17）");
+
+Check(BotSkills.ChooseBest(new[]
+{
+    (MagicType.FireBall, 7, 1.0),
+    (MagicType.IceBolt, 7, 0.3),
+}) == MagicType.FireBall, "同门槛下挑不被抗的那个");
+
+Check(BotSkills.ChooseBest(new[]
+{
+    (MagicType.FireBall, 7, 0.0),
+    (MagicType.IceBolt, 7, 0.0),
+}) == MagicType.None, "全部免疫 → None（退回平砍，别再空放扣蓝）");
+
+Check(BotSkills.ChooseBest(Array.Empty<(MagicType, int, double)>()) == MagicType.None,
+    "没有候选 → None");
+
+// ③ 候选源：攻击候选只能是纯伤害表（不能含治疗 / 施毒术），
+//    否则 12 级道士（还没灵魂火符）会把施毒术当攻击技能，站远处一直放毒。
+foreach (MirClass cls in new[] { MirClass.Wizard, MirClass.Taoist, MirClass.Warrior })
+{
+    var attacks = BotSkills.AttackSkillsOf(cls).ToList();
+
+    Check(!attacks.Contains(MagicType.Heal) && !attacks.Contains(MagicType.MassHeal),
+        $"{cls} 的攻击候选里没有治疗技能");
+
+    Check(!attacks.Contains(MagicType.PoisonDust),
+        $"{cls} 的攻击候选里没有施毒术（纯 debuff）");
+
+    Check(attacks.All(x => BotSkills.Wanted(cls).Contains(x)),
+        $"{cls} 的攻击候选都在补技能名单里（否则永远学不会）");
+}
+
+Check(BotSkills.ElementName(Element.Fire) == "火" && BotSkills.ElementName(Element.None) == "物理",
+    "元素中文名（日志/后台要能看懂）");
+
 Console.WriteLine();
 Console.WriteLine(new string('-', 60));
 Console.WriteLine($"共 {checks} 项，失败 {failures} 项。");

@@ -106,6 +106,21 @@ a { color: inherit; }
 .data-strip strong { font: 500 18px var(--mono); }
 .data-strip small { align-self: end; color: var(--cyan); font: 10px var(--mono); }
 
+/* 总览页的「主机资源」块：6 个格子用 gap 分隔。这里不复用 .data-strip ——
+   它的相邻边框在窄屏折行后右边框会落到中间那一格上，看着像断了一截。 */
+.resource-head { display: flex; align-items: baseline; justify-content: space-between; margin: 18px 0 8px; }
+.resource-head span { color: var(--amber); font: 600 11px var(--mono); letter-spacing: .1em; }
+.resource-head small { color: #5b6b70; font: 10px var(--mono); }
+.resource-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.resource-cell { padding: 14px 16px; border: 1px solid var(--line); background: var(--panel); }
+.resource-cell span { display: block; color: var(--muted); font-size: 11px; }
+.resource-cell strong { display: block; margin: 6px 0 4px; color: var(--text); font: 500 20px var(--mono); letter-spacing: -.02em; }
+.resource-cell small { color: #5b6b70; font: 10px var(--mono); }
+.resource-cell.warn strong { color: var(--amber); }
+.resource-cell.crit strong { color: var(--red); }
+@media (max-width: 1280px) { .resource-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .alert {  padding: 6px 16px; border: 1px solid; font-size: 13px; }
 .alert.danger { color: #ffaaa3; border-color: #7d302a; background: #5e211d3b; }
 .alert.success { color: #9bf0c7; border-color: #286148; background: #1c503837; }

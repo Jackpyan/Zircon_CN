@@ -1838,7 +1838,7 @@ namespace Server.Envir
             while (Saving) Thread.Sleep(1);
             if (Session != null)
                 Session.BackUpDelay = 0;
-            Save();
+            Save(true);
             while (Saving) Thread.Sleep(1);
             LogShutdown($"数据库保存完成，累计 {(Time.Now - shutdownStart).TotalSeconds:F1}s");
 
@@ -1995,7 +1995,7 @@ namespace Server.Envir
             }
         }
 
-        private static void Save()
+        private static void Save(bool shutdown = false)
         {
             if (Session == null) return;
 
@@ -2003,20 +2003,39 @@ namespace Server.Envir
 
             DateTime saveTime = Time.Now;
             Session.Save(false);
-            LogShutdown($"序列化并写入数据库文件，耗时 {(Time.Now - saveTime).TotalSeconds:F1}s");
+            LogSave(shutdown, $"序列化并写入数据库文件，耗时 {(Time.Now - saveTime).TotalSeconds:F1}s");
 
             WebServer.Save();
 
-            Thread saveThread = new Thread(CommitChanges) { IsBackground = true };
-            saveThread.Start(Session);
+            // 先把 Session 抓成局部变量：停服流程会在 Save 返回后把它清掉，
+            // 线程真正跑起来时再读静态字段可能已经是 null。
+            Session snapshot = Session;
+
+            Thread saveThread = new Thread(() => CommitChanges(snapshot, shutdown)) { IsBackground = true };
+            saveThread.Start();
         }
-        private static void CommitChanges(object data)
+
+        /// <summary>
+        /// 存库日志：<b>停服</b>阶段必须用 <see cref="LogShutdown"/>（日志队列线程已退出，普通 Log 会丢）；
+        /// 平时的定时存库走普通 <see cref="Log"/>，并且<b>不能</b>带 `[停服]` 前缀 ——
+        /// 否则 Logs.txt 每 5 分钟出现两行「[停服] 序列化并写入数据库文件」，
+        /// 事后排查的人第一反应就是「服务在反复重启」（2026-11-13 在 Linux 上实读日志发现的）。
+        /// </summary>
+        private static void LogSave(bool shutdown, string log)
+        {
+            if (shutdown)
+                LogShutdown(log);
+            else
+                Log("[存库] " + log);
+        }
+
+        private static void CommitChanges(object data, bool shutdown)
         {
             Session session = (Session)data;
 
             DateTime commitTime = Time.Now;
             session?.Commit();
-            LogShutdown($"Commit（含 gz 备份）耗时 {(Time.Now - commitTime).TotalSeconds:F1}s");
+            LogSave(shutdown, $"Commit（含 gz 备份）耗时 {(Time.Now - commitTime).TotalSeconds:F1}s");
 
             WebServer.CommitChanges(data);
 

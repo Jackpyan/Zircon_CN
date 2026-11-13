@@ -3,9 +3,13 @@ using Server.Web.Models;
 
 namespace Server.Web.Services;
 
-public sealed class ServerMetricsService(IGameServerController controller) : BackgroundService
+public sealed class ServerMetricsService(IGameServerController controller, HostResourceSampler host) : BackgroundService
 {
     private volatile ServerMetricsSnapshot _current = Empty(GameServerState.Stopped, null);
+
+    // 游戏服「从什么时候开始算在运行」。只在 Running 期间有值，停了就清空，
+    // 所以页面上显示的是本轮运行时长，不是"最后一次启动到现在"。
+    private DateTimeOffset? _gameRunningSince;
 
     public ServerMetricsSnapshot Current => _current;
 
@@ -16,9 +20,15 @@ public sealed class ServerMetricsService(IGameServerController controller) : Bac
         {
             try
             {
+                GameServerState state = controller.State;
+                if (state == GameServerState.Running) _gameRunningSince ??= DateTimeOffset.Now;
+                else _gameRunningSince = null;
+
+                HostResourceSample resources = host.Sample();
+
                 _current = new ServerMetricsSnapshot(
                     DateTimeOffset.Now,
-                    controller.State,
+                    state,
                     SEnvir.Connections?.Count ?? 0,
                     SEnvir.ActiveObjects?.Count ?? 0,
                     SEnvir.Objects?.Count ?? 0,
@@ -31,7 +41,19 @@ public sealed class ServerMetricsService(IGameServerController controller) : Bac
                     SEnvir.ConDelay,
                     SEnvir.SaveDelay,
                     EmailService.EMailsSent,
-                    controller.LastError);
+                    controller.LastError)
+                {
+                    CpuPercent = resources.CpuPercent,
+                    MemoryBytes = resources.MemoryBytes,
+                    MemoryTotalBytes = resources.MemoryTotalBytes,
+                    NetworkReceiveBytesPerSecond = resources.NetworkReceiveBytesPerSecond,
+                    NetworkSendBytesPerSecond = resources.NetworkSendBytesPerSecond,
+                    LoadAverage1 = resources.LoadAverage1,
+                    ProcessUptime = resources.ProcessUptime,
+                    GameServerUptime = _gameRunningSince is { } since
+                        ? DateTimeOffset.Now - since
+                        : TimeSpan.Zero
+                };
             }
             catch
             {

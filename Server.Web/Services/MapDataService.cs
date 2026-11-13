@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Server.Envir;
 using Server.Web.Models;
 
@@ -18,12 +17,24 @@ public sealed class MapDataService
             .ToArray();
     }
 
+    /// <summary>
+    /// 只读文件属性算一个廉价版本标记，不解析内容。用于 ETag / 304：
+    /// 地图 JSON 动辄几十 MB，能 304 就别再读盘和序列化。
+    /// </summary>
+    public string? GetVersionTag(string fileName)
+    {
+        string path = ResolveMapPath(fileName);
+        if (!File.Exists(path)) return null;
+        FileInfo info = new(path);
+        return $"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}";
+    }
+
     public async Task<MapDocument> LoadAsync(string fileName, CancellationToken cancellationToken = default)
     {
-        string root = ResolveMapRoot();
-        string safeName = Path.GetFileNameWithoutExtension(fileName);
-        string path = Path.Combine(root, safeName + ".map");
+        string path = ResolveMapPath(fileName);
         if (!File.Exists(path)) throw new FileNotFoundException("地图文件不存在。", path);
+        string safeName = Path.GetFileNameWithoutExtension(fileName);
+        FileInfo fileInfo = new(path);
 
         byte[] data = await File.ReadAllBytesAsync(path, cancellationToken);
         if (data.Length < 28) throw new InvalidDataException("地图文件头已损坏。");
@@ -73,8 +84,14 @@ public sealed class MapDataService
                 light, ((flag & 0x01) != 1) || ((flag & 0x02) != 2));
         }
 
-        string versionTag = Convert.ToHexString(SHA256.HashData(data));
+        string versionTag = $"{fileInfo.Length:x}-{fileInfo.LastWriteTimeUtc.Ticks:x}";
         return new MapDocument(safeName, width, height, cells, versionTag);
+    }
+
+    private static string ResolveMapPath(string fileName)
+    {
+        string safeName = Path.GetFileNameWithoutExtension(fileName);
+        return Path.Combine(ResolveMapRoot(), safeName + ".map");
     }
 
     private static string ResolveMapRoot()

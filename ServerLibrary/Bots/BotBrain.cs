@@ -243,6 +243,12 @@ namespace Server.Bots
         private DateTime _nextAvoidStepTime;
 
         /// <summary>
+        /// 上一次「因抗性跳过某技能」的说明文本。只用来**去重**：
+        /// 同一只怪连续几十帧的说明是一样的，没必要每帧写一行日志（Debug 档会刷爆 Logs.txt）。
+        /// </summary>
+        private string _lastSkillNote;
+
+        /// <summary>
         /// 连续「绕圈」次数，用来做分级脱困（1 轻 / 2 中 / 3 重）。
         /// <para>
         /// 为什么必须分级：绕圈脱困只走一步的话，<b>8 秒后必然原地再绕一圈</b> ——
@@ -950,7 +956,21 @@ namespace Server.Bots
                 // 这条判断照客户端辅助挂机的 MapControl.PickAutoSkillType 抄的。
                 bool preferGroup = BotPerception.CountMonstersAround(_player, Globals.MagicRange) >= 2;
 
-                MagicType attack = BotSkills.PickAttack(_player, preferGroup);
+                // 传 monster 进去是为了按**元素抗性**挑技能：
+                // 本库 309 只怪里 204 只有非零抗性（最高 10 = 完全免疫），
+                // 拿火系技能打火抗+7 的怪只剩 30% 伤害，还照样扣蓝 —— 就是用户说的「半天打不死、浪费蓝药」。
+                MagicType attack = BotSkills.PickAttack(_player, monster, preferGroup, out string skillNote);
+
+                // 同一段说明只记一次（连续几十帧内容相同），换了怪/换了抗性关系才会再记一行。
+                if (!string.IsNullOrEmpty(skillNote))
+                {
+                    if (skillNote != _lastSkillNote)
+                    {
+                        _lastSkillNote = skillNote;
+                        BotLog.Debug(Profile.Seq, string.Format("{0}：{1}", MonsterName(monster), skillNote));
+                    }
+                }
+                else _lastSkillNote = null;
 
                 if (attack != MagicType.None)
                 {
@@ -965,8 +985,9 @@ namespace Server.Bots
                         LastMagic = BotText.Magic(attack);
                         _lastAttackTime = SEnvir.Now;
 
-                        LastDetail = string.Format("{0} 打 {1}（距离 {2}，蓝 {3}/{4}）",
-                            attack, MonsterName(monster), distance, _player.CurrentMP, _player.Stats[Stat.Mana]);
+                        LastDetail = string.Format("{0} 打 {1}（距离 {2}，蓝 {3}/{4}，{5}）",
+                            attack, MonsterName(monster), distance, _player.CurrentMP, _player.Stats[Stat.Mana],
+                            BotSkills.ElementNote(_player, monster, attack));
 
                         BotLog.Debug(Profile.Seq, LastDetail);
 

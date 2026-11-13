@@ -54,6 +54,7 @@
     private int SelectedCount;
     private string? Message;
     private bool HasError;
+    private const string LoadingHint = "正在加载地图数据…（大图首次打开需要几秒）";
 
     protected override async Task OnInitializedAsync() => Regions = await Catalog.GetMapRegionsAsync();
 
@@ -68,8 +69,16 @@
             Callback?.Dispose();
             Callback = DotNetObjectReference.Create(this);
             HasError = false;
-            Message = null;
+            // 大图的格子数据有几十 MB，下载+解析期间画布是全黑的。先给一句提示，
+            // 否则用户会以为点了没反应。放在工具栏（不能放进 .map-viewport：
+            // createMapEditor 会 host.replaceChildren，把 Blazor 的节点换掉会撕裂 diff）。
+            Message = LoadingHint;
+            StateHasChanged();
+            await Task.Yield();
             Editor = await Module.InvokeAsync<IJSObjectReference>("createMapEditor", Viewport, SelectedRegion.MapFileName, SelectedRegion.Index, SelectedRegion.ETag, Callback);
+            // 加载过程中 JS 可能已经通过 ReportMapWarning 写了「贴图库缺失」之类的话，
+            // 只在还挂着加载提示时才清掉，别把真正的告警抹了。
+            if (Message == LoadingHint) { Message = null; StateHasChanged(); }
         }
         catch (Exception ex)
         {
