@@ -1033,6 +1033,12 @@ namespace Server.Bots
             if (BotActions.TryTownRevive(_player))
                 BotLog.Info(Profile.Seq, "已回城复活");
 
+            // 复活会把人挪回绑定主城，死前那条路线的起点已经作废。
+            // 不清掉的话，`if (_player.AutoPath != null) return;` 这类守卫会拦住
+            // 复活后所有的重新规划，假人就一直站在原地。
+            if (_player.AutoPath != null)
+                AutoPathService.Instance.Cancel(_player);
+
             // 复活即回主城，中转的意义已经由「人回到主城」实现了 —— 清位，重新选图。
             _teleportViaHome = false;
 
@@ -3692,6 +3698,10 @@ namespace Server.Bots
 
                 if (!AutoPathService.Instance.TryStart(_player, home, HomePoint(home)))
                 {
+                    // 死亡期间规划被拒（见 AutoPathService.Start）不代表这张图去不了，
+                    // 拉黑会把它永久排除在卖货目的地之外。
+                    if (_player.Dead) return;
+
                     // 规划不出来 = 这张图根本去不了（等级/道具限制）。把它也拉黑，
                     // 否则下一次 ResolveTradeDestination 还会挑中它，变成「规划失败 → 20 秒后又规划失败」。
                     BlacklistTradeMap(home);

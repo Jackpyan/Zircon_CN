@@ -42,6 +42,26 @@ namespace Server.Models.AutoPath
         /// <summary>本次规划里跑了几次 A*（只在游戏主线程用，所以 thread-static 就够）。</summary>
         [ThreadStatic] private static int _AStarCalls;
 
+        /// <summary>
+        /// 上一次 <see cref="TryBuild(MapObject, AutoPathDestination, bool, out AutoPathPlan)"/> 失败的原因。
+        ///
+        /// <para>
+        /// <b>为什么需要它</b>：规划失败有八九种可能（起点格不存在、目标集合空、地图不连通、
+        /// 出口被等级/道具卡住、A* 找不到路……），对调用方来说都只是 <c>false</c>。
+        /// 少了这一行，线上只能看到「STARTED/ENDED 同秒」却查不出为什么，
+        /// 2026-11-11 的「假人卡住刷失败」就是这么耗掉的。
+        /// </para>
+        /// </summary>
+        public static string LastFailure => _lastFailure;
+
+        [ThreadStatic] private static string _lastFailure;
+
+        private static bool Fail(string reason)
+        {
+            _lastFailure = reason;
+            return false;
+        }
+
         /// <summary>A* 的复用缓冲，按地图尺寸懒分配。</summary>
         [ThreadStatic] private static SearchScratch _scratch;
 
@@ -92,13 +112,13 @@ namespace Server.Models.AutoPath
         public static bool TryBuild(MapObject actor, MapInfo startMap, Point startLocation, AutoPathDestination destination, bool avoidLiveObjects, out AutoPathPlan plan)
         {
             plan = null;
+            _lastFailure = null;
 
-            if (actor?.CurrentMap == null ||
-                startMap == null ||
-                destination?.Map == null ||
-                !startMap.CanAutoPath ||
-                !destination.Map.CanAutoPath)
-                return false;
+            if (actor?.CurrentMap == null) return Fail("没有当前地图");
+            if (startMap == null) return Fail("起点地图为空");
+            if (destination?.Map == null) return Fail("目的地地图为空");
+            if (!startMap.CanAutoPath) return Fail($"起点图 {startMap.Description} 未开自动寻路");
+            if (!destination.Map.CanAutoPath) return Fail($"目标图 {destination.Map.Description} 未开自动寻路");
 
             MapInfo destinationMapInfo = destination.Map;
             long startedAt = Stopwatch.GetTimestamp();
@@ -113,11 +133,18 @@ namespace Server.Models.AutoPath
             {
                 Dictionary<MapInfo, int> mapDistances = GetMapDistances(actor, destinationMapInfo);
                 mapsDoneAt = Stopwatch.GetTimestamp();
-                if (!mapDistances.TryGetValue(startMap, out int startDistance)) return false;
+
+                if (!mapDistances.TryGetValue(startMap, out int startDistance))
+                    return Fail($"地图图不连通（{startMap.Description} 到不了 {destinationMapInfo.Description}，" +
+                                $"可达图 {mapDistances.Count} 张）");
 
                 Map startMapInstance = SEnvir.GetMap(startMap);
                 startMapDoneAt = Stopwatch.GetTimestamp();
-                if (startMapInstance == null) return false;
+
+                if (startMapInstance == null) return Fail($"起点图 {startMap.Description} 加载失败");
+
+                if (startMapInstance.GetCell(startLocation) == null)
+                    return Fail($"起点格不存在 ({startLocation.X},{startLocation.Y})");
 
                 bool avoidObjectsHere = avoidLiveObjects && startMap == actor.CurrentMap.Info;
 
@@ -126,10 +153,14 @@ namespace Server.Models.AutoPath
                 {
                     NPCObject destinationNPC = GetDestinationNPC(actor, startMapInstance, destination);
                     HashSet<Point> targets = GetDestinationTargets(startMapInstance, destination, destinationNPC);
-                    if (targets.Count == 0) return false;
+                    if (targets.Count == 0) return Fail($"目标集合为空（NPC={destination.NPC?.NPCName ?? "-"}，" +
+                                                         $"区域={destination.Region?.Description ?? "-"}，" +
+                                                         $"点=({destination.Point.X},{destination.Point.Y})，" +
+                                                         $"目标格{(startMapInstance.GetCell(destination.Point) == null ? "不存在" : "存在")}）");
 
                     if (!TryFindPreferredPath(actor, startMapInstance, startLocation, targets, avoidObjectsHere, out List<Point> path))
-                        return false;
+                        return Fail($"A* 找不到路径（同图，目标 {targets.Count} 格，" +
+                                    $"避让活物 {avoidObjectsHere}，起点 ({startLocation.X},{startLocation.Y})）");
 
                     plan = new AutoPathPlan
                     {
@@ -154,42 +185,63 @@ namespace Server.Models.AutoPath
 
                 List<Point> hopPath = null;
 
-                int examined = 0;
+                int outgoing = 0, examined = 0, blockedByRules = 0, wrongDistance = 0;
+                int emptySource = 0, astarFailed = 0, needHole = 0, emptyDestination = 0;
+
                 foreach (MovementInfo movement in GetOutgoingMovements(startMap))
                 {
-                    if (examined >= MaxHopCandidates) break;
-                    if (!CanUseMovement(actor, movement, startMap)) continue;
+                    outgoing++;
+
+                    if (examined >= MaxHopCandidates) continue;
+                    if (!CanUseMovement(actor, movement, startMap)) { blockedByRules++; continue; }
 
                     MapInfo nextMapInfo = movement.DestinationRegion?.Map;
                     if (nextMapInfo == null ||
                         !mapDistances.TryGetValue(nextMapInfo, out int nextDistance) ||
                         nextDistance != startDistance - 1)
+                    {
+                        wrongDistance++;
                         continue;
+                    }
 
                     HashSet<Point> sourcePoints = GetValidPoints(
                         startMapInstance, GetRegionPoints(movement.SourceRegion, startMapInstance));
-                    if (sourcePoints.Count == 0) continue;
+                    if (sourcePoints.Count == 0) { emptySource++; continue; }
 
                     examined++;
                     if (!TryFindPreferredPath(actor, startMapInstance, startLocation, sourcePoints, avoidObjectsHere, out List<Point> candidate))
+                    {
+                        astarFailed++;
                         continue;
+                    }
 
                     if (movement.NeedHole && (startMap != actor.CurrentMap.Info ||
                         !actor.CurrentMap.Objects.OfType<SpellObject>().Any(x =>
                             x.Effect == SpellEffect.ZombieHole &&
                             x.CurrentLocation == candidate[candidate.Count - 1])))
+                    {
+                        needHole++;
                         continue;
+                    }
 
                     Map nextMapInstance = SEnvir.GetMap(nextMapInfo);
                     if (nextMapInstance == null) continue;
                     if (GetValidPoints(nextMapInstance, GetRegionPoints(movement.DestinationRegion, nextMapInstance)).Count == 0)
+                    {
+                        emptyDestination++;
                         continue;
+                    }
 
                     if (hopPath == null || candidate.Count < hopPath.Count)
                         hopPath = candidate;
                 }
 
-                if (hopPath == null) return false;
+                if (hopPath == null)
+                    return Fail($"跨图找不到可用出口（本图出口 {outgoing} 个，" +
+                                $"规则拒绝 {blockedByRules} / 方向不对 {wrongDistance} / 来源区域空 {emptySource} / " +
+                                $"A* 失败 {astarFailed} / 需要洞 {needHole} / 落地区域空 {emptyDestination} / " +
+                                $"实际尝试 {examined} 个，" +
+                                $"避让活物 {avoidObjectsHere}，起点 ({startLocation.X},{startLocation.Y})）");
 
                 hops = 1;
 
@@ -293,7 +345,10 @@ namespace Server.Models.AutoPath
         public static bool TryBuildCurrentPath(MapObject actor, Point destination, bool avoidLiveObjects, out List<Point> path)
         {
             path = null;
-            if (actor?.CurrentMap?.GetCell(destination) == null) return false;
+            _lastFailure = null;
+
+            if (actor?.CurrentMap?.GetCell(destination) == null)
+                return Fail($"当前路径终点格不存在 ({destination.X},{destination.Y})");
 
             return TryFindPreferredPath(actor, actor.CurrentMap, actor.CurrentLocation, new HashSet<Point> { destination }, avoidLiveObjects, out path);
         }
@@ -505,7 +560,7 @@ namespace Server.Models.AutoPath
         private static bool TryFindPreferredPath(MapObject actor, Map map, Point start, HashSet<Point> targets, bool avoidLiveObjects, out List<Point> path)
         {
             path = null;
-            if (targets.Count == 0) return false;
+            if (targets.Count == 0) return Fail($"终点集合为空（{map?.Info?.Description}）");
 
             if (!TryFindPath(actor, map, start, targets, avoidLiveObjects, null,
                     out List<Point> directPath))
@@ -604,8 +659,11 @@ namespace Server.Models.AutoPath
             int width = map.Width;
             int height = map.Height;
 
-            if (width <= 0 || height <= 0) return false;
-            if (start.X < 0 || start.X >= width || start.Y < 0 || start.Y >= height) return false;
+            if (width <= 0 || height <= 0)
+                return Fail($"地图尺寸异常 {width}x{height}（{map.Info?.Description}）");
+
+            if (start.X < 0 || start.X >= width || start.Y < 0 || start.Y >= height)
+                return Fail($"起点越界 ({start.X},{start.Y})，地图 {width}x{height}");
 
             GetBounds(targets, out int minimumX, out int maximumX, out int minimumY, out int maximumY);
 
@@ -628,12 +686,16 @@ namespace Server.Models.AutoPath
 
             HeapPush(scratch, startIndex, HeapKey(startHeuristic * HeuristicWeightPercent / 100, startHeuristic));
 
+            // 只服务于失败日志（「展开多少格」是判断「走不通」还是「搜索被截断」的关键）。
+            int expanded = 0;
+
             while (scratch.HeapCount > 0)
             {
                 int index = HeapPop(scratch);
 
                 if (scratch.Closed[index] == generation) continue;
                 scratch.Closed[index] = generation;
+                expanded++;
 
                 int x = index % width;
                 int y = index / width;
@@ -683,7 +745,8 @@ namespace Server.Models.AutoPath
                 }
             }
 
-            return false;
+            return Fail($"A* 找不到路径（{map.Info?.Description} 起点 ({start.X},{start.Y})，" +
+                        $"目标 {targets.Count} 格，避让活物 {avoid}，展开 {expanded} 格）");
         }
 
         /// <summary>堆键：主键是 f 值，同 f 时优先 h 更小的（更贴近目标），减少无谓展开。</summary>

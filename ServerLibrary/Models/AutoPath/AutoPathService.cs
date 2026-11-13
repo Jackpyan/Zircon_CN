@@ -13,7 +13,27 @@ namespace Server.Models.AutoPath
     {
         public static AutoPathService Instance { get; } = new AutoPathService();
 
+        /// <summary>
+        /// 上一次规划失败的原因（诊断用，只读）。
+        /// <para>
+        /// 规划失败有八九种可能，对调用方来说都只是 <c>false</c>。失败日志和后台排查
+        /// 都靠这一行区分「真的没路」和「起点格不存在 / 目标集合空 / 出口被规则卡住」。
+        /// </para>
+        /// </summary>
+        public static string LastFailureReason => AutoPathRoutePlanner.LastFailure;
+
         private const int PathAdvanceSearchDistance = 4;
+
+        /// <summary>
+        /// 连续「没能前进一步」持续这么久，就放弃整条自动寻路。
+        /// <para>
+        /// 按**时间**算，不按帧数：<see cref="Process"/> 每帧被调一次，而帧率随负载浮动
+        /// （30 个假人同屏时实测会明显掉帧），同样的 40 帧空载是 0.7 秒、满载可能两三秒，
+        /// 容忍度会跟着人数漂移。4 秒足够等城镇里的人群挪开一步，也不至于让真卡死拖上一分钟。
+        /// （大脑层另有一层 <c>BotBrain.TrackStuck</c>，那个按 tick 计，两者互补。）
+        /// </para>
+        /// </summary>
+        private const int StallLimitMs = 4000;
 
         private AutoPathService()
         {
@@ -169,13 +189,25 @@ namespace Server.Models.AutoPath
                 return;
             }
 
-            if (player.Dead || player.CurrentMap == null || !player.CurrentMap.Info.CanAutoPath)
+            // 死亡不是「没路」。这里**不能 Fail**：
+            // 假人被打死的那一刻，大脑还没跑到 ProcessDead（它只在自己的 tick 里检查），
+            // 于是会一直往 TryStart 里塞新任务，而 Process 每帧都把任务拆掉 ——
+            // 日志上就是「STARTED / ENDED 同秒、一秒刷好几次、人一步不动」。
+            // 2026-11-11 的压测日志里这种成对记录占全部失败的一半以上，根因就是这一行。
+            // 挂起即可：复活后 RouteMap != CurrentMap 会自动重建路径。
+            if (player.Dead) return;
+
+            if (player.CurrentMap == null || !player.CurrentMap.Info.CanAutoPath)
             {
-                Fail(player);
+                Fail(player, player.CurrentMap == null
+                    ? "没有当前地图"
+                    : $"当前地图 {player.CurrentMap.Info.Description} 未开自动寻路");
                 return;
             }
 
             if (state.WaitingForMovementStart) return;
+
+            TraceSlowPath(player, state);
 
             if (ReachedDestination(player, state.Destination))
             {
@@ -193,10 +225,9 @@ namespace Server.Models.AutoPath
                 state.Path.Count == 0 ||
                 !AdvancePath(state.Path, player.CurrentLocation))
             {
-                if (!RebuildCurrentPath(player, state, avoidLiveObjects) && !Rebuild(player, state, avoidLiveObjects))
+                if (!RebuildAny(player, state, avoidLiveObjects))
                 {
-                    Fail(player);
-                    return;
+                    if (!WaitAnotherAttempt(player, state, "重建路径失败")) return;
                 }
             }
 
@@ -215,17 +246,17 @@ namespace Server.Models.AutoPath
 
             if (state.Path.Count < 2)
             {
-                Fail(player);
-                return;
+                if (!WaitAnotherAttempt(player, state,
+                        $"路径只剩 {state.Path.Count} 点（ReachedDestination 却判否，{DescribeDestination(state)}）"))
+                    return;
             }
 
             if (!TryGetExecutionStep(player, state, out MirDirection direction, out int distance))
             {
-                if ((!RebuildCurrentPath(player, state, true) && !Rebuild(player, state, true)) ||
-                    !TryGetExecutionStep(player, state, out direction, out distance))
+                if ((!RebuildAny(player, state, true) ||
+                     !TryGetExecutionStep(player, state, out direction, out distance)))
                 {
-                    Fail(player);
-                    return;
+                    if (!WaitAnotherAttempt(player, state, "取不到执行步")) return;
                 }
             }
 
@@ -233,12 +264,80 @@ namespace Server.Models.AutoPath
             if (!HasClearTravel(player, player.CurrentMap, player.CurrentLocation, destination, true))
             {
                 RequireLiveObjectRepath(state);
+
+                // 明知道下一步被活物占着就别调 Move 了：引擎会静默拒绝，
+                // 这一步白算一次停滞（等于把容忍额度打对折），下一帧还要重建路径。
+                WaitAnotherAttempt(player, state, $"下一步 ({destination.X},{destination.Y}) 被活物挡住");
+
                 return;
             }
 
+            Point before = player.CurrentLocation;
+
             player.Move(direction, distance);
+
             state.FullStrideAvailable = true;
             state.WaitingForMovementStart = true;
+
+            // 只有**真的动了**才算有进展。引擎会静默拒绝走不过去的格子，
+            // 光看「调过 Move」会把「一步没挪」误判成在前进。
+            if (player.CurrentLocation != before)
+                ClearStall(state);
+            else
+                WaitAnotherAttempt(player, state, $"引擎拒绝从 ({before.X},{before.Y}) 走向 ({destination.X},{destination.Y})");
+        }
+
+        /// <summary>
+        /// 一次「没能前进一步」的记帐。返回 true = 还在容忍范围内，本帧什么都不做；
+        /// 返回 false = 已经卡够久，<paramref name="player"/> 的自动寻路已被取消。
+        ///
+        /// <para>
+        /// <b>为什么需要它</b>：自动寻路的所有失败分支以前都是「立刻 Fail」，
+        /// 而调用方（假人大脑）下一 tick 就会再规划一次 —— 于是一次拥挤、一次死亡、
+        /// 一个判定口径不一致，都会变成 4~6 次/秒、持续几十秒的 STARTED/ENDED 刷屏。
+        /// 有了这层容忍，「被活物挤住」变成「等一会儿」，真的卡住也会在几秒内收尾并留下原因。
+        /// </para>
+        /// </summary>
+        private bool WaitAnotherAttempt(PlayerObject player, AutoPathState state, string reason)
+        {
+            state.StallCount++;
+
+            long now = Environment.TickCount64;
+
+            if (state.StallSince == 0) state.StallSince = now;
+
+            long stalled = now - state.StallSince;
+
+            if (stalled <= StallLimitMs) return true;
+
+            Fail(player, $"连续 {state.StallCount} 次没能前进一步（卡了 {stalled / 1000d:F1} 秒）：{reason}");
+            return false;
+        }
+
+        /// <summary>真的迈出一步（或换了一段路）就把停滞计数归零。</summary>
+        private static void ClearStall(AutoPathState state)
+        {
+            state.StallCount = 0;
+            state.StallSince = 0;
+        }
+
+        /// <summary>
+        /// 重建路径：先按要求的避让语义算，算不出来再退回「不避让活物」。
+        ///
+        /// <para>
+        /// 退这一步是必须的：<c>Start</c> 用的是乐观规划（不看活物），而执行层每步都要求
+        /// 前方无活物。城镇里一堆假人挤在商店门口时，「避让活物」的 A* 会真的算不出路，
+        /// 但「不避让」的路径是好的 —— 这时该等，不该把整条自动寻路拆掉。
+        /// </para>
+        /// </summary>
+        private bool RebuildAny(PlayerObject player, AutoPathState state, bool avoidLiveObjects)
+        {
+            if (RebuildCurrentPath(player, state, avoidLiveObjects) || Rebuild(player, state, avoidLiveObjects))
+                return true;
+
+            if (!avoidLiveObjects) return false;
+
+            return RebuildCurrentPath(player, state, false) || Rebuild(player, state, false);
         }
 
         private static bool ShouldMount(PlayerObject player)
@@ -337,6 +436,14 @@ namespace Server.Models.AutoPath
 
         private bool Start(PlayerObject player, AutoPathDestination destination)
         {
+            // 死了不规划。
+            //
+            // 从「玩家被打死」到「假人大脑跑到 ProcessDead」之间还隔着若干帧，
+            // 这段时间里大脑仍会按原状态反复调用 TryStart：每次都规划成功（STARTED），
+            // 然后被 Process 的死亡分支当帧作废（ENDED），日志上就是同秒成对刷屏、人一步不动。
+            // 2026-11-11 压测日志里这类占全部「同秒失败」的一半以上。
+            if (player.Dead) return false;
+
             AutoPathState state = player.AutoPath;
             if (state == null)
             {
@@ -357,6 +464,7 @@ namespace Server.Models.AutoPath
             state.MountRequested = false;
             state.WaitingForMovementStart = false;
             state.FullStrideAvailable = false;
+            ClearStall(state);
 
             if (Rebuild(player, state))
             {
@@ -364,7 +472,7 @@ namespace Server.Models.AutoPath
                 return true;
             }
 
-            Fail(player);
+            Fail(player, $"启动时规划失败：{AutoPathRoutePlanner.LastFailure}");
             return false;
         }
 
@@ -452,8 +560,14 @@ namespace Server.Models.AutoPath
             state.MountRequested = false;
             state.PathEndsAtMapTransition = false;
             state.WaitingForMovementStart = false;
+            ClearStall(state);
 
-            if (!Rebuild(player, state)) return false;
+            if (!Rebuild(player, state))
+            {
+                AutoPathLogger.Failed(player, DescribeDestination(state),
+                    $"切到下一个航点时规划失败：{AutoPathRoutePlanner.LastFailure}");
+                return false;
+            }
 
             StartAutoPathLog(player, state);
             return true;
@@ -469,15 +583,56 @@ namespace Server.Models.AutoPath
             state.AutoPathDestination = state.Route.Destination;
             state.AutoPathLogged = true;
 
+            long now = Environment.TickCount64;
+            state.StartedTick = now;
+            state.TraceTick = now;
+
             AutoPathLogger.Started(player, state.AutoPathSourceMap, state.AutoPathSource, state.AutoPathDestinationMap, state.AutoPathDestination);
         }
+
+        /// <summary>跑满这么久才值得补一行「停在哪」——几秒内正常走完的短途不用刷屏。</summary>
+        private const int SlowPathReportMs = 3000;
 
         private static void EndAutoPathLog(PlayerObject player, AutoPathState state)
         {
             if (player == null || state?.AutoPathLogged != true) return;
 
             AutoPathLogger.Ended(player, state.AutoPathSourceMap, state.AutoPathSource, state.AutoPathDestinationMap, state.AutoPathDestination);
+
+            long elapsed = state.StartedTick == 0 ? 0 : Environment.TickCount64 - state.StartedTick;
+
+            if (elapsed >= SlowPathReportMs)
+                AutoPathLogger.Stopped(player, state.AutoPathDestinationMap, state.AutoPathDestination,
+                    player.CurrentLocation, player.CurrentMap?.Info, elapsed, state.Path?.Count ?? 0);
+
             state.AutoPathLogged = false;
+            state.StartedTick = 0;
+            state.TraceTick = 0;
+        }
+
+        /// <summary>长路追踪的间隔。</summary>
+        private const int SlowPathTraceMs = 10000;
+
+        /// <summary>
+        /// 一条自动寻路跑太久就报一次进度。
+        /// <para>
+        /// 加这一行是因为实测有「同图 60 格走了 2~5 分钟」的个案：<c>ENDED</c> 只给起点，
+        /// 看不出是稳步在走还是原地摆；<c>StallCount</c> 也抓不到来回摆动（每步都算「动了」）。
+        /// </para>
+        /// </summary>
+        private static void TraceSlowPath(PlayerObject player, AutoPathState state)
+        {
+            if (state.StartedTick == 0) return;
+
+            long now = Environment.TickCount64;
+            long elapsed = now - state.StartedTick;
+
+            if (elapsed < SlowPathTraceMs || now - state.TraceTick < SlowPathTraceMs) return;
+
+            state.TraceTick = now;
+
+            AutoPathLogger.Progress(player, state.AutoPathDestinationMap, state.AutoPathDestination,
+                player.CurrentLocation, player.CurrentMap?.Info, elapsed, state.Path?.Count ?? 0, state.StallCount);
         }
 
         private static void SendRoutes(PlayerObject player, AutoPathState state)
@@ -508,10 +663,30 @@ namespace Server.Models.AutoPath
             return player.CurrentLocation == destination.Point;
         }
 
-        private void Fail(PlayerObject player)
+        private void Fail(PlayerObject player, string reason)
         {
+            AutoPathLogger.Failed(player, DescribeDestination(player?.AutoPath), reason);
+
             Cancel(player);
+
             player.Connection.ReceiveChat(player.Connection.Language.AutoPathNoRoute, MessageType.System);
+        }
+
+        /// <summary>把目的地摊成人话，只用于失败日志。</summary>
+        private static string DescribeDestination(AutoPathState state)
+        {
+            AutoPathDestination destination = state?.Destination;
+
+            if (destination?.Map == null) return "（无目的地）";
+
+            string kind = destination.NPC != null
+                ? $"NPC '{destination.NPC.NPCName}'"
+                : destination.Region != null
+                    ? $"区域 '{destination.Region.Description}'"
+                    : "指定点";
+
+            return $"{destination.Map.Description}[{destination.Map.FileName}] " +
+                   $"({destination.Point.X},{destination.Point.Y}) {kind}";
         }
     }
 }
