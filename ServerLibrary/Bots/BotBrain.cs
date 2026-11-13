@@ -68,8 +68,17 @@ namespace Server.Bots
         /// 有假人卡在「走不到药店 凯茜（117 格外始终过不去）」，5 分钟都走不到，
         /// 补给直接失败。AutoPath 是按格子图算最短路，终点还取 NPC 的相邻格。
         /// </para>
+        /// <para>
+        /// <b>为什么是 3 而不是 20</b>：这个门槛原来是 20，等于「自动寻路只负责城外的路，
+        /// 进城最后 20 格交回贪心走格」—— 而城镇里恰恰是拐角、房屋、挤成一堆的假人最多的地方。
+        /// 实测（2026-11-13，30 假人）47 条被放弃的自动寻路里，有 46 条的落点集中在距终点
+        /// <b>14~21 格</b>（众数 18/19 格）、路径还剩 17~26 点 —— 也就是**路本来是对的**，
+        /// 只是在 20 格处被拆掉换成了贪心走格，然后卡住 30 秒 →
+        /// 「走不到商人，换张图卖」白扔一张传送卷还把整张图拉黑 5 分钟。
+        /// 现在只剩最后 1~2 格交给贪心（NPC 自己是阻挡物，A* 的终点只能是它周围的可走格）。
+        /// </para>
         /// </summary>
-        private const int AutoPathToNpcDistance = 20;
+        private const int AutoPathToNpcDistance = 3;
 
         /// <summary>
         /// 走到卖货 NPC 的耐心：这么多秒还没能靠近一格，就认定这条路堵死，换一张图卖。
@@ -3742,8 +3751,13 @@ namespace Server.Bots
             {
                 BlacklistTradeMap(home);
 
-                FinishTrade(string.Format("走不到 {0}（{1} 秒没能靠近一格，换张图卖）",
-                    npc.Name, TradeApproachStallSeconds));
+                // 把「卡在哪」一起打出来：只看「30 秒没能靠近一格」分不清是被人群挤在
+                // 街口、还是最后一步的相邻格永远被别人占着 —— 两者的修法完全不同。
+                FinishTrade(string.Format("走不到 {0}（{1} 秒没能靠近一格，卡在 ({2},{3})，还差 {4} 格，最好成绩 {5} 格，{6}）",
+                    npc.Name, TradeApproachStallSeconds,
+                    _player.CurrentLocation.X, _player.CurrentLocation.Y,
+                    distance, _tradeApproachBest,
+                    _player.AutoPath != null ? "自动寻路中" : "自己走"));
 
                 return;
             }
