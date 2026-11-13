@@ -1574,6 +1574,9 @@ namespace Server.Envir
                 Now = Time.Now;
                 loopCount++;
 
+                // 帧耗时埋点（P4-5）：起点放在 try 外面，异常帧不会被计入（catch 里直接 break）。
+                ServerPerf.BeginFrame();
+
                 try
                 {
                     for (int adminActionCount = 0; adminActionCount < 100 && AdminActions.TryDequeue(out Action adminAction); adminActionCount++)
@@ -1614,7 +1617,10 @@ namespace Server.Envir
 
                     // 假人调度：推进每个假人的上线/下线阶段，并按水位增减在线数。
                     // 必须放在玩家 Process 之后 —— 新投递的伪连接要到下一帧才被主循环收编。
+                    // 单独计时（P4-5）：全局熔断判的是「假人段」耗时，不是整帧。
+                    ServerPerf.BeginBots();
                     Bots.BotRoster.Process();
+                    ServerPerf.EndBots();
 
                     TotalBytesSent = DBytesSent + bytesSent;
                     TotalBytesReceived = DBytesReceived + bytesReceived;
@@ -1674,6 +1680,10 @@ namespace Server.Envir
                         ProcessObjectCount = count;
                         LoopCount = loopCount;
                         ConDelay = conDelay;
+
+                        // 发布上一秒的帧耗时统计（P4-5）。必须在这里 —— 它是「每秒一次」的唯一节拍点，
+                        // 而 ServerPerf 内部按秒累加，早于或晚于这里都会把窗口切歪。
+                        ServerPerf.RollSecond();
 
                         count = 0;
                         loopCount = 0;
@@ -1794,6 +1804,9 @@ namespace Server.Envir
                             StartConquest(info, false);
                         }
                     }
+
+                    // 一帧结束（P4-5 埋点）。放在 try 最后一行：整帧 = 从 while 开头到这里。
+                    ServerPerf.EndFrame();
                 }
                 catch (Exception ex)
                 {

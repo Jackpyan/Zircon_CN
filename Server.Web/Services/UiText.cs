@@ -101,7 +101,7 @@ public static class UiText
     {
         ["Network"] = "网络", ["System"] = "系统", ["Control"] = "登录与角色控制", ["Mail"] = "邮件",
         ["WebServer"] = "Web 服务器", ["Players"] = "玩家", ["Monsters"] = "怪物", ["Items"] = "物品",
-        ["Rates"] = "倍率", ["Fishing"] = "钓鱼", ["AdminWeb"] = "Web 管理端"
+        ["Rates"] = "倍率", ["Fishing"] = "钓鱼", ["AdminWeb"] = "Web 管理端", ["Bots"] = "假人"
     };
 
     private static readonly IReadOnlyDictionary<string, string> ConfigFields = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -156,7 +156,11 @@ public static class UiText
         ["WebAllowMasterLogin"] = "允许主密码登录（仅内网）",
         ["AdminWebRequireTotp"] = "主密码登录要求 TOTP 二次验证",
         ["AdminWebIdleTimeoutMinutes"] = "后台空闲超时（分钟，0=不启用）",
-        ["AdminWebSingleSession"] = "后台单点登录（后登录顶掉先登录）"
+        ["AdminWebSingleSession"] = "后台单点登录（后登录顶掉先登录）",
+        ["BotBreakerEnabled"] = "启用假人过载熔断",
+        ["BotBreakerSharePercent"] = "熔断阈值（假人段占主循环百分比）",
+        ["BotBreakerTripSeconds"] = "熔断触发窗口（连续超标秒数）",
+        ["BotBreakerRecoverSeconds"] = "熔断恢复窗口（回落持续秒数）"
     };
 
     private static readonly IReadOnlyDictionary<string, string> EnumLabels = new Dictionary<string, string>(StringComparer.Ordinal)

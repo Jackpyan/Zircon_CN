@@ -307,6 +307,16 @@ namespace Server.Bots
 
         /// <summary>上次同步技能时的等级。升级时补技能（法师 7 级火球、道士 13 级火符）。</summary>
         private int _syncedLevel = -1;
+
+        /// <summary>
+        /// 上一次看到的所在图索引（<c>-1</c> = 还没取过）。
+        /// <para>
+        /// 只用来给 <see cref="BotMetrics.MapChanges"/> 计数：<b>真的换了 CurrentMap 才算跨图</b>，
+        /// 而不是「决定要走」的次数 —— 后者会把「想走但走不到」也算成跨图，指标就失去意义了。
+        /// </para>
+        /// </summary>
+        private int _lastMapIndex = -1;
+
         /// <summary>后台「立即补给」投递的一次性请求。</summary>
         private bool _restockRequested;
 
@@ -518,6 +528,15 @@ namespace Server.Bots
         public void Process()
         {
             if (_player == null || _player.Character == null) return;
+
+            // 跨图计数（P4-5 性能卡片）。放在节流判断之前：换图可能发生在两次决策之间，
+            // 放在后面会被 ActionIntervalMs 延后一拍，指标的时间点就不准了。
+            int mapIndex = _player.CurrentMap?.Info?.Index ?? -1;
+
+            if (_lastMapIndex >= 0 && mapIndex >= 0 && mapIndex != _lastMapIndex)
+                BotMetrics.MapChange();
+
+            _lastMapIndex = mapIndex;
 
             if (SEnvir.Now < _nextActionTime) return;
 
@@ -4767,6 +4786,10 @@ namespace Server.Bots
             if (!BotChat.TryPick(_player, ChatKindForState(), out string text, out bool world)) return;
 
             _player.Chat(world ? "!@" + text : text);
+
+            // 发言计数（P4-5 性能卡片）。只在真的发出去之后 +1 ——
+            // TryPick 只是「挑一句」，挑完因为别的原因没发出去的不该算。
+            BotMetrics.Chat();
         }
 
         /// <summary>按当前状态挑说话场景（语料里没有这个场景时 BotChat 会自己放宽到任意类别）。</summary>

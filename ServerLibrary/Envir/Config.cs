@@ -240,6 +240,32 @@ namespace Server.Envir
         /// <summary>连续上线失败多少次后标记 Broken，不再自动拉起（后台可手动重置）。</summary>
         public static int BotMaxFailures { get; set; } = 3;
 
+        /// <summary>
+        /// 假人全局熔断（P4-5）：假人段占主循环的百分比连续超阈值，就把水位上限<b>临时</b>压到当前在线数。
+        /// <para>
+        /// 默认<b>关闭</b>。原因：阈值定多少要先看真实基线，猜一个数字上去万一误触发，
+        /// 现象是「假人再也不涨了」—— 比卡顿更难发现。先在后台「假人性能」卡片观察几天
+        /// （看假人段占比的平均值和峰值），确认 <see cref="BotBreakerSharePercent"/> 有余量再打开。
+        /// </para>
+        /// </summary>
+        public static bool BotBreakerEnabled { get; set; } = false;
+
+        /// <summary>
+        /// 熔断阈值：假人段占主循环的百分比（默认 25%）。
+        /// <para>
+        /// 为什么用占比而不是毫秒：主循环是自旋的，空闲时 5000+ 帧/秒，
+        /// 「每帧几毫秒」会被帧数稀释到接近 0，真实占用再高也看不出来。
+        /// 占比与帧率无关，直接回答「主循环烧的 CPU 里有多少是假人造成的」。
+        /// </para>
+        /// </summary>
+        public static int BotBreakerSharePercent { get; set; } = 25;
+
+        /// <summary>连续超标多少秒才触发（默认 60）。设太小会被单次 GC / 存库尖峰误触发。</summary>
+        public static int BotBreakerTripSeconds { get; set; } = 60;
+
+        /// <summary>耗时回落到阈值一半以下并持续多少秒才解除（默认 60）。</summary>
+        public static int BotBreakerRecoverSeconds { get; set; } = 60;
+
         /// <summary>同一张地图上最多放几个假人练级，超了就跨图分流（防止一堆人抢一片刷怪区）。</summary>
         public static int BotMapCapacity { get; set; } = 8;
 

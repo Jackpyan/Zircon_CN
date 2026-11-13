@@ -17,6 +17,7 @@ public sealed record BotOverview(
     int Broken,
     int RealPlayers,
     int Target,
+    bool NightActive,
     double AverageLevel,
     int TotalKills,
     int TotalDeaths,
@@ -31,10 +32,67 @@ public sealed record BotOverview(
     DateTime SnapshotAt)
 {
     /// <summary>首屏还没取到快照时的占位值（页面初始化用）。</summary>
-    public static BotOverview Empty { get; } = new(false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, DateTime.MinValue);
+    public static BotOverview Empty { get; } = new(false, false, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, DateTime.MinValue);
 
     /// <summary>存活率文本：没有样本时显示 <c>—</c>，而不是 0%（0% 会被误读成「全死光了」）。</summary>
     public string SurvivalRateText => SurvivalRate >= 0 ? $"{SurvivalRate}%" : "—";
+}
+
+/// <summary>
+/// 假人性能快照（P4-5 后台「假人性能」卡片）。
+/// <para>
+/// 与 <see cref="BotOverview"/> 分开一个 record 而不是往里塞字段：
+/// 那份是「业务指标」（在线 / 等级 / 金币），这份是「机器指标」（帧耗时 / 熔断状态），
+/// 页面上的位置也不同（业务卡在上、性能卡在下），混在一起以后只会越来越臃肿。
+/// </para>
+/// <para>
+/// 所有值都是<b>跨线程只读</b>的静态字段，不经过游戏线程排队 —— 性能指标滞后一秒完全无所谓，
+/// 但要是在这里排一次 <c>InvokeOnGameThreadAsync</c>，页面每 2 秒刷新一次就会给主循环添堵，
+/// 那就成了「监控把被监控对象拖慢」。
+/// </para>
+/// </summary>
+public sealed record BotPerf(
+    double BotFrameMs,
+    double LoopFrameMs,
+    double BotMsPerSecond,
+    double BotFrameMaxMs,
+    double LoopFrameMaxMs,
+    int FramesPerSecond,
+    double BotSharePercent,
+    long ConnectionDelayMs,
+    long SaveDelayMs,
+    long MapChanges,
+    long Chats,
+    bool BreakerEnabled,
+    bool BreakerOpen,
+    int BreakerCeiling,
+    int BreakerOverloadSeconds,
+    int BreakerTripCount,
+    DateTime BreakerOpenedAt,
+    int BreakerSharePercent,
+    int BreakerTripSeconds,
+    int BreakerRecoverSeconds)
+{
+    /// <summary>首屏还没取到数据时的占位值。</summary>
+    public static BotPerf Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, -1, 0, 0, DateTime.MinValue, 25, 60, 60);
+
+    /// <summary>熔断状态文本。</summary>
+    public string BreakerText
+    {
+        get
+        {
+            if (!BreakerEnabled) return "未启用";
+
+            if (BreakerOpen) return $"已熔断 · 上限 {BreakerCeiling}";
+
+            return BreakerOverloadSeconds > 0
+                ? $"观察中 {BreakerOverloadSeconds}/{BreakerTripSeconds} 秒"
+                : "正常";
+        }
+    }
+
+    /// <summary>熔断触发时刻文本。</summary>
+    public string BreakerOpenedText => BreakerOpenedAt == DateTime.MinValue ? "—" : BreakerOpenedAt.ToString("HH:mm:ss");
 }
 
 /// <summary>命令结果：成功与否 + 一句能直接显示给运营的中文。</summary>
@@ -112,8 +170,18 @@ public sealed record BotProfileRow(
         }
     }
 
-    /// <summary>上次登录时间（没登录过显示「—」）。</summary>
-    public string LastLoginText => LastLogin == DateTime.MinValue ? "—" : LastLogin.ToString("yyyy-MM-dd HH:mm");
+    /// <summary>
+    /// 上次登录时间（没登录过显示「—」）。
+    /// <para>
+    /// <c>LastLogin</c> 在库里存的是 <b>UTC</b>（引擎统一用 <c>Time.Now</c>，底层 <c>DateTime.UtcNow</c>），
+    /// 直接 <c>ToString</c> 会比北京时间早 8 小时 —— 页面上曾经出现「10:40 登录的假人，上次登录 02:40」。
+    /// 展示前必须转本机时区。
+    /// </para>
+    /// </summary>
+    public string LastLoginText =>
+        LastLogin == DateTime.MinValue
+            ? "—"
+            : DateTime.SpecifyKind(LastLogin, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 }
 
 /// <summary>
@@ -150,9 +218,26 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
 
         int real = BotRoster.RealPlayerCount;
 
-        int target = Config.BotEnabled
-            ? Math.Clamp(Config.BotTargetOnline - real, Config.BotMinOnline, Config.BotMaxOnline)
-            : 0;
+        // 生效目标一律读调度器算好的那个值（已含夜间缩水 + 可用上限 + 熔断压制）。
+        //
+        // 原先这里自己算了一遍 Math.Clamp(TargetOnline - real, ...)：漏了夜间缩水，
+        // 于是「水位目标 30 / 在线 15」同时出现在页面上 —— 2026-11-13 排查「水位只到
+        // 15/30」时就是这么被误导的（真实原因是夜间作息，判据还错用了 UTC 小时）。
+        // 同一套公式在三个地方各写一遍，迟早再分叉；现在只有 BotRoster.Evaluate 一处。
+        //
+        // 调度器还没跑过第一轮（刚启动的那几秒）才退回配置值，否则页面会显示 0。
+        int target;
+
+        if (BotRoster.Started)
+        {
+            target = BotRoster.EffectiveTarget;
+        }
+        else
+        {
+            target = Config.BotEnabled
+                ? Math.Clamp(Config.BotTargetOnline - real, Config.BotMinOnline, Config.BotMaxOnline)
+                : 0;
+        }
 
         return new BotOverview(
             BotRoster.Started,
@@ -163,6 +248,7 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
             broken,
             real,
             target,
+            BotRoster.IsNightNow && Config.BotNightEnabled,
             totals.AverageLevel,
             totals.TotalKills,
             totals.TotalDeaths,
@@ -178,6 +264,43 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
     }
 
     public BotSnapshot[] GetSnapshot() => BotRoster.Snapshot();
+
+    /// <summary>
+    /// 性能快照（P4-5）。全部读静态字段，<b>不进游戏线程队列</b> —— 见 <see cref="BotPerf"/> 的说明。
+    /// 服务端没起来时 <see cref="SEnvir"/> 的静态字段仍是默认值，页面会显示 0，不会抛异常。
+    /// </summary>
+    public BotPerf GetPerf()
+    {
+        try
+        {
+            return new BotPerf(
+                ServerPerf.BotMs,
+                ServerPerf.LoopMs,
+                ServerPerf.BotMsPerSecond,
+                ServerPerf.BotMaxMs,
+                ServerPerf.LoopMaxMs,
+                ServerPerf.FramesPerSecond,
+                ServerPerf.BotSharePercent,
+                SEnvir.ConDelay,
+                SEnvir.SaveDelay,
+                BotMetrics.MapChanges,
+                BotMetrics.Chats,
+                Config.BotBreakerEnabled,
+                BotBreaker.Open,
+                BotBreaker.Ceiling,
+                BotBreaker.OverloadSeconds,
+                BotBreaker.TripCount,
+                BotBreaker.OpenedAt,
+                Config.BotBreakerSharePercent,
+                Config.BotBreakerTripSeconds,
+                Config.BotBreakerRecoverSeconds);
+        }
+        catch
+        {
+            // 读静态字段本身不会抛，但配置类没初始化过时也不该让整页崩掉。
+            return BotPerf.Empty;
+        }
+    }
 
     /// <summary>
     /// 读某个假人的角色详情（P5-3 详情弹窗）。
@@ -453,19 +576,52 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
     /// 假人下线、服务器重启之后，等级 / 累计击杀 / 累计在线时长都还在。
     /// </para>
     /// </summary>
-    public Task<IReadOnlyList<BotProfileRow>> GetProfilesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BotProfileRow>> GetProfilesAsync(CancellationToken cancellationToken = default)
     {
-        if (!ServerRunning) return Task.FromResult<IReadOnlyList<BotProfileRow>>(Array.Empty<BotProfileRow>());
+        if (!ServerRunning) return Array.Empty<BotProfileRow>();
 
         try
         {
-            return SEnvir.InvokeOnGameThreadAsync<IReadOnlyList<BotProfileRow>>(ReadProfiles, cancellationToken);
+            // 必须 await，不能 return 这个 Task —— 原先写成 `return InvokeOnGameThreadAsync(...)`
+            // 外面套 try，等于把异常留给调用方：任务里抛出的异常不会经过这个 catch。
+            // 页面那边的 catch 又是「一抛就 return」，于是刷新循环悄悄死掉，档案表永远空白。
+            return await SEnvir.InvokeOnGameThreadAsync<IReadOnlyList<BotProfileRow>>(ReadProfiles, cancellationToken);
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            // 页面关掉了，正常路径，不记日志。
+            return Array.Empty<BotProfileRow>();
+        }
+        catch (Exception ex)
         {
             // 服务没起来 / 数据未加载：返回空列表，页面显示「先启动服务器」。
-            return Task.FromResult<IReadOnlyList<BotProfileRow>>(Array.Empty<BotProfileRow>());
+            // 但一定要留痕：空表和「读库炸了」在页面上长得一模一样。
+            LastProfileError = ex.Message;
+
+            BotLog.SystemError($"假人档案读取失败：{ex.GetType().Name}: {ex.Message}");
+
+            return Array.Empty<BotProfileRow>();
         }
+    }
+
+    /// <summary>最近一次读假人档案的异常信息（页面在空表时把它显示出来，避免「静默空白」）。</summary>
+    public string? LastProfileError { get; private set; }
+
+    private string? _lastRefreshError;
+
+    /// <summary>
+    /// 记录页面刷新循环里的异常。<b>同一条错只记一次</b> —— 循环每 2 秒一轮，
+    /// 每次都写会把 Logs.txt 刷爆，反而看不见别的线索。
+    /// </summary>
+    public void ReportRefreshError(Exception ex)
+    {
+        string message = $"{ex.GetType().Name}: {ex.Message}";
+
+        if (string.Equals(message, _lastRefreshError, StringComparison.Ordinal)) return;
+
+        _lastRefreshError = message;
+
+        BotLog.SystemError($"假人页刷新循环异常（循环继续）：{message}");
     }
 
     private static IReadOnlyList<BotProfileRow> ReadProfiles()
@@ -636,6 +792,29 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
     /// <summary>
     /// 统一投递模板：排队 → 执行 → 用一句中文描述结果。异常一律转成「失败 + 原因」，绝不冒泡到 Blazor circuit。
     /// </summary>
+    /// <summary>
+    /// 后台手动解除全局熔断（P4-5）。
+    /// <para>
+    /// 逃生口：阈值调得太低导致误触发时，不用等 60 秒恢复窗口，也不用去改 <c>Server.ini</c> 重启。
+    /// 注意解除后如果假人段耗时仍然超标，60 秒后会重新触发 —— 那是设计如此，不是没生效。
+    /// </para>
+    /// </summary>
+    public async Task<BotCommandResult> ResetBreakerAsync(ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        if (!BotBreaker.Open) return BotCommandResult.Success("当前没有处于熔断状态。");
+
+        BotCommandResult result = await InvokeAsync(
+            () => { BotBreaker.Reset("后台手动解除"); return BotBreaker.Open; },
+            open => open ? "熔断仍未解除（下一秒可能又触发了）。" : "熔断已解除，水位上限恢复。");
+
+        Record(user, "假人-解除熔断", result.Message);
+
+        return result;
+    }
+
     private async Task<BotCommandResult> InvokeAsync<T>(Func<T> action, Func<T, string> describe)
     {
         if (!ServerRunning) return BotCommandResult.Fail("游戏服务器未运行。");

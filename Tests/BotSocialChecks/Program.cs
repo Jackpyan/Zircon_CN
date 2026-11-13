@@ -145,6 +145,37 @@ Config.BotNightMaxHour = 5;
 Check(!BotRoster.IsNightHour(new DateTime(2026, 11, 12, 5, 0, 0)), "起止相同 → 视为不启用");
 
 Console.WriteLine();
+Console.WriteLine("夜间判据必须按本机时区（2026-11-13 回归）：");
+
+// 背景：调度器原先传的是 SEnvir.Now —— 那是 Library.Time.Now，
+// 底层 DateTime.UtcNow，小时数是 UTC。北京时间 10:30 读出来是 2 点，
+// 白天被判成夜间 → 水位凭空砍半（30 只上 15），日志里一个字都没有。
+// 下面两条只要有一条挂，就说明判据又跑回 UTC 去了。
+DateTime localNow = Library.Time.LocalNow;
+DateTime utcNow = Library.Time.Now;
+
+Config.BotNightMinHour = localNow.Hour;
+Config.BotNightMaxHour = (localNow.Hour + 1) % 24;
+
+if (Config.BotNightMinHour != Config.BotNightMaxHour)
+    Check(BotRoster.IsNightNow, "本机当前小时设为夜间 → IsNightNow 必须为真");
+
+if (utcNow.Hour != localNow.Hour)
+{
+    Config.BotNightMinHour = utcNow.Hour;
+    Config.BotNightMaxHour = (utcNow.Hour + 1) % 24;
+
+    Check(!BotRoster.IsNightNow, "只把 UTC 小时设为夜间 → IsNightNow 必须为假（不能再看 UTC）");
+}
+else
+{
+    Console.WriteLine("    （本机时区恰为 UTC+0，跳过 UTC 对照项）");
+}
+
+Config.BotNightMinHour = 1;
+Config.BotNightMaxHour = 7;
+
+Console.WriteLine();
 Console.WriteLine("榜首降速（P4-4）：");
 
 // 手工搭一条排行榜链表：按等级从高到低。

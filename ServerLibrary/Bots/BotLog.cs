@@ -32,6 +32,34 @@ namespace Server.Bots
             SEnvir.Log(string.Format("[{0:HH:mm:ss.fff}] BOT     [INFO ] {1}", DateTime.Now, message));
         }
 
+        /// <summary>
+        /// 不针对单个假人、但<b>必须留痕</b>的系统级告警（熔断触发/解除）。
+        /// <para>
+        /// 生产档 <see cref="Config.BotLogLevel"/> = 2 会把 <see cref="System"/> 的 Info 全部滤掉，
+        /// 而「假人把服务器拖到降载」这种事绝不能只存在于后台页面里 —— 事后排查要能 grep 到。
+        /// 所以走 Warn 档，默认配置下一定输出。
+        /// </para>
+        /// </summary>
+        public static void SystemWarn(string message)
+        {
+            if (BotLogLevel.Warn < (BotLogLevel)Config.BotLogLevel) return;
+
+            SEnvir.Log(string.Format("[{0:HH:mm:ss.fff}] BOT     [WARN ] {1}", DateTime.Now, message));
+        }
+
+        /// <summary>
+        /// 系统级错误（后台读库失败之类）。
+        /// <para>
+        /// 一律按 Error 档输出，<b>不受 <see cref="Config.BotLogLevel"/> 过滤</b> ——
+        /// 后台某个面板拉不到数据，最怕的就是「页面上只是空着，日志里什么都没有」，
+        /// 这种「静默降级」排查起来比直接报错贵十倍（2026-11-13 假人档案表空白就是这么来的）。
+        /// </para>
+        /// </summary>
+        public static void SystemError(string message)
+        {
+            SEnvir.Log(string.Format("[{0:HH:mm:ss.fff}] BOT     [ERROR] {1}", DateTime.Now, message));
+        }
+
         private static void Write(BotLogLevel level, int seq, string message)
         {
             if ((int)level < Config.BotLogLevel) return;

@@ -67,7 +67,17 @@
         <div class="metric-card green">
             <span>在线假人</span>
             <strong>@Overview.Online<small style="font-size:16px;color:#6d7d82;"> / @Overview.Sessions</small></strong>
-            <small class="metric-note">水位目标 @Overview.Target · 真人 @Overview.RealPlayers</small>
+            <small class="metric-note">
+                水位目标 @Overview.Target · 真人 @Overview.RealPlayers
+                @if (Overview.NightActive)
+                {
+                    <b style="color:var(--amber,#b8860b);"> · 夜间缩水 @Config.BotNightScalePercent%</b>
+                }
+                @if (Perf.BreakerOpen)
+                {
+                    <b style="color:var(--red);"> · 熔断压住</b>
+                }
+            </small>
         </div>
         <div class="metric-card cyan">
             <span>平均等级</span>
@@ -93,6 +103,58 @@
             <span>超重 / 临界</span>
             <strong>@Overview.Overweight / @Overview.NearOverweight</strong>
             <small class="metric-note">负重 ≥100% / 85%</small>
+        </div>
+    </div>
+
+    @* ===================== 假人性能（P4-5） ===================== *@
+    @* 用 config-grid 而不是 metric-grid：这里要的是「一眼扫到有没有异常」，
+       8 个数字排成 3 列紧凑列表比 8 张 140px 的大卡片更省屏，
+       下面那张实时表也能留在首屏内。 *@
+    <h2 style="margin:4px 0 2px;font-size:16px;">
+        假人性能
+        <small style="font-size:11px;font-weight:400;opacity:.6;">P4-5 · 每秒采样一次，页面每 2 秒刷新</small>
+    </h2>
+    <div class="config-grid" style="padding:0 0 12px;">
+        <div class="config-field">
+            <span>假人段开销 <em>熔断判据</em></span>
+            <strong style="@(Perf.BotSharePercent >= Perf.BreakerSharePercent ? "color:var(--red);" : "")">
+                @Perf.BotSharePercent.ToString("0.#")%
+                <small style="font-weight:400;opacity:.6;">· @Perf.BotMsPerSecond.ToString("0") ms/秒</small>
+            </strong>
+            <span class="field-note">占主循环 · 阈值 @Perf.BreakerSharePercent% · 单帧 @Perf.BotFrameMs.ToString("0.00") ms（峰值 @Perf.BotFrameMaxMs.ToString("0.0")）</span>
+        </div>
+        <div class="config-field">
+            <span>整帧耗时 <em>主循环</em></span>
+            <strong>
+                @Perf.LoopFrameMs.ToString("0.00") ms
+                <small style="font-weight:400;opacity:.6;">· 峰值 @Perf.LoopFrameMaxMs.ToString("0.0")</small>
+            </strong>
+            <span class="field-note">@Perf.FramesPerSecond 帧/秒</span>
+        </div>
+        <div class="config-field">
+            <span>存库 / 连接 <em>Save / Con</em></span>
+            <strong>@Perf.SaveDelayMs ms / @Perf.ConnectionDelayMs ms</strong>
+            <span class="field-note">整帧慢但不该算在假人头上的两种情况</span>
+        </div>
+        <div class="config-field">
+            <span>跨图次数 <em>本次进程</em></span>
+            <strong>@Perf.MapChanges.ToString("N0")</strong>
+            <span class="field-note">真的换了地图才算，不是「决定要走」的次数</span>
+        </div>
+        <div class="config-field">
+            <span>发言条数 <em>本次进程</em></span>
+            <strong>@Perf.Chats.ToString("N0")</strong>
+            <span class="field-note">真的发出去才算</span>
+        </div>
+        <div class="config-field">
+            <span>金币产出 <em>本次在线</em></span>
+            <strong>@Overview.GoldPerHour.ToString("N0") /时</strong>
+            <span class="field-note">累计 @Overview.GoldEarned.ToString("N0")</span>
+        </div>
+        <div class="config-field">
+            <span>全局熔断 <em>BotBreaker</em></span>
+            <strong style="@(Perf.BreakerOpen ? "color:var(--red);" : "")">@Perf.BreakerText</strong>
+            <span class="field-note">本次触发 @Perf.BreakerTripCount 次 · 最近 @Perf.BreakerOpenedText</span>
         </div>
     </div>
 
@@ -320,6 +382,65 @@
                 当前生效：目标 @Config.BotTargetOnline · @Config.BotMinOnline~@Config.BotMaxOnline · 每轮 ±@Config.BotMaxChangePerTick · 分图 @Config.BotMapCapacity
             </span>
         </div>
+
+        <h2 style="margin:24px 0 8px;font-size:16px;">
+            过载熔断
+            <small style="font-size:11px;font-weight:400;opacity:.6;">P4-5 · 全局，只管假人</small>
+        </h2>
+        <p style="opacity:.75;font-size:13px;margin:0 0 12px;line-height:1.7;">
+            假人段（调度器 + 所有假人的寻路与决策）占主循环的比例<b>连续</b>超过阈值时，把水位上限<b>临时</b>压到当前在线数 ——
+            <b>只停止新增，不踢在线的人</b>（玩家看到假人成批消失比看到卡顿更假）。
+            假人自然下线后上限跟着降，占比回落到阈值一半以下并持续一段窗口后自动解除。
+            <br />
+            判据用<b>占比</b>而不是毫秒：主循环是自旋的，空闲时几千帧/秒，每帧毫秒数会被帧数稀释到接近 0，
+            真实占用再高也看不出来；占比与帧率无关，直接回答「把假人拿掉服务器会不会好」。
+            <br />
+            <b>这个上限只在内存里，绝不写回 <c>Server.ini</c></b>，重启即还原。
+            默认关闭：先在上面「假人性能」里看几天真实基线，确认阈值有余量再打开 ——
+            阈值定低了误触发的现象是「假人再也不涨了」，比卡顿更难发现。
+        </p>
+        <div class="water-grid">
+            <div class="config-field">
+                <span>启用熔断 <em>BotBreakerEnabled</em></span>
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                    <input type="checkbox" @bind="_breakerEnabled" />
+                    <span>@(_breakerEnabled ? "已启用" : "未启用（观察期）")</span>
+                </label>
+                <span class="field-note">观察期就是现在：只有数据没有动作</span>
+            </div>
+            <div class="config-field">
+                <span>阈值 <em>BotBreakerSharePercent</em></span>
+                <input type="number" min="1" max="100" @bind="_breakerSharePercent" />
+                <span class="field-note">假人段占主循环的百分比上限；当前实测 @Perf.BotSharePercent.ToString("0.#")%</span>
+            </div>
+            <div class="config-field">
+                <span>触发窗口 <em>BotBreakerTripSeconds</em></span>
+                <input type="number" min="5" max="600" @bind="_breakerTripSeconds" />
+                <span class="field-note">连续超标多少秒才触发；太小会被单次存库尖峰误触发</span>
+            </div>
+            <div class="config-field">
+                <span>恢复窗口 <em>BotBreakerRecoverSeconds</em></span>
+                <input type="number" min="5" max="600" @bind="_breakerRecoverSeconds" />
+                <span class="field-note">回落到阈值一半以下并持续多少秒才解除</span>
+            </div>
+        </div>
+
+        <div class="control-cluster" style="margin:14px 0;">
+            <RadzenButton Text="保存熔断设置" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveBreaker" />
+            <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
+                          Click="LoadWatermark" />
+            <RadzenButton Text="立即解除熔断" Icon="lock_open" ButtonStyle="ButtonStyle.Warning"
+                          Click="ResetBreaker" Disabled="@(!Perf.BreakerOpen)" />
+            <span style="font-size:12px;opacity:.7;align-self:center;">
+                当前生效：@(Config.BotBreakerEnabled ? "启用" : "关闭") · @Config.BotBreakerSharePercent% /
+                @Config.BotBreakerTripSeconds s / @Config.BotBreakerRecoverSeconds s
+                @if (Perf.BreakerOpen)
+                {
+                    <b style="color:var(--red);"> · 上限已压到 @Perf.BreakerCeiling</b>
+                }
+            </span>
+        </div>
     </AuthorizeView>
 
     <div class="config-grid" style="margin-bottom:14px;padding:0;">
@@ -338,6 +459,11 @@
     {
         <p style="opacity:.75;">
             @(Overview.SchedulerStarted ? "还没有假人档案（假人尚未建号，或服务器未运行）。" : "调度器未启动（游戏服务器未运行或未初始化）。")
+            @if (!string.IsNullOrEmpty(Admin.LastProfileError))
+            {
+                <br />
+                <b style="color:var(--red);">读取失败：@Admin.LastProfileError</b>
+            }
         </p>
     }
     else
@@ -511,7 +637,17 @@
         <div><span>红名 PK</span><b>@(Config.BotPkEnabled ? "开" : "关") · 每 @Config.BotPkIntervalMinutes 分钟</b></div>
         <div><span>榜首降速</span><b>@(Config.BotTopSlowEnabled ? "开" : "关") · 前 @Config.BotTopRankLimit 名 / @Config.BotTopHoldMinutes 分钟后停 @Config.BotTopSlowMinutes 分钟</b></div>
         <div><span>真人优先 / 跳过 BOSS</span><b>@(Config.BotRespectRealPlayerTags ? "开" : "关") / @(Config.BotSkipBoss ? "开" : "关")</b></div>
-        <div><span>夜间比例</span><b>@(Config.BotNightEnabled ? Config.BotNightScalePercent + "%（" + Config.BotNightMinHour + "~" + Config.BotNightMaxHour + " 点）" : "关")</b></div>
+        <div>
+            <span>夜间比例</span>
+            <b>
+                @(Config.BotNightEnabled ? Config.BotNightScalePercent + "%（" + Config.BotNightMinHour + "~" + Config.BotNightMaxHour + " 点）" : "关")
+                @if (Overview.NightActive)
+                {
+                    <em style="font-style:normal;color:var(--amber,#b8860b);"> · 当前生效中</em>
+                }
+                <small style="font-weight:400;opacity:.6;"> 按服务器本机时区（现在 @NightClockText）</small>
+            </b>
+        </div>
     </div>
 }
 
@@ -775,6 +911,9 @@
     private BotSnapshot[] Rows { get; set; } = Array.Empty<BotSnapshot>();
     private BotOverview Overview { get; set; } = BotOverview.Empty;
 
+    /// <summary>性能指标（P4-5）：帧耗时 / 熔断状态 / 跨图与发言计数。</summary>
+    private BotPerf Perf { get; set; } = BotPerf.Empty;
+
     /// <summary>假人档案（跨重启持久化的历史数据）。</summary>
     private IReadOnlyList<BotProfileRow> Profiles { get; set; } = Array.Empty<BotProfileRow>();
 
@@ -799,6 +938,22 @@
 
     /// <summary>同一张练级图的假人容量。</summary>
     private int _waterMapCapacity;
+
+    #endregion
+
+    #region P4-5 过载熔断设置
+
+    /// <summary>是否启用全局熔断。</summary>
+    private bool _breakerEnabled;
+
+    /// <summary>假人段占主循环的百分比阈值。</summary>
+    private int _breakerSharePercent;
+
+    /// <summary>连续超标多少秒触发。</summary>
+    private int _breakerTripSeconds;
+
+    /// <summary>回落到阈值一半以下并持续多少秒解除。</summary>
+    private int _breakerRecoverSeconds;
 
     #endregion
 
@@ -1003,6 +1158,13 @@
 
     private bool ServerRunning => Admin.ServerRunning;
 
+    /// <summary>
+    /// 服务器本机时间（作息判据看的就是它）。
+    /// 显示出来是为了让运营一眼确认「夜间缩水按哪个时区算」—— 判据曾经错用 UTC 小时，
+    /// 页面上有这个时钟就能当场看出对不对。
+    /// </summary>
+    private static string NightClockText => DateTime.Now.ToString("HH:mm");
+
     protected override async Task OnInitializedAsync()
     {
         AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
@@ -1021,6 +1183,11 @@
 
         Refresh();
         LoadWatermark();
+
+        // 首屏就把假人档案拉出来（走游戏线程排队）。
+        // 之前只靠刷新循环里的第 0 个 tick 去取，而 SSR 预渲染那一刻 Profiles 必然是空数组 ——
+        // 于是首屏永远显示「还没有假人档案」，看起来就像表坏了（2026-11-13 排查）。
+        Profiles = await Admin.GetProfilesAsync();
 
         // 地图下拉只在首屏取一次（244 条，静态数据）。
         _mapOptions = Admin.MapOptions().ToArray();
@@ -1063,6 +1230,7 @@
     {
         Rows = Admin.GetSnapshot();
         Overview = Admin.GetOverview();
+        Perf = Admin.GetPerf();
 
         var files = Admin.DataFiles();
         _namesPath = files.Path;
@@ -1168,9 +1336,21 @@
             {
                 return;
             }
-            catch
+            catch (Exception ex)
             {
-                return;
+                // 一次取数失败不能把整个刷新循环打死 —— 原先这里是裸 `return`，
+                // 只要有一轮抛异常，页面就永久停在首屏那份快照上，
+                // 现象是「档案表一直空 / 在线数不再跳」，而日志里一个字都没有。
+                Admin.ReportRefreshError(ex);
+
+                try
+                {
+                    await Task.Delay(5000, token);
+                }
+                catch (TaskCanceledException)
+                {
+                    return;
+                }
             }
         }
     }
@@ -1244,6 +1424,11 @@
         _waterMax = Config.BotMaxOnline;
         _waterStep = Config.BotMaxChangePerTick;
         _waterMapCapacity = Config.BotMapCapacity;
+
+        _breakerEnabled = Config.BotBreakerEnabled;
+        _breakerSharePercent = Config.BotBreakerSharePercent;
+        _breakerTripSeconds = Config.BotBreakerTripSeconds;
+        _breakerRecoverSeconds = Config.BotBreakerRecoverSeconds;
     }
 
     /// <summary>
@@ -1295,6 +1480,56 @@
             Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
         }
     }
+
+    #endregion
+
+    #region P4-5 过载熔断
+
+    /// <summary>
+    /// 保存熔断设置。和 <see cref="SaveWatermark"/> 一样走 <see cref="ConfigurationService.Save"/>，
+    /// 单独一个方法而不是合并进去：两块设置在页面上是两个区块、两个按钮，
+    /// 合并保存会让「只改熔断」的人莫名其妙地把水位也重写一遍（还会多一条审计）。
+    /// </summary>
+    private async Task SaveBreaker()
+    {
+        if (_breakerSharePercent <= 0 || _breakerSharePercent > 100)
+        {
+            Report(BotCommandResult.Fail("熔断阈值必须在 1 ~ 100 之间（占主循环的百分比）"));
+            return;
+        }
+
+        if (_breakerTripSeconds <= 0 || _breakerRecoverSeconds <= 0)
+        {
+            Report(BotCommandResult.Fail("触发窗口与恢复窗口都必须大于 0 秒"));
+            return;
+        }
+
+        Dictionary<string, string?> values = new()
+        {
+            [nameof(Config.BotBreakerEnabled)] = _breakerEnabled ? "True" : "False",
+            [nameof(Config.BotBreakerSharePercent)] = _breakerSharePercent.ToString(),
+            [nameof(Config.BotBreakerTripSeconds)] = _breakerTripSeconds.ToString(),
+            [nameof(Config.BotBreakerRecoverSeconds)] = _breakerRecoverSeconds.ToString(),
+        };
+
+        try
+        {
+            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+            ConfigurationManager.Save(values, user);
+
+            Report(BotCommandResult.Success(
+                $"熔断设置已保存：{(_breakerEnabled ? "启用" : "关闭")}、" +
+                $"{Config.BotBreakerSharePercent}% / {Config.BotBreakerTripSeconds} s / {Config.BotBreakerRecoverSeconds} s。下一轮评估生效。"));
+        }
+        catch (Exception ex)
+        {
+            Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
+        }
+    }
+
+    /// <summary>手动解除熔断（误触发时的逃生口）。</summary>
+    private async Task ResetBreaker() => Report(await Admin.ResetBreakerAsync(_user));
 
     #endregion
 

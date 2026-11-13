@@ -430,6 +430,11 @@ namespace Server.Models
 
             ProcessGroup();
 
+            // AI 假人的真实开销在这里，不在 BotRoster.Process() 里 ——
+            // 假人就是普通 PlayerObject，走主循环的玩家遍历，所以必须在这一段单独计时（P4-5）。
+            // 圈住的是「只有假人才会走」的两块：自动寻路（A* 规划是大头）+ BotBrain 决策。
+            long botSlice = Bot != null ? ServerPerf.BeginBotSlice() : 0;
+
             AutoPathService.Instance.Process(this);
 
             // AI 假人没有客户端，没人帮它回 C.AutoPathMoveStarted，自动寻路会永远停在
@@ -440,6 +445,8 @@ namespace Server.Models
 
             // AI 假人：真人这里恒为 null，零开销。
             Bot?.Process();
+
+            if (botSlice != 0) ServerPerf.EndBotSlice(botSlice);
         }
         public override void ProcessAction(DelayedAction action)
         {

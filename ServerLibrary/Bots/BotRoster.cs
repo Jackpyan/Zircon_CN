@@ -201,6 +201,9 @@ namespace Server.Bots
 
         /// <summary>冷启动暖机中：本次启动还没铺满过，放人按 <see cref="BotOptions.StartupRampSeconds"/> 间隔。</summary>
         private static bool _warmup;
+
+        /// <summary>上一轮是否在夜间缩水（只在进出夜间的那一轮打一条日志，不是每轮都刷）。</summary>
+        private static bool _nightActive;
         private static DateTime _nextSnapshotTime = DateTime.MinValue;
         private static bool _started;
 
@@ -216,6 +219,15 @@ namespace Server.Bots
         /// 免得每次刷新都要往游戏线程排一次任务（页面首屏也拿不到异步结果）。
         /// </summary>
         public static int RealPlayerCount { get; private set; }
+
+        /// <summary>
+        /// 最近一次 <see cref="Evaluate"/> 算出的<b>实际生效目标</b>（已含夜间缩水、可用上限、熔断压制）。
+        /// <para>
+        /// 后台页面必须读这个值，不能自己再算一遍 —— 2026-11-13 就是因为页面自己算，
+        /// 漏了夜间缩水，出现「水位目标 30 / 在线 15」的自相矛盾，被误判成水位调度坏了。
+        /// </para>
+        /// </summary>
+        public static int EffectiveTarget { get; private set; }
 
         /// <summary>
         /// 现在是否处于「夜间时段」（P2-6 作息）。
@@ -236,6 +248,22 @@ namespace Server.Bots
             return min < max ? hour >= min && hour < max : hour >= min || hour < max;
         }
 
+        /// <summary>
+        /// 现在是否夜间，<b>按本机时区</b>判断。
+        /// <para>
+        /// ⚠️ 绝对不能用 <c>SEnvir.Now</c>：它是 <see cref="Library.Time.Now"/>，
+        /// 底层是 <c>DateTime.UtcNow + Stopwatch</c>，<b>小时数是 UTC</b>。
+        /// 北京时间 10:30 读出来是 2 点 —— 白天被判成夜间，水位凭空砍半（30 → 15），
+        /// 而且日志里一条提示都没有（2026-11-13 实测踩到，见 <c>修正未测试.md</c> 第 62 章）。
+        /// </para>
+        /// <para>
+        /// 作息是给「运营者的作息」看的，只能是本机时区。日志（<c>SEnvir.Log</c>）用的也是
+        /// <c>Time.LocalNow</c>，两边口径一致，运维看到的日志时间和缩水时段能对上。
+        /// 前提：服务器时区要设对（Linux 上 <c>TZ=Asia/Shanghai</c>）。
+        /// </para>
+        /// </summary>
+        public static bool IsNightNow => IsNightHour(Library.Time.LocalNow);
+
         /// <summary>启动调度。按配置建满序号 1..BotMaxOnline 的 Session，是否上线由水位决定。</summary>
         public static void Start()
         {
@@ -247,6 +275,14 @@ namespace Server.Bots
             BotData.EnsureDirectory();
 
             Sessions.Clear();
+
+            // 进程内计数与熔断状态跟着调度器一起归零（重启后不该带着上一次的「已熔断」）。
+            BotMetrics.Reset();
+            BotBreaker.Clear();
+
+            // 生效目标与夜间标记同理：调度器没跑过之前页面不该显示上一轮的目标。
+            EffectiveTarget = 0;
+            _nightActive = false;
 
             BotOptions options = BotOptions.FromConfig();
             int capacity = Math.Max(options.MaxOnline, options.TargetOnline);
@@ -288,6 +324,12 @@ namespace Server.Bots
             _started = false;
             _warmup = false;
 
+            EffectiveTarget = 0;
+            _nightActive = false;
+
+            // 停服时解除熔断：下次启动不该带着「上次压住了水位」的状态。
+            BotBreaker.Clear();
+
             lock (SnapshotSync)
                 _snapshot = Array.Empty<BotSnapshot>();
 
@@ -321,6 +363,12 @@ namespace Server.Bots
             if (SEnvir.Now >= _nextSnapshotTime)
             {
                 _nextSnapshotTime = SEnvir.Now.AddSeconds(1);
+
+                // 全局熔断（P4-5）：每秒看一次假人段耗时，超阈值就压住水位上限。
+                // 放在 RebuildSnapshot 之前 —— 同一秒里快照读到的上限就是压过之后的，
+                // 否则页面会先显示「目标 30」再跳到「目标 12」，看着像抖了一下。
+                BotBreaker.Evaluate(OnlineCount);
+
                 RebuildSnapshot();
             }
 
@@ -369,8 +417,28 @@ namespace Server.Bots
                 // 作息（P2-6）：夜里目标人数按比例缩水，白天恢复。
                 // 缩水不是"整点集体消失"—— 下线走 MaxChangePerTick（默认 1 个/轮），
                 // 30 人减到 15 人是十五分钟里一个一个走的，跟真人下线一个节奏。
-                if (options.NightEnabled && IsNightHour(SEnvir.Now))
+                //
+                // ⚠️ 判据必须是 IsNightNow（本机时区），不能是 IsNightHour(SEnvir.Now)：
+                // 后者的小时数是 UTC，北京时间白天会被判成夜间（2026-11-13 修）。
+                bool night = options.NightEnabled && IsNightNow;
+
+                if (night)
                     target = Math.Max(options.MinOnline, target * options.NightScalePercent / 100);
+
+                // 进出夜间各留一条日志：缩水是「配置生效」而不是故障，
+                // 但没日志时运营只会看到「30 个只上 15 个」，第一反应是水位坏了。
+                //
+                // 走 SystemWarn 而不是 System：后者是 Info 档，生产默认 BotLogLevel=2 会全滤掉，
+                // 那就等于没记（P4-5 熔断日志踩过同一个坑）。一天最多两条，不吵。
+                if (night != _nightActive)
+                {
+                    _nightActive = night;
+
+                    BotLog.SystemWarn(string.Format("作息切换：{0}（本机 {1:HH:mm}，夜间 {2}~{3} 点，比例 {4}%），目标 {5}",
+                        night ? "进入夜间缩水" : "退出夜间缩水", Library.Time.LocalNow,
+                        Config.BotNightMinHour, Config.BotNightMaxHour,
+                        night ? options.NightScalePercent : 100, target));
+                }
 
                 // 被后台单独关掉的序号不参与水位：可用 20 个就不能把目标定成 30，
                 // 否则永远 online < target，冷启动暖机标志永远清不掉，掉线补水要白等 45 秒。
@@ -380,6 +448,15 @@ namespace Server.Bots
             }
 
             int online = OnlineCount;
+
+            // 全局熔断（P4-5）：上限被压住时，目标跟着当前在线数走 —— 只停止新增，不踢在线。
+            // ClampTarget 会顺手把上限往下带（ceiling = min(ceiling, online)），
+            // 所以 target <= online 恒成立，下面「online > target」的下线分支永远不会被熔断触发。
+            if (options.Enabled)
+                target = BotBreaker.ClampTarget(target, online);
+
+            // 后台页面读这个值（含夜间缩水 + 熔断压制），不再自己算一遍。
+            EffectiveTarget = target;
 
             if (online < target)
             {
