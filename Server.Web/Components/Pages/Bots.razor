@@ -96,6 +96,23 @@
         </div>
     </div>
 
+    @* 传送参数必须和行内「传送」按钮同屏 —— 放在「上线管理」tab 里时，
+       点按钮的人看不到自己会传去哪，等于闭着眼睛点。 *@
+    <AuthorizeView Policy="@AdminPermissions.PolicyOperate">
+        <div class="teleport-bar">
+            <span class="teleport-label">传送目标</span>
+            <select @bind="_teleportMapIndex" class="teleport-map">
+                @foreach (BotMapOption option in _mapOptions)
+                {
+                    <option value="@option.Index">@option.ToString()</option>
+                }
+            </select>
+            <input type="number" @bind="_teleportX" placeholder="X" class="teleport-xy" />
+            <input type="number" @bind="_teleportY" placeholder="Y" class="teleport-xy" />
+            <span class="teleport-hint">行内「传送」按钮用这张图 + 坐标（X/Y 都要 &gt; 0）</span>
+        </div>
+    </AuthorizeView>
+
     @if (Rows.Length == 0)
     {
         <p style="opacity:.75;">
@@ -106,7 +123,7 @@
     {
         <div class="table-panel standalone">
             <div class="table-scroll">
-                <table class="admin-table">
+                <table class="admin-table bot-live-table">
                     <thead>
                         <tr>
                             <th style="width:40px;">#</th>
@@ -125,8 +142,8 @@
                             <th style="width:104px;">负重</th>
                             <th style="width:86px;">装备持久</th>
                             <th style="width:96px;">最近技能</th>
-                            <th>最近动作 / 最后错误</th>
-                            <th style="width:200px;">操作</th>
+                            <th style="width:180px;">最近动作 / 最后错误</th>
+                            <th style="width:196px;">操作</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -261,63 +278,40 @@
                           Disabled="@(GameServer.State != GameServerState.Running || !Overview.SchedulerStarted)" />
         </div>
 
-        <div class="config-grid" style="margin-bottom:14px;padding:0 0 14px;">
-            <div class="config-field">
-                <span>传送目标地图</span>
-                <select @bind="_teleportMapIndex">
-                    @foreach (BotMapOption option in _mapOptions)
-                    {
-                        <option value="@option.Index">@option.ToString()</option>
-                    }
-                </select>
-            </div>
-            <div class="config-field">
-                <span>传送坐标（空 = 地图中心附近）</span>
-                <div style="display:flex;gap:6px;">
-                    <input type="number" @bind="_teleportX" placeholder="X" style="width:80px;" />
-                    <input type="number" @bind="_teleportY" placeholder="Y" style="width:80px;" />
-                </div>
-            </div>
-            <div class="config-field">
-                <span>提示</span>
-                <strong style="font-weight:400;">行内「传送」按钮用上面这张图 + 坐标；X/Y 必须都 &gt; 0</strong>
-            </div>
-        </div>
-
         <h2 style="margin:20px 0 8px;font-size:16px;">水位参数</h2>
         <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
             改完点「保存水位」写入 <code>Server.ini</code>，下一轮调度就按新值执行，<b>不用重启</b>。
             这里和「配置 → Bots」改的是同一份数据，在哪边改都算数。
         </p>
 
-        <div class="config-grid" style="margin-bottom:10px;padding:0 0 14px;">
+        <div class="water-grid">
             <div class="config-field">
                 <span>目标在线 <em>BotTargetOnline</em></span>
-                <input type="number" min="0" max="500" @bind="_waterTarget" style="width:96px;" />
-                <span style="color:#6d7d82;">真人 + 假人合计；低于它补人、高于它撤人</span>
+                <input type="number" min="0" max="500" @bind="_waterTarget" />
+                <span class="field-note">真人 + 假人合计；低于它补人、高于它撤人</span>
             </div>
             <div class="config-field">
-                <span>下限 / 上限 <em>BotMin/MaxOnline</em></span>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <input type="number" min="0" max="500" @bind="_waterMin" style="width:80px;" />
-                    <span style="color:#6d7d82;">~</span>
-                    <input type="number" min="0" max="500" @bind="_waterMax" style="width:80px;" />
+                <span>下限 ~ 上限 <em>BotMin/MaxOnline</em></span>
+                <div class="water-range">
+                    <input type="number" min="0" max="500" @bind="_waterMin" />
+                    <span>~</span>
+                    <input type="number" min="0" max="500" @bind="_waterMax" />
                 </div>
-                <span style="color:#6d7d82;">水位会被夹在这个区间内</span>
+                <span class="field-note">水位会被夹在这个区间内</span>
             </div>
             <div class="config-field">
-                <span>每轮变更上限 <em>BotMaxChangePerTick</em></span>
-                <input type="number" min="1" max="10" @bind="_waterStep" style="width:96px;" />
-                <span style="color:#6d7d82;">一次最多上/下几个人（越小越平滑）</span>
+                <span>每轮变更 <em>BotMaxChangePerTick</em></span>
+                <input type="number" min="1" max="10" @bind="_waterStep" />
+                <span class="field-note">一次最多上/下几个人，越小越平滑</span>
             </div>
             <div class="config-field">
                 <span>分图容量 <em>BotMapCapacity</em></span>
-                <input type="number" min="1" max="50" @bind="_waterMapCapacity" style="width:96px;" />
-                <span style="color:#6d7d82;">同一张练级图最多几个假人</span>
+                <input type="number" min="1" max="50" @bind="_waterMapCapacity" />
+                <span class="field-note">同一张练级图最多几个假人</span>
             </div>
         </div>
 
-        <div class="control-cluster" style="margin-bottom:14px;">
+        <div class="control-cluster" style="margin:14px 0;">
             <RadzenButton Text="保存水位" Icon="save" ButtonStyle="ButtonStyle.Primary"
                           Click="SaveWatermark" />
             <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
@@ -894,6 +888,16 @@
     [SupplyParameterFromQuery(Name = "tab")]
     private int? DetailTabQuery { get; set; }
 
+    /// <summary>
+    /// 深链直接打开某个页面 tab：<c>/bots?view=manage</c>。
+    /// <para>
+    /// 和 <see cref="DetailTabQuery"/> 分开命名 —— 那个是弹窗内的「角色/属性」，
+    /// 两者都用 <c>tab</c> 会互相覆盖。运营可以把某个 tab 存成书签。
+    /// </para>
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "view")]
+    private string? ViewQuery { get; set; }
+
     private ElementReference _detailRoot;
 
     /// <summary>弹窗刚打开，等下一帧渲染完再把焦点抢过来，否则 Esc 收不到。</summary>
@@ -1006,6 +1010,14 @@
         _user = state.User;
         _canOperate = AdminPermissions.CanOperate(state.User);
         _canOwner = AdminPermissions.CanOwner(state.User);
+
+        _tab = ViewQuery switch
+        {
+            "manage" => TabManage,
+            "files" => TabFiles,
+            "logs" => TabLogs,
+            _ => TabOverview,
+        };
 
         Refresh();
         LoadWatermark();

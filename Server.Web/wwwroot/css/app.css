@@ -124,6 +124,20 @@ a { color: inherit; }
 .config-field { display: grid; gap: 7px; }
 .config-field > span { display: flex; justify-content: space-between; color: #aab6ba; font-size: 11px; }
 .config-field em, .editor-fields em { color: #607177; font: normal 9px var(--mono); }
+.config-field .field-note { color: #6d7d82; font-size: 10px; line-height: 1.4; }
+
+/* 水位参数是 4 个同质字段：宽屏 4 列一行、1200 以下 2 列、820 以下 1 列，
+   每种宽度都能整行排满（5 个字段时 3 列会剩 2 个掉到第二行、右边空一片）。 */
+.water-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 6px 0 0; }
+.water-range { display: flex; align-items: center; gap: 6px; }
+.water-range span { color: #607177; font: 11px var(--mono); }
+
+/* 实时总览的传送工具条：和行内「传送」按钮同屏，避免「设置在这里、按钮在那里」。 */
+.teleport-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line); background: var(--panel); }
+.teleport-bar .teleport-label { color: #839399; font: 500 10px var(--mono); letter-spacing: .08em; }
+.teleport-bar .teleport-map { width: 260px; min-height: 32px; padding: 4px 8px; }
+.teleport-bar .teleport-xy { width: 84px; min-height: 32px; padding: 4px 8px; }
+.teleport-bar .teleport-hint { color: #6d7d82; font-size: 11px; }
 input, select { width: 100%; min-height: 38px; padding: 8px 10px; color: var(--text); border: 1px solid #334044; background: #0c1214; outline: none; }
 input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54d4dd16; }
 
@@ -132,11 +146,18 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .entity-switcher button.active { color: #101517; border-color: var(--amber); background: var(--amber); }
 .data-workbench { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; min-height: 620px; }
 .table-panel, .editor-panel { min-width: 0; border: 1px solid var(--line); background: var(--panel); }
-.table-panel.standalone { min-height: 550px; }
+.table-panel.standalone { min-height: 0; }
 .table-meta, .editor-title { display: flex; justify-content: space-between; align-items: center; min-height: 48px; padding: 0 15px; border-bottom: 1px solid var(--line); font: 11px var(--mono); }
 .table-meta span { color: var(--muted); }
-.table-scroll { overflow: auto; max-height: 610px; }
+/* 表格高度跟着视口走：固定 610px 时，窗口一高下面就留一大片空白。
+   400px 是页头 + tab + KPI 卡 + 传送条 + 图例的总占用；min-height 兜住窗口很矮的情况，
+   免得表格塌成一条线。 */
+.table-scroll { overflow: auto; max-height: calc(100vh - 400px); min-height: 300px; }
+/* table-layout: fixed 是必须的：auto 布局下列宽由内容撑，而「最近动作 / 最后错误」的文字
+   每次刷新都不一样（打怪 0.2/0.0 → 回城卖药 186,298），列宽就跟着跳，整张表像在抖。
+   只作用在实时表上 —— 档案表内容稳定，Diagnostics 的表格又没给全列宽，不能一起改。 */
 .admin-table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 11px; }
+.bot-live-table { table-layout: fixed; }
 .admin-table th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; text-align: left; color: #839399; background: #0d1315; border-bottom: 1px solid var(--line); font: 500 10px var(--mono); }
 .admin-table td { max-width: 240px; overflow: hidden; text-overflow: ellipsis; padding: 8px 12px; border-bottom: 1px solid #1d272a; color: #bac4c7; }
 .admin-table tr { cursor: pointer; }
@@ -253,6 +274,7 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     .metric-grid { grid-template-columns: repeat(3, 1fr); }
     .config-grid { grid-template-columns: repeat(2, 1fr); }
     .plugin-grid { grid-template-columns: repeat(2, 1fr); }
+    .water-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 820px) {
     .shell { grid-template-columns: 1fr; }
@@ -263,7 +285,7 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     .topbar { display: none; }
     .page-stage { padding: 22px 14px 40px; }
     .page-heading { align-items: flex-start; flex-direction: column; }
-    .metric-grid, .data-strip, .config-grid, .plugin-grid { grid-template-columns: 1fr; }
+    .metric-grid, .data-strip, .config-grid, .plugin-grid, .water-grid { grid-template-columns: 1fr; }
     .data-strip > div { border-right: 0; border-bottom: 1px solid var(--line); }
     .data-workbench { grid-template-columns: 1fr; }
     .runtime-grid-layout { grid-template-columns: 1fr; }
