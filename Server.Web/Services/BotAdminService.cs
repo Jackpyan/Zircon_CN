@@ -267,42 +267,145 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
         return BotCommandResult.Success(enabled ? "已启用假人调度（按水位拉人）。" : "已停用假人调度，在线假人会逐个优雅下线。");
     }
 
-    public Task<BotCommandResult> ForceSpawnAsync(int count) =>
-        InvokeAsync(() => BotRoster.ForceSpawn(count),
+    /// <summary>
+    /// 单人操作统一守卫。
+    /// <para>
+    /// 页面上的按钮靠 <c>Disabled</c> 挡，但那只是渲染属性 —— 去掉 disabled 之后事件照样
+    /// 能发到服务端。所以每个会改动游戏状态的方法都必须在这里再判一次，不能只信前端。
+    /// </para>
+    /// </summary>
+    private static BotCommandResult? RequireOperate(ClaimsPrincipal? user) =>
+        AdminPermissions.CanOperate(user)
+            ? null
+            : BotCommandResult.Fail("当前身份没有操作权限（需要「运营」及以上）。");
+
+    /// <summary>会改角色数据的操作（技能自检会给假人加经验），只对主密码开放。</summary>
+    private static BotCommandResult? RequireOwner(ClaimsPrincipal? user) =>
+        AdminPermissions.CanOwner(user)
+            ? null
+            : BotCommandResult.Fail("这项操作需要主密码身份。");
+
+    /// <summary>记一条「谁点了什么」的审计。失败的操作也记，因为「点了但没生效」同样要能追溯。</summary>
+    private void Record(ClaimsPrincipal? user, string action, string detail) =>
+        audit.Record(
+            user?.Identity?.Name ?? "unknown",
+            action,
+            detail,
+            address: null,
+            AdminPermissions.Describe(user),
+            "Success",
+            target: null,
+            reason: null,
+            userAgent: null);
+
+    public async Task<BotCommandResult> ForceSpawnAsync(int count, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.ForceSpawn(count),
             n => n > 0 ? $"已拉起 {n} 个假人。" : "没有可拉起的空闲序号（都在线 / 已停用 / 故障）。");
 
-    public Task<BotCommandResult> ForceDespawnAsync(int count) =>
-        InvokeAsync(() => BotRoster.ForceDespawn(count),
+        Record(user, "假人-手动上线", $"{count} 个：{result.Message}");
+
+        return result;
+    }
+
+    public async Task<BotCommandResult> ForceDespawnAsync(int count, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.ForceDespawn(count),
             n => n > 0 ? $"已下线 {n} 个假人。" : "当前没有可下线的假人。");
 
+        Record(user, "假人-手动下线", $"{count} 个：{result.Message}");
+
+        return result;
+    }
+
     /// <summary>单人开关：关掉之后调度器不再拉起这个序号。</summary>
-    public Task<BotCommandResult> SetEnabledAsync(int seq, bool enabled) =>
-        InvokeAsync(() => BotRoster.SetEnabled(seq, enabled),
+    public async Task<BotCommandResult> SetEnabledAsync(int seq, bool enabled, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.SetEnabled(seq, enabled),
             ok => ok ? $"BOT#{seq:00} 已{(enabled ? "启用" : "停用")}。" : $"找不到 BOT#{seq:00}。");
 
-    public Task<BotCommandResult> KickAsync(int seq) =>
-        InvokeAsync(() => BotRoster.Kick(seq),
+        Record(user, enabled ? "假人-启用单人" : "假人-停用单人", $"BOT#{seq:00}");
+
+        return result;
+    }
+
+    public async Task<BotCommandResult> KickAsync(int seq, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.Kick(seq),
             ok => ok ? $"BOT#{seq:00} 开始下线（调度器稍后会按水位重新拉起）。" : $"BOT#{seq:00} 不在线或不存在。");
 
-    public Task<BotCommandResult> RestockAsync(int seq) =>
-        InvokeAsync(() => BotRoster.RequestRestock(seq),
+        Record(user, "假人-踢下线", $"BOT#{seq:00}：{result.Message}");
+
+        return result;
+    }
+
+    public async Task<BotCommandResult> RestockAsync(int seq, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.RequestRestock(seq),
             ok => ok ? $"BOT#{seq:00} 已收到补给指令，下一次决策就回城。" : $"BOT#{seq:00} 不在线，无法补给。");
 
-    public Task<BotCommandResult> ResetOneAsync(int seq) =>
-        InvokeAsync(() => BotRoster.Reset(seq),
+        Record(user, "假人-立即补给", $"BOT#{seq:00}");
+
+        return result;
+    }
+
+    public async Task<BotCommandResult> ResetOneAsync(int seq, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.Reset(seq),
             ok => ok ? $"BOT#{seq:00} 已重置为可调度状态。" : $"找不到 BOT#{seq:00}。");
+
+        Record(user, "假人-单人重置", $"BOT#{seq:00}");
+
+        return result;
+    }
 
     /// <summary>
     /// D4 验收用：把某个在线假人直接加到 14 级，跑一次技能补齐，回报「学没学到、学到几个」。
     /// 会给假人加经验（等于作弊），所以只对 <c>CanOwner</c>（主密码）开放。
     /// </summary>
-    public Task<BotCommandResult> SkillCheckAsync(int seq) =>
-        InvokeAsync(() => BotRoster.SkillCheck(seq),
+    public async Task<BotCommandResult> SkillCheckAsync(int seq, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOwner(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.SkillCheck(seq),
             r => r.Ok ? "技能自检：" + r.Detail : "技能自检失败：" + r.Detail);
 
-    public Task<BotCommandResult> TeleportAsync(int seq, int mapIndex, int x, int y) =>
-        InvokeAsync(() => BotRoster.Teleport(seq, mapIndex, x, y),
+        Record(user, "假人-技能自检", $"BOT#{seq:00}：{result.Message}");
+
+        return result;
+    }
+
+    public async Task<BotCommandResult> TeleportAsync(int seq, int mapIndex, int x, int y, ClaimsPrincipal? user)
+    {
+        BotCommandResult? denied = RequireOperate(user);
+        if (denied != null) return denied;
+
+        BotCommandResult result = await InvokeAsync(() => BotRoster.Teleport(seq, mapIndex, x, y),
             ok => ok ? $"BOT#{seq:00} 已传送到地图 #{mapIndex}（{x},{y}）。" : $"传送失败：BOT#{seq:00} 不在线，或地图 #{mapIndex} 不可用。");
+
+        Record(user, "假人-传送", $"BOT#{seq:00} → 地图 #{mapIndex} ({x},{y})：{result.Message}");
+
+        return result;
+    }
 
     /// <summary>全部重置：把 Broken / 卡住的都拉回可调度。写审计（一次重排 30 个假人）。</summary>
     public async Task<BotCommandResult> ResetAllAsync(ClaimsPrincipal? user, string? address)

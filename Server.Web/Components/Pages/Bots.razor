@@ -11,6 +11,7 @@
 @inject IGameServerController GameServer
 @inject ServerMetricsService Metrics
 @inject LogBufferService Logs
+@inject ConfigurationService ConfigurationManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>AI 假人 · Zircon</PageTitle>
@@ -282,6 +283,49 @@
                 <strong style="font-weight:400;">行内「传送」按钮用上面这张图 + 坐标；X/Y 必须都 &gt; 0</strong>
             </div>
         </div>
+
+        <h2 style="margin:20px 0 8px;font-size:16px;">水位参数</h2>
+        <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
+            改完点「保存水位」写入 <code>Server.ini</code>，下一轮调度就按新值执行，<b>不用重启</b>。
+            这里和「配置 → Bots」改的是同一份数据，在哪边改都算数。
+        </p>
+
+        <div class="config-grid" style="margin-bottom:10px;padding:0 0 14px;">
+            <div class="config-field">
+                <span>目标在线 <em>BotTargetOnline</em></span>
+                <input type="number" min="0" max="500" @bind="_waterTarget" style="width:96px;" />
+                <span style="color:#6d7d82;">真人 + 假人合计；低于它补人、高于它撤人</span>
+            </div>
+            <div class="config-field">
+                <span>下限 / 上限 <em>BotMin/MaxOnline</em></span>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <input type="number" min="0" max="500" @bind="_waterMin" style="width:80px;" />
+                    <span style="color:#6d7d82;">~</span>
+                    <input type="number" min="0" max="500" @bind="_waterMax" style="width:80px;" />
+                </div>
+                <span style="color:#6d7d82;">水位会被夹在这个区间内</span>
+            </div>
+            <div class="config-field">
+                <span>每轮变更上限 <em>BotMaxChangePerTick</em></span>
+                <input type="number" min="1" max="10" @bind="_waterStep" style="width:96px;" />
+                <span style="color:#6d7d82;">一次最多上/下几个人（越小越平滑）</span>
+            </div>
+            <div class="config-field">
+                <span>分图容量 <em>BotMapCapacity</em></span>
+                <input type="number" min="1" max="50" @bind="_waterMapCapacity" style="width:96px;" />
+                <span style="color:#6d7d82;">同一张练级图最多几个假人</span>
+            </div>
+        </div>
+
+        <div class="control-cluster" style="margin-bottom:14px;">
+            <RadzenButton Text="保存水位" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveWatermark" />
+            <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
+                          Click="LoadWatermark" />
+            <span style="font-size:12px;opacity:.7;align-self:center;">
+                当前生效：目标 @Config.BotTargetOnline · @Config.BotMinOnline~@Config.BotMaxOnline · 每轮 ±@Config.BotMaxChangePerTick · 分图 @Config.BotMapCapacity
+            </span>
+        </div>
     </AuthorizeView>
 
     <div class="config-grid" style="margin-bottom:14px;padding:0;">
@@ -480,16 +524,49 @@
 @* ============================ 运行日志 ============================ *@
 @if (_tab == TabLogs)
 {
+    <div class="control-cluster" style="margin-bottom:10px;">
+        <div class="config-field" style="min-width:150px;">
+            <span>假人</span>
+            <select @bind="_logSeqFilter" @bind:after="RefreshLogs">
+                <option value="0">全部</option>
+                @foreach (int seq in _logSeqOptions)
+                {
+                    <option value="@seq">BOT#@seq.ToString("D2")</option>
+                }
+            </select>
+        </div>
+        <div class="config-field" style="min-width:130px;">
+            <span>级别</span>
+            <select @bind="_logLevelFilter" @bind:after="RefreshLogs">
+                <option value="">全部</option>
+                <option value="DEBUG">Debug</option>
+                <option value="INFO">Info</option>
+                <option value="WARN">Warn</option>
+                <option value="ERROR">Error</option>
+            </select>
+        </div>
+        <RadzenButton Text="@(_logPaused ? "恢复滚动" : "暂停滚动")"
+                      Icon="@(_logPaused ? "play_arrow" : "pause")"
+                      ButtonStyle="@(_logPaused ? ButtonStyle.Success : ButtonStyle.Light)"
+                      Click="ToggleLogPause" />
+    </div>
+
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <p style="opacity:.7;font-size:12px;margin:0;">
-            只显示含 <code>BOT#</code> / <code>BOT</code> 的系统日志（最近 300 条）。要完整日志去服务器目录的 <code>Logs.txt</code>。
+            只显示含 <code>BOT#</code> / <code>BOT</code> 的系统日志（最多最近 300 条）。要完整日志去服务器目录的 <code>Logs.txt</code>。
         </p>
-        <span class="text-muted" style="font-size:11px;">@_logLines.Length 条</span>
+        <span class="text-muted" style="font-size:11px;">
+            @_logLines.Length 条@(_logPaused && _logPending > 0 ? $" · 暂停中，新增 {_logPending} 条未显示" : "")
+        </span>
     </div>
 
     @if (_logLines.Length == 0)
     {
-        <p style="opacity:.75;">还没有假人日志。把 <code>BotLogLevel</code> 调成 1（Info）或 0（Debug）能看到更多。</p>
+        <p style="opacity:.75;">
+            @(_logSeqFilter > 0 || !string.IsNullOrEmpty(_logLevelFilter)
+                ? "当前筛选条件下没有日志，换个条件试试。"
+                : "还没有假人日志。把 BotLogLevel 调成 1（Info）或 0（Debug）能看到更多。")
+        </p>
     }
     else
     {
@@ -712,6 +789,25 @@
     private int _teleportX;
     private int _teleportY;
 
+    #region P5-4 水位参数在线编辑
+
+    /// <summary>目标在线人数（真人 + 假人）。</summary>
+    private int _waterTarget;
+
+    /// <summary>水位下限：真人再多也不撤到这个数以下。</summary>
+    private int _waterMin;
+
+    /// <summary>水位上限：再怎么补也不超过这个数。</summary>
+    private int _waterMax;
+
+    /// <summary>每轮调度最多上/下几个人。</summary>
+    private int _waterStep;
+
+    /// <summary>同一张练级图的假人容量。</summary>
+    private int _waterMapCapacity;
+
+    #endregion
+
     private string _message = string.Empty;
     private bool _messageOk = true;
     private string _namesPath = string.Empty;
@@ -719,6 +815,31 @@
     private int _chatCount;
 
     private string[] _logLines = Array.Empty<string>();
+
+    #region P5-6 运行日志筛选与暂停
+
+    /// <summary>按假人序号过滤（0 = 全部）。</summary>
+    private int _logSeqFilter;
+
+    /// <summary>按级别过滤（空 = 全部）。取值是日志里的标签前缀：DEBUG / INFO / WARN / ERROR。</summary>
+    private string _logLevelFilter = string.Empty;
+
+    /// <summary>
+    /// 暂停滚动：排障时日志每秒都在动，滚到一半就被顶走。
+    /// 暂停期间冻结当前内容，只累加「新增多少条」，恢复时一次性追平。
+    /// </summary>
+    private bool _logPaused;
+
+    /// <summary>暂停期间新增的条数（给运营一个「有新内容」的提示）。</summary>
+    private int _logPending;
+
+    /// <summary>上一次刷新时的日志总条数，用来算暂停期间新增了多少。</summary>
+    private int _logLastTotal;
+
+    /// <summary>序号下拉的候选项（当前在线的假人 + 正在筛的那个）。</summary>
+    private int[] _logSeqOptions = Array.Empty<int>();
+
+    #endregion
 
     /// <summary>清理前的 dry-run 预览；null = 还没点预览。</summary>
     private BotCleanupStats? _cleanupPreview;
@@ -887,6 +1008,7 @@
         _canOwner = AdminPermissions.CanOwner(state.User);
 
         Refresh();
+        LoadWatermark();
 
         // 地图下拉只在首屏取一次（244 条，静态数据）。
         _mapOptions = Admin.MapOptions().ToArray();
@@ -943,10 +1065,58 @@
     {
         IReadOnlyList<string> all = Logs.GetSystemLogs();
 
-        _logLines = all
+        // 先粗筛出假人日志，再按开关细分。粗筛结果的总数用于算「暂停期间新增」。
+        List<string> bot = all
             .Where(x => x.Contains("BOT#", StringComparison.Ordinal) || x.Contains("BOT ", StringComparison.Ordinal))
-            .TakeLast(300)
+            .ToList();
+
+        if (_logPaused)
+        {
+            _logPending = Math.Max(0, bot.Count - _logLastTotal);
+            return;
+        }
+
+        _logLastTotal = bot.Count;
+        _logPending = 0;
+
+        IEnumerable<string> query = bot;
+
+        if (_logSeqFilter > 0)
+        {
+            // 日志里的标签是定宽两位（BOT#01），所以按 "BOT#01" 精确匹配，
+            // 不能用 "BOT#1" —— 那样会把 BOT#10~#19 一起捞进来。
+            string tag = $"BOT#{_logSeqFilter:D2}";
+            query = query.Where(x => x.Contains(tag, StringComparison.Ordinal));
+        }
+
+        if (!string.IsNullOrEmpty(_logLevelFilter))
+        {
+            // 行内格式是 "[08:09:40.128] BOT#06 [WARN ] ..."，级别标签带对齐空格，
+            // 所以只匹配前缀 "[WARN" 而不是完整 "[WARN ]"。
+            string tag = "[" + _logLevelFilter;
+            query = query.Where(x => x.Contains(tag, StringComparison.Ordinal));
+        }
+
+        _logLines = query.TakeLast(300).ToArray();
+
+        // 序号下拉跟着在线名单走；把当前筛的那个也留着，否则它一下线，
+        // 下拉里没有对应 option，界面会显示成空白。
+        _logSeqOptions = Rows
+            .Select(x => x.Seq)
+            .Concat(_logSeqFilter > 0 ? new[] { _logSeqFilter } : Array.Empty<int>())
+            .Distinct()
+            .OrderBy(x => x)
             .ToArray();
+    }
+
+    private void ToggleLogPause()
+    {
+        _logPaused = !_logPaused;
+
+        if (_logPaused) return;
+
+        // 恢复滚动：一次性追平（RefreshLogs 会清掉 _logPending）。
+        RefreshLogs();
     }
 
     private async Task RefreshLoopAsync(CancellationToken token)
@@ -1046,19 +1216,89 @@
         Report(result);
     }
 
-    private async Task ForceSpawn(int count) => Report(await Admin.ForceSpawnAsync(count));
+    #region P5-4 水位参数
 
-    private async Task ForceDespawn(int count) => Report(await Admin.ForceDespawnAsync(count));
+    /// <summary>
+    /// 把当前生效值填回输入框。
+    /// <para>
+    /// 只在首屏和「还原」时调用 —— <see cref="Refresh"/> 每 2 秒跑一次，如果在里面覆盖，
+    /// 运营正在输入的数字会被刷掉。
+    /// </para>
+    /// </summary>
+    private void LoadWatermark()
+    {
+        _waterTarget = Config.BotTargetOnline;
+        _waterMin = Config.BotMinOnline;
+        _waterMax = Config.BotMaxOnline;
+        _waterStep = Config.BotMaxChangePerTick;
+        _waterMapCapacity = Config.BotMapCapacity;
+    }
 
-    private async Task Restock(int seq) => Report(await Admin.RestockAsync(seq));
+    /// <summary>
+    /// 保存水位：走 <see cref="ConfigurationService.Save"/>，和「配置」页同一条路径 ——
+    /// 它负责写 <c>Server.ini</c>、刷新 <see cref="Config"/>、失败回滚，并记一条
+    /// <c>Configuration.Save</c> 审计。这里不自己写文件，否则审计和回滚都会漏。
+    /// </summary>
+    private async Task SaveWatermark()
+    {
+        if (_waterMin < 0 || _waterMax < _waterMin)
+        {
+            Report(BotCommandResult.Fail($"下限/上限不合法：{_waterMin} ~ {_waterMax}（上限不能小于下限）"));
+            return;
+        }
 
-    private async Task Kick(int seq) => Report(await Admin.KickAsync(seq));
+        if (_waterTarget < _waterMin || _waterTarget > _waterMax)
+        {
+            Report(BotCommandResult.Fail($"目标 {_waterTarget} 不在 {_waterMin} ~ {_waterMax} 之间"));
+            return;
+        }
 
-    private async Task ResetOne(int seq) => Report(await Admin.ResetOneAsync(seq));
+        if (_waterStep <= 0 || _waterMapCapacity <= 0)
+        {
+            Report(BotCommandResult.Fail("每轮变更上限与分图容量都必须大于 0"));
+            return;
+        }
 
-    private async Task SkillCheck(int seq) => Report(await Admin.SkillCheckAsync(seq));
+        Dictionary<string, string?> values = new()
+        {
+            [nameof(Config.BotTargetOnline)] = _waterTarget.ToString(),
+            [nameof(Config.BotMinOnline)] = _waterMin.ToString(),
+            [nameof(Config.BotMaxOnline)] = _waterMax.ToString(),
+            [nameof(Config.BotMaxChangePerTick)] = _waterStep.ToString(),
+            [nameof(Config.BotMapCapacity)] = _waterMapCapacity.ToString(),
+        };
 
-    private async Task ToggleOne(BotSnapshot row) => Report(await Admin.SetEnabledAsync(row.Seq, !row.Enabled));
+        try
+        {
+            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+            ConfigurationManager.Save(values, user);
+
+            Report(BotCommandResult.Success(
+                $"水位已保存：目标 {Config.BotTargetOnline}（{Config.BotMinOnline}~{Config.BotMaxOnline}）、" +
+                $"每轮 ±{Config.BotMaxChangePerTick}、分图容量 {Config.BotMapCapacity}。下一轮调度生效。"));
+        }
+        catch (Exception ex)
+        {
+            Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
+        }
+    }
+
+    #endregion
+
+    private async Task ForceSpawn(int count) => Report(await Admin.ForceSpawnAsync(count, _user));
+
+    private async Task ForceDespawn(int count) => Report(await Admin.ForceDespawnAsync(count, _user));
+
+    private async Task Restock(int seq) => Report(await Admin.RestockAsync(seq, _user));
+
+    private async Task Kick(int seq) => Report(await Admin.KickAsync(seq, _user));
+
+    private async Task ResetOne(int seq) => Report(await Admin.ResetOneAsync(seq, _user));
+
+    private async Task SkillCheck(int seq) => Report(await Admin.SkillCheckAsync(seq, _user));
+
+    private async Task ToggleOne(BotSnapshot row) => Report(await Admin.SetEnabledAsync(row.Seq, !row.Enabled, _user));
 
     private async Task Teleport(int seq)
     {
@@ -1073,7 +1313,7 @@
             return;
         }
 
-        Report(await Admin.TeleportAsync(seq, _teleportMapIndex, x, y));
+        Report(await Admin.TeleportAsync(seq, _teleportMapIndex, x, y, _user));
     }
 
     private async Task ResetAll()
