@@ -681,6 +681,33 @@ app.MapPut("/api/map-regions/{regionIndex:int}", async (
     return Results.Json(new { etag });
 }).RequireAuthorization();
 
+// 地图贴图图集（AtlasBuilder 的产物）放在 <程序目录>/Atlas 下：
+//   Atlas/manifest.json、Atlas/{地图}/index.json、Atlas/{地图}/{n}.png
+// 这批文件同样是**构建/部署后才有**的，不在 staticwebassets 清单里 → 也要显式挂物理提供器。
+// 走静态文件而不是 API 端点：页 PNG 单张就能到 20MB，静态中间件自带条件请求与 Range；
+// 而且图集内容本来就是随客户端分发的贴图，不必每张都过一次授权管道。
+string atlasDir = Environment.GetEnvironmentVariable("ZIRCON_ATLAS_DIR") is { Length: > 0 } customAtlas
+    ? customAtlas
+    : Path.Combine(builder.Environment.ContentRootPath, "Atlas");
+
+// PhysicalFileProvider 在目录不存在时构造就抛，先建出来（空目录也能正常 404）。
+Directory.CreateDirectory(atlasDir);
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(atlasDir),
+    RequestPath = "/Atlas",
+    OnPrepareResponse = context =>
+    {
+        // index.json 必须随产物一起变（图集重建后前端要立刻拿到新帧表）；
+        // 页 PNG 靠 URL 上的 ?v={版本} 做长缓存，版本一变 URL 就变。
+        context.Context.Response.Headers.CacheControl =
+            context.File.Name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                ? "no-cache"
+                : "public,max-age=31536000,immutable";
+    }
+});
+
 // 物品图标包（P5-3 纸娃娃）是**构建后才生成**的一批静态文件（tools/iconpack 导出来的 PNG），
 // 它们不在 staticwebassets 清单里，MapStaticAssets 不一定认得。
 // 这里显式挂一个物理文件提供器：只要 wwwroot 下有这个文件就能取到，不依赖清单、也不依赖环境。

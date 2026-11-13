@@ -19,6 +19,7 @@
     <ProjectReference Include="..\LibraryCore\LibraryCore.csproj" />
     <ProjectReference Include="..\ServerLibrary\ServerLibrary.csproj" />
     <ProjectReference Include="..\Plugin.Abstractions\Plugin.Abstractions.csproj" />
+    <ProjectReference Include="..\ZlMedia\ZlMedia.csproj" />
   </ItemGroup>
 
   <!--

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ZlMedia</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- 只放「.Zl 贴图库 → 像素/PNG」这一层，不依赖游戏逻辑（不引 ServerLibrary），
+       这样后台、图集工具、以及以后的离线脚本都能共用，Linux 上也能跑。 -->
+  <ItemGroup>
+    <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
+    <PackageReference Include="SkiaSharp" Version="4.151.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.151.1" />
+  </ItemGroup>
+
+  <!--
+    生成后把本工程产物同步到两个部署目录（VS 里点「生成解决方案」就会跑）。
+
+    为什么要显式复制：
+      · ..\..\Debug\Server.Web\          是 Server.Web 的输出目录。引用会把它带过去，
+        但「只生成 ZlMedia 单个项目」时不会 → 漏一次就是服务端启动 FileNotFoundException。
+      · ..\..\Debug\Server.Web_linux-x64\ 是手工 publish 出来的目录，不是任何项目的输出目录，
+        引用带不到，必须显式复制。
+
+    路径一律相对本 csproj（$(MSBuildThisFileDirectory)..\..\ = F:\DSH\），换机/换目录不用改。
+    SkipUnchangedFiles 减少无谓写入；ContinueOnError 保证「服务端正在跑、dll 被锁」时
+    只报一条警告，不会让整个解决方案生成失败。
+  -->
+  <Target Name="CopyZlMediaToDeployDirs" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <_ZlMediaDeploy Remove="@(_ZlMediaDeploy)" />
+      <_ZlMediaDeploy Include="$(TargetPath)" />
+      <_ZlMediaDeploy Include="$(TargetDir)$(TargetName).pdb" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(_ZlMediaDeploy)"
+          DestinationFolder="$(MSBuildThisFileDirectory)..\..\Debug\Server.Web\"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true" />
+  </Target>
+
+</Project>

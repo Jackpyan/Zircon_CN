@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Sprite, Texture } from './vendor/pixi.mjs';
+import { Application, Container, Graphics, Rectangle, Sprite, Texture } from './vendor/pixi.mjs';
 
 const CELL_WIDTH = 12;
 const CELL_HEIGHT = 8;
@@ -7,6 +7,8 @@ const ANIMATION_FRAME_MASK = 0x0f;
 const ANIMATION_BLEND_BIT = 0x80;
 const MAX_CONCURRENT_TEXTURE_LOADS = 20;
 const MAX_SHARED_TEXTURES = 4096;
+const MAX_ATLAS_PAGES = 64;
+const MAX_ATLAS_FRAMES = 20000;
 const DEFAULT_MIN_ZOOM = 0.25;
 const ABSOLUTE_MIN_ZOOM = 0.01;
 const MAX_ZOOM = 8;
@@ -17,6 +19,48 @@ const MAX_ZOOM = 8;
 // discarded once the cache reaches its bound.
 const sharedTextures = new Map();
 let sharedTextureClock = 0;
+
+// 图集（AtlasBuilder 产物）的两级缓存。
+//
+// 页纹理是**一整张 2048² 的 GPU 纹理**，被上千个帧共用 —— 所以帧纹理只能
+// `new Texture({ source: page.source, frame })` 切出来，**绝不能对帧调 destroy(true)**，
+// 那会把整页的 GPU 纹理一起释放，其它帧立刻变黑。
+// 淘汰以「页」为单位：丢掉一页时，同一版本（同一张图）切出来的帧纹理也要一起丢。
+const atlasPageTextures = new Map();   // `${版本}:${页号}` → Promise<Texture|null>
+const atlasFrameTextures = new Map();  // `${版本}:${库}:${图}` → Texture|null
+
+function evictAtlasPages(keepVersion) {
+    if (atlasPageTextures.size <= MAX_ATLAS_PAGES && atlasFrameTextures.size <= MAX_ATLAS_FRAMES) return;
+
+    const protectedPrefix = keepVersion ? `${keepVersion}:` : null;
+
+    while (atlasPageTextures.size > MAX_ATLAS_PAGES) {
+        // 正在用的这张图的页绝不淘汰：销毁它会让已经画上去的精灵立刻变黑。
+        const victim = [...atlasPageTextures.keys()].find(key => !protectedPrefix || !key.startsWith(protectedPrefix));
+        if (victim === undefined) break;
+
+        const promise = atlasPageTextures.get(victim);
+        atlasPageTextures.delete(victim);
+        dropAtlasFrames(victim.slice(0, victim.lastIndexOf(':')));
+        void promise.then(texture => texture?.destroy(true)).catch(() => { });
+    }
+
+    while (atlasFrameTextures.size > MAX_ATLAS_FRAMES) {
+        const [key, texture] = atlasFrameTextures.entries().next().value;
+        atlasFrameTextures.delete(key);
+        // 只释放这一帧的 Texture 包装，页的 GPU 纹理仍归页缓存管。
+        texture?.destroy(false);
+    }
+}
+
+function dropAtlasFrames(version) {
+    const prefix = `${version}:`;
+    for (const [key, texture] of [...atlasFrameTextures]) {
+        if (!key.startsWith(prefix)) continue;
+        atlasFrameTextures.delete(key);
+        texture?.destroy(false);
+    }
+}
 
 function evictSharedTextures() {
     if (sharedTextures.size <= MAX_SHARED_TEXTURES) return;
@@ -30,6 +74,21 @@ function evictSharedTextures() {
     }
 }
 
+// 图集索引 `/Atlas/{地图}/index.json`（AtlasBuilder 产出）。
+// 取不到就当没有 —— 没跑过图集工具、或这张图还没生成，全部退回逐块请求，不影响现有功能。
+async function loadAtlasIndex(mapFileName) {
+    const name = mapFileName.replace(/\.map$/i, '');
+    try {
+        const response = await fetch(`/Atlas/${encodeURIComponent(name)}/index.json`, { cache: 'no-cache' });
+        if (!response.ok) return null;
+        const index = await response.json();
+        if (!index || !Array.isArray(index.Pages) || index.Pages.length === 0 || !index.Frames) return null;
+        return index;
+    } catch {
+        return null;
+    }
+}
+
 export async function createMapEditor(host, mapFileName, regionIndex, initialETag, dotnet) {
     const [mapResponse, assetStatusResponse] = await Promise.all([
         fetch(`/api/maps/${encodeURIComponent(mapFileName)}`),
@@ -39,6 +98,11 @@ export async function createMapEditor(host, mapFileName, regionIndex, initialETa
     const map = await mapResponse.json();
     const assetStatus = assetStatusResponse.ok ? await assetStatusResponse.json() : null;
     const assetVersion = encodeURIComponent(assetStatus?.version ?? 'uncached');
+
+    // 有图集就走图集：一张 500×500 的图逐块要 7567 次请求（约 95MB、浏览器 6 并发下光排队
+    // 十几秒），图集把它压到「一页一次」，同一张图只剩几十个请求。
+    // 图集里缺的块（比如扫描时还不存在的动画帧）会自动退回逐块请求。
+    const atlas = await loadAtlasIndex(mapFileName);
 
     const pointsResponse = await fetch(`/api/map-regions/${regionIndex}/points?width=${map.width}`);
     if (!pointsResponse.ok) throw new Error(await pointsResponse.text());
@@ -162,6 +226,61 @@ export async function createMapEditor(host, mapFileName, regionIndex, initialETa
         return texture;
     }
 
+    // ===== 图集 =====
+
+    // 图集里这一块的帧矩形：[页号, x, y, 宽, 高]；没有就返回 null。
+    function atlasFrame(file, image) {
+        const frames = atlas?.Frames?.[file];
+        if (!frames) return null;
+        const rect = frames[image];
+        return Array.isArray(rect) && rect.length >= 5 ? rect : null;
+    }
+
+    function atlasPageTexture(pageIndex, priority) {
+        const key = `${atlas.Version}:${pageIndex}`;
+        const existing = atlasPageTextures.get(key);
+        if (existing) return existing;
+
+        const promise = enqueueTextureLoad(async () => {
+            try {
+                return await loadTexture(
+                    `/Atlas/${encodeURIComponent(atlas.Map)}/${encodeURIComponent(atlas.Pages[pageIndex])}` +
+                    `?v=${encodeURIComponent(atlas.Version)}`);
+            } catch {
+                return null;
+            }
+        }, priority);
+
+        atlasPageTextures.set(key, promise);
+        // 失败（含编辑器已销毁导致 abort）不能留在缓存里，否则这张图这一页永远黑着。
+        void promise.then(texture => {
+            if (texture === null && atlasPageTextures.get(key) === promise) atlasPageTextures.delete(key);
+        }).catch(() => { if (atlasPageTextures.get(key) === promise) atlasPageTextures.delete(key); });
+        evictAtlasPages(atlas.Version);
+        return promise;
+    }
+
+    // 返回 undefined 表示「图集里没有这一块」→ 调用方退回逐块请求；
+    // 返回 null 表示「图集里有、但页加载失败」→ 当作透明块。
+    async function atlasTextureFor(file, image, priority) {
+        const rect = atlasFrame(file, image);
+        if (rect === null) return undefined;
+
+        const key = `${atlas.Version}:${file}:${image}`;
+        if (atlasFrameTextures.has(key)) return atlasFrameTextures.get(key);
+
+        const [pageIndex, x, y, width, height] = rect;
+        const page = await atlasPageTexture(pageIndex, priority);
+        // 页没拿到时不缓存 null：下次重试还有机会，缓存了就永久黑块。
+        if (page === null) return null;
+
+        // 帧纹理只是「页纹理 + 一块矩形」，共享同一个 GPU 纹理，不额外占显存。
+        const texture = new Texture({ source: page.source, frame: new Rectangle(x, y, width, height) });
+        atlasFrameTextures.set(key, texture);
+        evictAtlasPages(atlas.Version);
+        return texture;
+    }
+
     function updateStatus(x, y, force = false) {
         const now = performance.now();
         if (!force && now - lastStatusUpdate < 100) return;
@@ -177,6 +296,13 @@ export async function createMapEditor(host, mapFileName, regionIndex, initialETa
     }
 
     async function textureFor(file, image, priority = false) {
+        // 图集优先：命中就直接切帧纹理（一次 HTTP 拿一整页），
+        // 未命中（图集里没有这块）才走下面的逐块请求。
+        if (atlas) {
+            const framed = await atlasTextureFor(file, image, priority);
+            if (framed !== undefined) return framed;
+        }
+
         const key = `${assetVersion}:${file}:${image}`;
         if (texturePromises.has(key)) return texturePromises.get(key);
 
