@@ -459,6 +459,52 @@
         </div>
 
         <h2 style="margin:26px 0 8px;font-size:16px;">
+            练级地图白名单
+            <small style="font-size:11px;font-weight:400;opacity:.6;">2026-11-13 · 按等级段生成</small>
+        </h2>
+        <p style="opacity:.75;font-size:13px;margin:0 0 12px;line-height:1.7;">
+            <code>BotHuntMaps</code> 原来是手工维护的地图 Index 列表，加图或开放新等级段时必然漏。
+            <b>漏了的现象极具误导性</b>：假人跨图候选被过滤成 0，代码只打一行 Debug「跨图放弃」，
+            表现就是<b>「等级都 80 了还在出生地打 5 级怪」</b>，看着像选图算法坏了。
+            <br />
+            这里按「怪等级落在 [自身-8, 自身+4] 且地图等级门槛满足」重算一遍（与选图逻辑同一套判据），
+            BOSS 图不纳入。先重算看预览，确认后再保存。
+        </p>
+
+        <div class="control-cluster" style="margin:14px 0;">
+            <RadzenButton Text="@(_huntPlanning ? "重算中…" : "按等级段重算")" Icon="refresh" ButtonStyle="ButtonStyle.Light"
+                          Click="PlanHuntMaps" Disabled="@(_huntPlanning || GameServer.State != GameServerState.Running)" />
+            <RadzenButton Text="保存白名单" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveHuntMaps" Disabled="@(_saving || _huntPlan == null)" />
+            <span style="font-size:12px;opacity:.7;align-self:center;">
+                当前生效：@HuntMapCount() 张图 · 等级上限 @Config.MaxLevel
+                @if (_huntPlan != null)
+                {
+                    <b> · 预览 @_huntPlan.Indices.Count 张</b>
+                }
+            </span>
+        </div>
+
+        @if (_huntPlan != null)
+        {
+            <table class="data-grid" style="font-size:12px;min-width:560px;">
+                <thead>
+                    <tr><th style="width:96px;">等级段</th><th style="width:80px;">图数</th><th>地图</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (HuntMapBand band in _huntPlan.Bands)
+                    {
+                        <tr>
+                            <td>@band.FromLevel~@band.ToLevel</td>
+                            <td>@band.Indices.Count</td>
+                            <td style="opacity:.8;">@string.Join("、", band.Maps)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <h2 style="margin:26px 0 8px;font-size:16px;">
             新号与运行参数
             <small style="font-size:11px;font-weight:400;opacity:.6;">P5-8 · 以前只能改 Server.ini</small>
         </h2>
@@ -793,7 +839,8 @@
         <div><span>社交总开关</span><b>@(Config.BotSocialEnabled ? "开" : "关")</b></div>
         <div><span>行会</span><b>@(Config.BotGuildEnabled ? "开" : "关") · @Config.BotGuildCount 个 · ≥@Config.BotGuildMinLevel 级</b></div>
         <div><span>红名 PK</span><b>@(Config.BotPkEnabled ? "开" : "关") · 每 @Config.BotPkIntervalMinutes 分钟</b></div>
-        <div><span>榜首降速</span><b>@(Config.BotTopSlowEnabled ? "开" : "关") · 前 @Config.BotTopRankLimit 名 / @Config.BotTopHoldMinutes 分钟后停 @Config.BotTopSlowMinutes 分钟</b></div>
+        <div><span>榜首降速</span><b>@(Config.BotTopSlowEnabled ? "开" : "关") · 前 @Config.BotTopRankLimit 名 / @Config.BotTopHoldMinutes 分钟后停 @Config.BotTopSlowMinutes 分钟 · <span title="低于这个等级不参与降速，先让假人正常练级">@Config.BotTopSlowMinLevel 级起</span></b></div>
+        <div><span>转生阈值</span><b>@Config.BotRebirthMinLevel~@Config.BotRebirthMaxLevel 级随机（每人固定，转一次重抽）</b></div>
         <div><span>真人优先 / 跳过 BOSS</span><b>@(Config.BotRespectRealPlayerTags ? "开" : "关") / @(Config.BotSkipBoss ? "开" : "关")</b></div>
         <div>
             <span>夜间比例</span>
@@ -881,6 +928,14 @@
                     <span>@ClassText(_detail?.ClassName ?? string.Empty)</span>
                     <span class="dot">·</span>
                     <span>Lv @(_detail?.Level ?? 0)</span>
+                    @if (_detail != null && _detail.RebirthThreshold > 0)
+                    {
+                        @* 转生阈值每人不同（75~100 随机），一眼能看出这 30 个假人的阈值散得开不开。 *@
+                        <span class="dot">·</span>
+                        <span title="个人转生阈值：按角色名+转生次数散列，每次转生后重抽">
+                            转生 @_detail.Rebirth 次 / 阈值 @_detail.RebirthThreshold
+                        </span>
+                    }
                     <span class="dot">·</span>
                     <span>@(_detail?.MapName ?? "—")</span>
                     @if (_detail != null)
@@ -1086,6 +1141,12 @@
     private int _teleportMapIndex;
     private int _teleportX;
     private int _teleportY;
+
+    /// <summary>白名单重算的预览结果（null = 还没算过，此时「保存白名单」置灰）。</summary>
+    private HuntMapPlan? _huntPlan;
+
+    /// <summary>重算进行中（遍历全服刷怪区，几百毫秒，期间按钮置灰防重复点）。</summary>
+    private bool _huntPlanning;
 
     #region P5-4 水位参数在线编辑
 
@@ -1765,6 +1826,63 @@
         await SaveConfigAsync(values,
             $"水位已保存：目标 {_waterTarget}（{_waterMin}~{_waterMax}）、" +
             $"每轮 ±{_waterStep}、分图容量 {_waterMapCapacity}。下一轮调度生效。");
+    }
+
+    #endregion
+
+    #region 练级地图白名单
+
+    /// <summary>当前生效的白名单图数（0 = 不限制）。</summary>
+    private int HuntMapCount() => BotOptions.ParseIndexes(Config.BotHuntMaps).Count;
+
+    /// <summary>
+    /// 按等级段重算白名单，只出预览不落盘。
+    /// <para>
+    /// 为什么不直接写：白名单写错的后果是「假人原地不动」且只有 Debug 日志，
+    /// 留一步人工确认，顺便让分段明细能被人看一眼。
+    /// </para>
+    /// </summary>
+    private async Task PlanHuntMaps()
+    {
+        if (_huntPlanning) return;
+
+        _huntPlanning = true;
+        StateHasChanged();
+
+        try
+        {
+            (HuntMapPlan? plan, string? error) = await Admin.PlanHuntMapsAsync();
+
+            if (error != null || plan == null)
+            {
+                Report(BotCommandResult.Fail(error ?? "重算失败：结果为空"));
+                return;
+            }
+
+            _huntPlan = plan;
+
+            Report(BotCommandResult.Success(
+                $"重算完成：1~{Config.MaxLevel} 级共需 {plan.Indices.Count} 张图（预览未保存，确认后点「保存白名单」）"));
+        }
+        finally
+        {
+            _huntPlanning = false;
+        }
+    }
+
+    private async Task SaveHuntMaps()
+    {
+        if (_huntPlan == null) return;
+
+        HuntMapPlan plan = _huntPlan;
+
+        // 先清预览再存：存成功就没什么可保存的了；存失败会由 SaveConfigAsync 报错，
+        // 预览留着反而让人以为「没存进去但已经生效」。
+        _huntPlan = null;
+
+        await SaveConfigAsync(
+            new Dictionary<string, string?> { [nameof(Config.BotHuntMaps)] = plan.Csv },
+            $"练级白名单已保存：{plan.Indices.Count} 张图。下一轮选图立即按新名单执行（不用重启）。");
     }
 
     #endregion

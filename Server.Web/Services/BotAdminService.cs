@@ -830,4 +830,33 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
             return BotCommandResult.Fail($"操作失败：{ex.Message}");
         }
     }
+
+    #region 练级地图白名单（2026-11-13）
+
+    /// <summary>
+    /// 按等级段重算练级白名单。**只算不写**：结果给页面预览，确认后再走
+    /// <c>ConfigurationService.Save</c> 落盘 —— 白名单一旦写错，现象是「假人原地不动」
+    /// 且只有 Debug 日志，所以必须留一步人工确认。
+    /// <para>
+    /// 必须进游戏线程：要遍历 <c>SEnvir.RespawnInfoList</c> / <c>MapInfoList</c> 的
+    /// <c>Binding</c>，那两个集合会被存库与地图加载改写。
+    /// </para>
+    /// </summary>
+    public async Task<(HuntMapPlan? Plan, string? Error)> PlanHuntMapsAsync()
+    {
+        if (!ServerRunning) return (null, "游戏服务器未运行。");
+
+        try
+        {
+            HuntMapPlan plan = await SEnvir.InvokeOnGameThreadAsync(() => BotHuntMapPlanner.Build(Config.MaxLevel));
+
+            return (plan, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"重算失败：{ex.Message}");
+        }
+    }
+
+    #endregion
 }
