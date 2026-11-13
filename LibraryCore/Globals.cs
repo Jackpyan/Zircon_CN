@@ -180,6 +180,21 @@ namespace Library
             "Chinese",
         };
 
+        /// <summary>
+        /// 经验表能支持到的最高等级（<see cref="ExperienceList"/> 下标上限）。
+        /// <para>
+        /// **这条是硬约束，不是建议值**：<c>PlayerObject</c> 算下一级所需经验是
+        /// <c>Level &lt; ExperienceList.Count ? ExperienceList[Level] : 0</c>，
+        /// 一旦等级超过表尾，所需经验取到 0 而 <c>Experience &lt; 0</c> 恒为 false，
+        /// 于是「减 0 经验 + 等级 +1」一路冲到表尾 —— 加一次经验就瞬间满级。
+        /// </para>
+        /// <para>
+        /// 2026-11-13：表正好 101 项（0~100），100 级 = 2×10¹⁴。
+        /// 想开更高等级必须先往 <see cref="ExperienceList"/> 补数据，再改这个常量。
+        /// </para>
+        /// </summary>
+        public const int MaxExperienceLevel = 100;
+
         public static List<decimal> ExperienceList = new List<decimal>
         {
             0,

@@ -836,7 +836,8 @@ namespace Server.Bots
 
             if (player == null) return new BotSkillCheckResult(false, 0, 0, 0, 0, 0, "假人不在线");
 
-            // 服务器等级上限（Config.MaxLevel，本服 = 10）之外不可能升级，目标等级要夹住。
+            // 服务器等级上限（Config.MaxLevel，2026-11-13 起 = 100）之外不可能升级，目标等级要夹住。
+            // 这个值本身在 Config 里已被夹到 Globals.MaxExperienceLevel，这里只防「调用方传 999」。
             if (targetLevel <= 0 || targetLevel > Config.MaxLevel) targetLevel = Config.MaxLevel;
 
             int levelBefore = player.Level;

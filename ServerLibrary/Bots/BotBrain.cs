@@ -1969,21 +1969,29 @@ namespace Server.Bots
             // 结果在市政厅里找卖 Meat 的商人，然后被跨图中转又送回比奇城。
             if (State == BotState.Rebirth) return false;
 
-            // 0) 满级 → 转生。
-            // 全服等级上限 Config.MaxLevel（生产 75），满级后打怪一点收益都没有；
-            // 转生会加各项属性并回到 0 级重新练，是设计上的「循环」。
-            // 不加这一条，假人 75 级后就只会站在那儿空砍，永远不成长。
-            if (Config.MaxLevel > 0 && _player.Level >= Config.MaxLevel
+            // 0) 到「个人转生阈值」→ 转生。
+            //
+            // 原来是「到 Config.MaxLevel（75）就转」，于是所有假人在同一天集体转生，
+            // 在线等级整齐地掉回 1 级 —— 比不转还假。现在每人一个 75~100 的固定阈值
+            // （见 BotRebirthRule），散开转生时刻，练级曲线也不会同步。
+            //
+            // 仍然保留「到全服上限必转」：满级后打怪零收益，不转就是站着空砍。
+            BotOptions rebirthOptions = Options;
+            int rebirthThreshold = RebirthThreshold(rebirthOptions);
+
+            if (_player.Level >= rebirthThreshold
                 && State != BotState.Rebirth && State != BotState.Trade
                 && SEnvir.Now >= _rebirthCooldown)
             {
                 _rebirthBaseCount = _player.Character.Rebirth;
                 _rebirthSnapshot = BotRebirthAudit.Capture(_player);
 
-                BotLog.Info(Profile.Seq, string.Format("满级（{0} 级），去市政厅找管理员转生（已转生 {1} 次）",
-                    _player.Level, _player.Character.Rebirth));
+                BotLog.Info(Profile.Seq, string.Format(
+                    "到达个人转生阈值（{0} 级，区间 {1}~{2}，已转生 {3} 次），去市政厅找管理员转生",
+                    rebirthThreshold, rebirthOptions.RebirthMinLevel, rebirthOptions.RebirthMaxLevel,
+                    _player.Character.Rebirth));
 
-                EnterState(BotState.Rebirth, "满级了，去市政厅转生", TimeSpan.FromMinutes(10));
+                EnterState(BotState.Rebirth, "到达转生阈值，去市政厅转生", TimeSpan.FromMinutes(10));
 
                 return true;
             }
@@ -2122,16 +2130,33 @@ namespace Server.Bots
         /// 任何一步失败都退回练级并给 60 秒冷却，避免「没钱 → 反复回城 → 永远不练级」的死循环。
         /// </summary>
         /// <summary>
-        /// 满级转生：市政厅[2] 的「管理员」→ 按钮「转生主页」→ 按钮「执行转生」。
+        /// 这个假人自己的转生阈值（75~100 之间，按角色名+转生次数确定性散列，见 <see cref="BotRebirthRule"/>）。
         /// <para>
-        /// 为什么要有这条：全服等级上限 75（<c>[System] MaxLevel</c>），满级后再打怪没有任何收益，
+        /// **所有「该不该转生」的判定都必须走这里**：入口处判一次、进入转生状态后还要再判一次，
+        /// 两处用不同基准（一处个人阈值、一处 <c>Config.MaxLevel</c>）就会出现
+        /// 「刚到 88 级进状态 → 立刻被判『等级没到上限』踢回练级」的死循环。
+        /// </para>
+        /// </summary>
+        private int RebirthThreshold(BotOptions options)
+        {
+            return BotRebirthRule.Threshold(_player.Character?.CharacterName, _player.Character?.Rebirth ?? 0,
+                options.RebirthMinLevel, options.RebirthMaxLevel, Config.MaxLevel);
+        }
+
+        /// <summary>
+        /// 转生：市政厅[2] 的「管理员」→ 按钮「转生主页」→ 按钮「执行转生」。
+        /// <para>
+        /// 为什么要有这条：到个人阈值（75~100）后再打怪没有任何收益，
         /// 而转生会给各项属性加成并回到 0 级重新练 —— 假人不转生就等于「到顶即报废」。
         /// 实测（mapq action:Rebirth）：全服只有 1 处转生动作，在市政厅。
         /// </para>
         /// </summary>
         private void ProcessRebirth()
         {
-            if (Config.MaxLevel <= 0 || _player.Level < Config.MaxLevel)
+            // 判据必须是「个人阈值」而不是「全服上限」：阈值 88 的假人在 88 级进转生状态，
+            // 拿 100（Config.MaxLevel）去比会立刻判成「等级没到上限」把它踢回练级，
+            // 于是永远转不了 —— 而且日志显示「等级没到上限，回去练级」，看着像逻辑正常。
+            if (_player.Level < RebirthThreshold(Options))
             {
                 // 转生次数变多了 = 成功（等级已被引擎打回 1 级，不能再拿「等级是否满」判断）。
                 if (_player.Character.Rebirth > _rebirthBaseCount)
@@ -5285,6 +5310,27 @@ namespace Server.Bots
         {
             if (!Options.TopSlowEnabled) return false;
             if (_player?.Character == null) return false;
+
+            // ⓪ 等级门（2026-11-13）：低于 BotTopSlowMinLevel 的人不参与降速，连计时都不开始。
+            //
+            // 为什么必须加：降速原来只看「在不在前 N 名」。真人普遍还没练上来时，
+            // 30 个假人会把前 3 名长期占死，然后集体被降速 —— 假人既不长个也不干活，
+            // 白占在线水位。75 级以下让它们正常练，75 之后才开始「跑一阵、歇两小时」。
+            //
+            // 已经进入降速期又掉到门槛以下（比如刚转生回 1 级）：走下面 ① 的结束分支取消，
+            // 所以这里只挡「新开始计时」，不挡「结束」。
+            if (_player.Level < Options.TopSlowMinLevel && _slowUntil == DateTime.MinValue)
+            {
+                if (_topSince != DateTime.MinValue)
+                {
+                    _topSince = DateTime.MinValue;
+
+                    BotLog.Info(Profile.Seq, string.Format("等级 {0} 低于降速门槛 {1}，取消占榜计时",
+                        _player.Level, Options.TopSlowMinLevel));
+                }
+
+                return false;
+            }
 
             // ① 降速期内：不练级、不换图，只在城里待着。
             if (_slowUntil != DateTime.MinValue)

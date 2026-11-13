@@ -1,6 +1,7 @@
 using Library;
 using Library.SystemModels;
 using Server.DBModels;
+using Server.Envir;
 using Server.Models;
 using System;
 using System.Collections.Generic;
@@ -83,6 +84,12 @@ namespace Server.Bots
         public string ClassName { get; init; } = string.Empty;
         public int Level { get; init; }
         public int ExpPercent { get; init; }
+
+        /// <summary>已转生次数。</summary>
+        public int Rebirth { get; init; }
+
+        /// <summary>这个假人自己的转生阈值（75~100 之间，见 <see cref="BotRebirthRule"/>）。</summary>
+        public int RebirthThreshold { get; init; }
 
         public string MapName { get; init; } = string.Empty;
         public int MapIndex { get; init; }
@@ -198,6 +205,9 @@ namespace Server.Bots
                 ClassName = snapshot?.ClassName ?? player.Class.ToString(),
                 Level = player.Level,
                 ExpPercent = snapshot?.ExpPercent ?? 0,
+                Rebirth = player.Character?.Rebirth ?? 0,
+                RebirthThreshold = BotRebirthRule.Threshold(player.Character?.CharacterName, player.Character?.Rebirth ?? 0,
+                    Config.BotRebirthMinLevel, Config.BotRebirthMaxLevel, Config.MaxLevel),
                 MapName = player.CurrentMap?.Info?.Description ?? "-",
                 MapIndex = player.CurrentMap?.Info?.Index ?? 0,
                 X = player.CurrentLocation.X,

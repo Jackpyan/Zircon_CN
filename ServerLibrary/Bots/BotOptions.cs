@@ -1,3 +1,4 @@
+using Library;
 using Server.Envir;
 using System;
 using System.Collections.Generic;
@@ -56,8 +57,15 @@ namespace Server.Bots
 
         public bool TopSlowEnabled { get; private init; }
         public int TopRankLimit { get; private init; }
+
+        /// <summary>低于这个等级不参与榜首降速（连计时都不开始）。</summary>
+        public int TopSlowMinLevel { get; private init; }
         public int TopHoldMinutes { get; private init; }
         public int TopSlowMinutes { get; private init; }
+
+        /// <summary>假人转生阈值区间（含两端）；个人阈值 = Min + Hash(名字+转生次数) % (Max-Min+1)。</summary>
+        public int RebirthMinLevel { get; private init; }
+        public int RebirthMaxLevel { get; private init; }
 
         public int RestockPotionLow { get; private init; }
         public int RestockBuyRed { get; private init; }
@@ -108,8 +116,11 @@ namespace Server.Bots
                 PkRadius = Math.Max(1, Config.BotPkRadius),
                 TopSlowEnabled = Config.BotTopSlowEnabled,
                 TopRankLimit = Math.Max(1, Config.BotTopRankLimit),
+                TopSlowMinLevel = Math.Clamp(Config.BotTopSlowMinLevel, 1, Globals.MaxExperienceLevel),
                 TopHoldMinutes = Math.Max(1, Config.BotTopHoldMinutes),
                 TopSlowMinutes = Math.Max(1, Config.BotTopSlowMinutes),
+                RebirthMinLevel = Math.Clamp(Config.BotRebirthMinLevel, 1, Globals.MaxExperienceLevel),
+                RebirthMaxLevel = Math.Clamp(Config.BotRebirthMaxLevel, 1, Globals.MaxExperienceLevel),
                 RestockPotionLow = Math.Max(0, Config.BotRestockPotionLow),
                 RestockBuyRed = Math.Max(0, Config.BotRestockBuyRed),
                 RestockBuyBlue = Math.Max(0, Config.BotRestockBuyBlue),

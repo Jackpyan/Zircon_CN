@@ -359,6 +359,56 @@ foreach (MirClass cls in new[] { MirClass.Wizard, MirClass.Taoist, MirClass.Warr
 Check(BotSkills.ElementName(Element.Fire) == "火" && BotSkills.ElementName(Element.None) == "物理",
     "元素中文名（日志/后台要能看懂）");
 
+// ④ 等级上限的硬约束（2026-11-13 开放 100 级）
+//
+// 这条写错的后果是「加一次经验就瞬间满级」：MaxLevel=101 时，100 级之后
+// PlayerObject 取 ExperienceList[101] 取不到 → 所需经验 0 → Experience < 0 恒 false
+// → 减 0 经验 + 等级 +1，一路冲到表尾。现象是「等级突然变成 101」而不是报错，
+// 极难联想到配置，所以必须在 Config 的 setter 里夹住，并在这里钉死。
+Config.MaxLevel = 101;
+Check(Config.MaxLevel == Globals.MaxExperienceLevel, "MaxLevel=101 被夹到经验表上限 100（防瞬间满级）");
+
+Config.MaxLevel = 0;
+Check(Config.MaxLevel == 1, "MaxLevel=0 被夹到 1（0 会让所有人卡住不升级）");
+
+Config.MaxLevel = 100;
+Check(Config.MaxLevel == 100, "MaxLevel=100 正常保留");
+
+Check(Globals.ExperienceList.Count > Globals.MaxExperienceLevel,
+    $"经验表足够覆盖 100 级（现有 {Globals.ExperienceList.Count} 项）");
+
+// ⑤ 个人转生阈值：75~100 之间、同输入稳定、转生后重抽、不越过全服上限
+{
+    const int min = 75;
+    const int max = 100;
+
+    int a = BotRebirthRule.Threshold("XiaoYao01", 0, min, max, 100);
+    int b = BotRebirthRule.Threshold("XiaoYao01", 0, min, max, 100);
+
+    Check(a == b, "同一角色名 + 同一转生次数 → 阈值稳定（重启不变，可复现）");
+    Check(a >= min && a <= max, $"阈值落在 {min}~{max}（实际 {a}）");
+
+    int[] many = Enumerable.Range(1, 30)
+        .Select(i => BotRebirthRule.Threshold($"XiaoYao{i:00}", 0, min, max, 100))
+        .ToArray();
+
+    Check(many.Distinct().Count() >= 10, $"30 个假人的阈值散得开（{many.Distinct().Count()} 个不同值）");
+    Check(many.All(x => x >= min && x <= max), "30 个阈值都在区间内");
+
+    int rerolled = Enumerable.Range(1, 30)
+        .Count(i => BotRebirthRule.Threshold($"XiaoYao{i:00}", 1, min, max, 100) == many[i - 1]);
+
+    Check(rerolled <= 5, $"转生一次后阈值重抽（{rerolled}/30 与上一轮相同，应接近 0）");
+
+    // 全服上限 80 时，阈值不能算到 85（否则永远等不到 → 假人卡在 80 级空砍）
+    int[] capped = Enumerable.Range(1, 30)
+        .Select(i => BotRebirthRule.Threshold($"XiaoYao{i:00}", 0, min, max, 80))
+        .ToArray();
+
+    Check(capped.All(x => x <= 80), "阈值被全服上限夹住（MaxLevel=80 时全部 ≤80）");
+    Check(capped.Contains(80), "上限被夹时仍有人到顶必转（不会全员提前转）");
+}
+
 Console.WriteLine();
 Console.WriteLine(new string('-', 60));
 Console.WriteLine($"共 {checks} 项，失败 {failures} 项。");

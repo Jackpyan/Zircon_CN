@@ -577,10 +577,14 @@ namespace Server.Envir
                     try
                     {
                         decimal exp = decimal.Parse(lines[i].Split('/')[0].Trim()); //remove comment
-                        if (Globals.ExperienceList.Count > i)
-                            Globals.ExperienceList.Add(exp);
-                        else
+                        // 原来这里写反了（Count > i 时 Add），于是每加载一次就把整张表
+                        // 追加到表尾，列表从 101 项涨到 202 项 —— 而
+                        // PlayerObject 判「还有没有经验曲线」用的正是 ExperienceList.Count，
+                        // 表一长，等级上限就被悄悄放宽到 201。必须改成「有位就覆盖、没位才追加」。
+                        if (i < Globals.ExperienceList.Count)
                             Globals.ExperienceList[i] = exp;
+                        else
+                            Globals.ExperienceList.Add(exp);
                     }
                     catch (Exception)
                     {

@@ -96,15 +96,26 @@ namespace Server.Envir
         public static int MaxViewRange { get; set; } = 18;
         public static TimeSpan ShoutDelay { get; set; } = TimeSpan.FromSeconds(10);
         public static TimeSpan GlobalDelay { get; set; } = TimeSpan.FromSeconds(60);
+        private static int _maxLevel = Globals.MaxExperienceLevel;
+
         /// <summary>
         /// 全服等级上限（<c>[System] MaxLevel</c>）。**真人和假人走同一条判定**
         /// （<c>PlayerObject.GainExperience</c>），不是假人专属。
         /// <para>
-        /// 2026-11-10：默认从 10 放开到 75（用户决策，先放开、后续再看内容影响）。
-        /// 经验表 <c>Config/ExperienceList.txt</c> 有 100 级数据，所以 75 级以内不会缺经验曲线。
+        /// 2026-11-10：默认从 10 放开到 75。2026-11-13：再放开到 100（经验表上限）。
+        /// </para>
+        /// <para>
+        /// **setter 会把值夹到 <c>[1, Globals.MaxExperienceLevel]</c>**，不是单纯存值。
+        /// 原因见 <see cref="Globals.MaxExperienceLevel"/>：写 101 会让「加一次经验 = 瞬间满级」，
+        /// 而且现象是「等级突然变成 101」而不是报错，极难联想到配置。
+        /// 夹取放在属性里而不是加载处，是因为 ini、后台表单、GM 命令三条路都会写这个值。
         /// </para>
         /// </summary>
-        public static int MaxLevel { get; set; } = 75;
+        public static int MaxLevel
+        {
+            get => _maxLevel;
+            set => _maxLevel = Math.Clamp(value, 1, Globals.MaxExperienceLevel);
+        }
         public static int DayCycleCount { get; set; } = 3;
         public static int SkillExp { get; set; } = 3;
         public static bool AllowObservation { get; set; } = true;
@@ -470,6 +481,40 @@ namespace Server.Envir
 
         /// <summary>降速持续多少分钟。默认 120 分钟（2 小时）。</summary>
         public static int BotTopSlowMinutes { get; set; } = 120;
+
+        /// <summary>
+        /// 降速的等级门槛（2026-11-13）：低于这个等级<b>永不降速</b>，连计时都不开始。
+        /// <para>
+        /// 为什么要有：降速原本只看「是否在前 N 名」。真人普遍还在 60 级以下时，
+        /// 30 个假人会把前 3 名长期占死，然后集体被降速 —— 假人既不长个也不干活，
+        /// 白白浪费在线水位（在线人数是给别人看的，站着不动比不在线更难看）。
+        /// </para>
+        /// <para>
+        /// 75 是「假人该开始让位」的分界：到这一级已经跑完大半练级曲线，
+        /// 再往上（75~100）本来就是给真人留的空间。
+        /// </para>
+        /// </summary>
+        public static int BotTopSlowMinLevel { get; set; } = 75;
+
+        /// <summary>
+        /// 假人转生的等级下限（含）。与 <see cref="BotRebirthMaxLevel"/> 一起构成
+        /// 「每个假人自己的转生阈值」区间，默认 75~100。
+        /// <para>
+        /// 不是「到 75 就转」：阈值 = <c>Min + Hash(角色名+转生次数) % (Max-Min+1)</c>，
+        /// 每个假人一个固定值，转生一次重抽一次。这样 30 个假人不会同一时刻集体转生
+        /// （那一下在线等级会整齐地掉到 1 级，比不转还假）。
+        /// </para>
+        /// </summary>
+        public static int BotRebirthMinLevel { get; set; } = 75;
+
+        /// <summary>
+        /// 假人转生的等级上限（含）。默认 100 = 练到顶必转。
+        /// <para>
+        /// 最终阈值还会被 <see cref="MaxLevel"/> 夹一次：夹完等于上限时到顶必转，
+        /// 不会出现「阈值 100 但上限 90 → 永远等不到」的卡死。
+        /// </para>
+        /// </summary>
+        public static int BotRebirthMaxLevel { get; set; } = 100;
 
 
         /// <summary>红药低于这个瓶数就回城补给（0 = 不自动补给）。</summary>
