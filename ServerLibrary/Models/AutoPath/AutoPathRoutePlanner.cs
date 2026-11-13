@@ -24,8 +24,15 @@ namespace Server.Models.AutoPath
         /// <summary>一「跳」最多试几个候选出口（每个候选要跑一次整图 A*，这是唯一的重活）。</summary>
         private const int MaxHopCandidates = 6;
 
-        /// <summary>单次规划超过这么久就打一行日志（用来盯回归）。</summary>
-        private const long SlowPlanMilliseconds = 8;
+        /// <summary>
+        /// 单次规划超过这么久就打一行日志（用来盯回归）。
+        /// <para>
+        /// 阈值 8 ms 是单图短途的尺度，但跨图两跳的常态开销本来就是 20~30 ms
+        /// （30 假人压测实测平均 29.1 ms），8 ms 会把每一跳都报成「慢」，
+        /// 一个卡住的假人刷屏刷到日志里全是它。40 ms 只留下真正异常的。
+        /// </para>
+        /// </summary>
+        private const long SlowPlanMilliseconds = 40;
 
         /// <summary>
         /// 启发式权重（百分比）。100 = 标准 A*（路径最短，但迷宫图上展开得多）。

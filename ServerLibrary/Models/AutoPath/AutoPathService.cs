@@ -35,6 +35,27 @@ namespace Server.Models.AutoPath
         /// </summary>
         private const int StallLimitMs = 4000;
 
+        /// <summary>
+        /// 「前方被活物占着」最多忍这么久。
+        /// <para>
+        /// 比 <see cref="StallLimitMs"/> 长得多，因为性质不同：城镇里被别的假人挤住是常态，
+        /// 对方几百毫秒到几秒就会挪开，此时把整条自动寻路拆掉等于白扔一张传送卷。
+        /// 真正堵死（窄口被两个不动的假人对夹）才该放弃。
+        /// </para>
+        /// </summary>
+        private const int BlockedLimitMs = 15000;
+
+        /// <summary>
+        /// 一次「没前进」之后隔多久再试。
+        /// <para>
+        /// <see cref="Process"/> 每帧调一次，而一次重规划是整图 A*（实测 20~30 ms）。
+        /// 不节流的话，一个卡住的假人就能让主线程每帧跑一次 A* —— 30 个假人压测时
+        /// 8 个卡住角色 10 分钟重规划 6436 次、平均 29.1 ms，等于三成主线程在算路。
+        /// 而「走不动」在几百毫秒内不会自己变，所以失败后先歇一下。
+        /// </para>
+        /// </summary>
+        private const int RetryDelayMs = 400;
+
         private AutoPathService()
         {
         }
@@ -207,6 +228,10 @@ namespace Server.Models.AutoPath
 
             if (state.WaitingForMovementStart) return;
 
+            // 上一次「没前进」之后歇够了没有。放行前不做任何规划 —— 这个分支每帧都会走到，
+            // 而一次重规划是整图 A*，不挡住的话卡住的假人会每帧重算一次（见 RetryDelayMs）。
+            if (Environment.TickCount64 < state.NextAttemptTick) return;
+
             TraceSlowPath(player, state);
 
             if (ReachedDestination(player, state.Destination))
@@ -263,11 +288,9 @@ namespace Server.Models.AutoPath
             Point destination = Functions.Move(player.CurrentLocation, direction, distance);
             if (!HasClearTravel(player, player.CurrentMap, player.CurrentLocation, destination, true))
             {
-                RequireLiveObjectRepath(state);
-
                 // 明知道下一步被活物占着就别调 Move 了：引擎会静默拒绝，
                 // 这一步白算一次停滞（等于把容忍额度打对折），下一帧还要重建路径。
-                WaitAnotherAttempt(player, state, $"下一步 ({destination.X},{destination.Y}) 被活物挡住");
+                WaitForLiveObject(player, state, destination);
 
                 return;
             }
@@ -306,6 +329,10 @@ namespace Server.Models.AutoPath
 
             if (state.StallSince == 0) state.StallSince = now;
 
+            // 歇一下再试。不设这一行的话，卡住的假人会每帧重规划一次整图 A*
+            // （30 假人压测实测：8 个卡住角色 10 分钟 6436 次、平均 29.1 ms，三成主线程）。
+            state.NextAttemptTick = now + RetryDelayMs;
+
             long stalled = now - state.StallSince;
 
             if (stalled <= StallLimitMs) return true;
@@ -314,11 +341,38 @@ namespace Server.Models.AutoPath
             return false;
         }
 
+        /// <summary>
+        /// 下一步被活物占着时先等，不算「卡死」。
+        ///
+        /// <para>
+        /// 和 <see cref="WaitAnotherAttempt"/> 分开，是因为语义完全不同：被别的假人挤住
+        /// 是城镇里的常态，对方挪开就好了；用 4 秒的容忍度收尾会白扔一张传送卷并把
+        /// 整张图拉黑 5 分钟（上一轮就是这么发现 <c>AutoPathToNpcDistance = 20</c> 的）。
+        /// 这里给 <see cref="BlockedLimitMs"/>，期间每 <see cref="RetryDelayMs"/> 试一次，
+        /// 顺带重算一次避让路径 —— 人群挪动之后，之前算不出的避让路可能就有解了。
+        /// </para>
+        /// </summary>
+        private void WaitForLiveObject(PlayerObject player, AutoPathState state, Point blocked)
+        {
+            long now = Environment.TickCount64;
+
+            if (state.BlockedSince == 0) state.BlockedSince = now;
+
+            state.NextAttemptTick = now + RetryDelayMs;
+            RequireLiveObjectRepath(state);
+
+            if (now - state.BlockedSince <= BlockedLimitMs) return;
+
+            state.BlockedSince = 0;
+            Fail(player, $"前方 ({blocked.X},{blocked.Y}) 被活物占了 {BlockedLimitMs / 1000} 秒");
+        }
+
         /// <summary>真的迈出一步（或换了一段路）就把停滞计数归零。</summary>
         private static void ClearStall(AutoPathState state)
         {
             state.StallCount = 0;
             state.StallSince = 0;
+            state.BlockedSince = 0;
         }
 
         /// <summary>
@@ -464,6 +518,7 @@ namespace Server.Models.AutoPath
             state.MountRequested = false;
             state.WaitingForMovementStart = false;
             state.FullStrideAvailable = false;
+            state.NextAttemptTick = 0;
             ClearStall(state);
 
             if (Rebuild(player, state))

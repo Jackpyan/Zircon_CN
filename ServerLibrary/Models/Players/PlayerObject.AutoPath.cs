@@ -64,6 +64,26 @@ namespace Server.Models
 
         /// <summary>这一串「没前进」是从什么时候开始的（<see cref="System.Environment.TickCount64"/>），前进一次就归零。</summary>
         public long StallSince;
+
+        /// <summary>
+        /// 下一次允许「再试一次」的时刻（<see cref="System.Environment.TickCount64"/>）。
+        /// <para>
+        /// <see cref="AutoPathService.Process"/> 是每帧调用的，而一次重规划要 20~30 ms 的整图 A*。
+        /// 走不动时如果每帧都重算，8 个假人就能吃掉三成主线程（实测 10 分钟 6436 次规划、
+        /// 平均 29.1 ms）。而「走不动」这件事在几百毫秒内不会变，所以失败后先歇一下。
+        /// </para>
+        /// </summary>
+        public long NextAttemptTick;
+
+        /// <summary>
+        /// 「前方被活物占着」是从什么时候开始的（<see cref="System.Environment.TickCount64"/>）。
+        /// <para>
+        /// 和 <see cref="StallSince"/> 分开计时：被别的假人挤住是城镇里的常态，
+        /// 该多等一会儿（几秒就放弃等于白扔一张传送卷），而引擎拒绝移动之类的异常
+        /// 才该用短的容忍度收尾。
+        /// </para>
+        /// </summary>
+        public long BlockedSince;
     }
 
 }
