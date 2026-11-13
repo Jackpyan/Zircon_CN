@@ -212,7 +212,7 @@ namespace Server.Bots
                 player.Gold.Amount += grant;
                 player.GoldChanged();
 
-                BotLog.Warn(session.Profile.Seq, string.Format(
+                BotLog.Info(session.Profile.Seq, string.Format(
                     "行会注资：{0} 金币（建会需要 {1}），用于创建「{2}」", grant, cost, name));
             }
 
@@ -235,7 +235,7 @@ namespace Server.Bots
             });
 
             if (SEnvir.GuildInfoList.Binding.Count > before)
-                BotLog.Warn(session.Profile.Seq, string.Format("行会已创建：{0}（成员上限 {1}）", name, 10 + members));
+                BotLog.Info(session.Profile.Seq, string.Format("行会已创建：{0}（成员上限 {1}）", name, 10 + members));
             else
                 BotLog.Warn(session.Profile.Seq, string.Format("行会创建失败：{0}（名字重复或金币不足）", name));
         }
@@ -277,7 +277,7 @@ namespace Server.Bots
                     bot.GuildJoin();
 
                 if (bot.Character.GuildMember != null)
-                    BotLog.Warn(session.Profile.Seq, string.Format("已加入行会：{0}", bot.Character.GuildMember.Guild.GuildName));
+                    BotLog.Info(session.Profile.Seq, string.Format("已加入行会：{0}", bot.Character.GuildMember.Guild.GuildName));
                 else
                     BotLog.Warn(session.Profile.Seq, string.Format("入会失败：{0}（邀请未生效或被拒）", bot.Name));
 

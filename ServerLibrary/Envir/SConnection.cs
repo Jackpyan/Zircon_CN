@@ -117,6 +117,16 @@ namespace Server.Envir
                 return;
             }
 
+            // 真人断线留一行痕迹（假人走上面的分支，不刷这个）。
+            // 起因：2026-11-13 客户端中途掉线，两边日志里都查不到「为什么断」——
+            // 客户端只留了一条 SocketException 995（拆链副产物），服务端一行都没有。
+            // 现在服务端至少能回答「谁、在哪个阶段、收发多少字节」。
+            // 必须在 CleanUp() 之前：它会清掉 Player 并把 Stage 改成 Disconnected。
+            SEnvir.Log(string.Format("[断线] {0}（{1}）阶段 {2}｜收发 {3:N0}/{4:N0} 字节",
+                Player?.Name ?? "未进游戏", IPAddress,
+                Stage == GameStage.None ? "未握手" : Stage.ToString(),
+                TotalBytesReceived, TotalBytesSent));
+
             base.Disconnect();
 
             CleanUp();
@@ -137,6 +147,12 @@ namespace Server.Envir
                 Disconnect();
                 return;
             }
+
+            // 服务器**主动**踢人时把原因记下来（版本不对 / 被踢 / 服务器关闭 …）。
+            // 这是排查「玩家说掉线了」时最需要的一条 —— 以前只发给了客户端，日志里没有。
+            if (p is G.Disconnect disconnect)
+                SEnvir.Log(string.Format("[断线] {0}（{1}）被服务器断开：{2}",
+                    Player?.Name ?? "未进游戏", IPAddress, disconnect.Reason));
 
             base.SendDisconnect(p);
 

@@ -160,7 +160,23 @@ public static class UiText
         ["BotBreakerEnabled"] = "启用假人过载熔断",
         ["BotBreakerSharePercent"] = "熔断阈值（假人段占主循环百分比）",
         ["BotBreakerTripSeconds"] = "熔断触发窗口（连续超标秒数）",
-        ["BotBreakerRecoverSeconds"] = "熔断恢复窗口（回落持续秒数）"
+        ["BotBreakerRecoverSeconds"] = "熔断恢复窗口（回落持续秒数）",
+        ["BotNewbieGold"] = "新号启动金币",
+        ["BotNewbiePotionCount"] = "新号启动药水数量（红蓝各这么多）",
+        ["BotNewbieTownScrollCount"] = "新号启动回城卷张数",
+        ["BotStartupRampSeconds"] = "冷启动铺量间隔（秒）",
+        ["BotRosterIntervalSeconds"] = "水位重算间隔（秒）",
+        ["BotStepDelayMinMs"] = "上线分步最小间隔（毫秒）",
+        ["BotStepDelayMaxMs"] = "上线分步最大间隔（毫秒）",
+        ["BotRestockPotionLow"] = "断药判定阈值（低于就去补给）",
+        ["BotRestockBuyRed"] = "一次补给买红药数量",
+        ["BotRestockBuyBlue"] = "一次补给买蓝药数量",
+        ["BotRestockBuyTownScroll"] = "一次补给买回城卷数量",
+        ["BotLogLevel"] = "假人日志级别（0调试/1信息/2警告/3错误）",
+        ["BotNightMinHour"] = "夜间作息开始（点）",
+        ["BotNightMaxHour"] = "夜间作息结束（点）",
+        ["BotNightScalePercent"] = "夜间在线比例（%）",
+        ["BotNightEnabled"] = "启用夜间作息"
     };
 
     private static readonly IReadOnlyDictionary<string, string> EnumLabels = new Dictionary<string, string>(StringComparer.Ordinal)

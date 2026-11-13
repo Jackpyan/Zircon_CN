@@ -287,6 +287,20 @@ namespace Server.Bots
                 return;
             }
 
+            // 总闸检查：「控制 → 允许进入游戏」（Config.AllowStartGame，默认 false）。
+            // 这是个纯人工开关，代码里没有任何地方会自动打开它 —— 连
+            // AdminAutoStartGameServer（开机自动起游戏服）都不管它，那个只管线程启不启。
+            //
+            // 关着的时候 SEnvir.StartGame 第一行就 `StartGameResult.Disabled` 直接 return，
+            // 既不写 Logs.txt 也不改连接状态，于是假人在 Entering 干等 20 秒超时、
+            // 连失败 3 次标记 Broken —— 30 个假人全军覆没，日志里一个字的原因都没有。
+            // 实测排查代价极高（要一路读到 SEnvir.cs:4239 才发现），所以这里直接判死。
+            if (!Config.AllowStartGame)
+            {
+                Fail("游戏服未开放（控制 → 允许进入游戏 = 关闭）");
+                return;
+            }
+
             bool created;
             Character = BotFactory.EnsureCharacter(Connection.Account, Profile, out created);
 
@@ -356,8 +370,12 @@ namespace Server.Bots
                 // 留痕：区分「根本没调用」和「调用了但被判定跳过」。
                 // 之前查「50 万金币不生效」时两者在日志上完全一样（都没有输出），
                 // 只能靠反复猜。这条 Warn 让下次一眼能分清。
-                BotLog.Warn(Profile.Seq, "启动资源：本轮已发放过，跳过重复判断");
+                BotLog.Info(Profile.Seq, "启动资源：本轮已发放过，跳过重复判断");
             }
+
+            // 新手装（布衣 + 木剑）：判据是「槽位空着」而不是「金币少」，
+            // 所以老号下次上线也会自动补上，不用重建角色。
+            BotFactory.EnsureStarterGear(player, Profile.Seq);
 
             Phase = BotPhase.Online;
             Failures = 0;
@@ -403,6 +421,10 @@ namespace Server.Bots
             if (Brain != null)
             {
                 Brain = null;
+
+                // 下线了就别再占着怪：不清的话要等 12 秒 TTL 到期，
+                // 这期间别的假人会把这几只怪当「有人打」绕开。
+                BotClaims.ReleaseAll(Profile.Seq);
 
                 if (Connection?.Player != null)
                     Connection.Player.Bot = null;

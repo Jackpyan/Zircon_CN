@@ -35,7 +35,7 @@ namespace Server.Bots
         /// <paramref name="skipBoss"/>：BOSS 留给真人。假人打 BOSS 会抢掉落，而且大概率被围死。
         /// </para>
         /// </summary>
-        public static MonsterObject FindHuntTarget(PlayerObject player, int radius, bool respectRealPlayerTags = true, bool skipBoss = true)
+        public static MonsterObject FindHuntTarget(PlayerObject player, int radius, bool respectRealPlayerTags = true, bool skipBoss = true, int seq = 0)
         {
             Map map = player?.CurrentMap;
 
@@ -77,6 +77,14 @@ namespace Server.Bots
                 if (distance > radius) continue;
 
                 int score = monster.CurrentHP + distance * 20;
+
+                // 别的假人已经认领了 → 加一个大惩罚（软排除）。
+                //
+                // 不做硬排除是故意的：附近只剩这一只时，一起打也好过站着不动。
+                // 惩罚值远大于正常分区间（HP + 距离×20 < 2000），所以只要还有别的怪，
+                // 就一定会先去打别的 —— 这就是「几个人打一个怪」的修法。
+                if (seq > 0 && BotClaims.IsClaimedByOther(monster, seq))
+                    score += BotClaims.ClaimPenalty;
 
                 if (score >= bestScore) continue;
 
@@ -142,6 +150,32 @@ namespace Server.Bots
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 统计半径内活着的怪（**不分配 List**）。
+        /// 给「该放单体还是群攻」这种每帧都要问一次的高频判断用 ——
+        /// 用 <see cref="GetMonstersAround"/> 每帧建一个 List，30 个假人就是每秒上千次分配。
+        /// </summary>
+        public static int CountMonstersAround(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return 0;
+
+            int count = 0;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+
+                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                count++;
+            }
+
+            return count;
         }
 
         /// <summary>背包里占用的格数。</summary>
@@ -1148,6 +1182,43 @@ namespace Server.Bots
             return -1;
         }
 
+        /// <summary>
+        /// 在 NPC 的入口页里找出「通往卖 <paramref name="itemType"/> 这类东西的买卖页」的按钮号。
+        /// 返回 -1 表示这个 NPC 不卖这类东西。
+        /// <para>
+        /// 与 <see cref="FindScrollButton"/> 同一套思路，只是判据从「回城卷」换成任意类型 ——
+        /// 护身符 / 毒药粉和回城卷是同一个杂货商卖的，通常也在同一个买卖页里。
+        /// </para>
+        /// </summary>
+        public static int FindGoodsButton(NPCInfo npc, ItemType itemType)
+        {
+            if (npc?.EntryPage?.Buttons == null) return -1;
+
+            foreach (NPCButton button in npc.EntryPage.Buttons)
+            {
+                if (!SellsType(button.DestinationPage, itemType)) continue;
+
+                return button.ButtonID;
+            }
+
+            return -1;
+        }
+
+        private static bool SellsType(NPCPage page, ItemType itemType)
+        {
+            if (page?.Goods == null) return false;
+
+            foreach (NPCGood good in page.Goods)
+            {
+                if (good?.Item == null) continue;
+                if (good.Item.ItemType != itemType) continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
         #endregion
 
         #region 商店与修理铺
@@ -1269,6 +1340,58 @@ namespace Server.Bots
 
         /// <summary>类型 → 「哪些地图上有收这一类的修理铺」。懒加载一次。</summary>
         private static Dictionary<ItemType, List<MapInfo>> _repairMapsByType;
+
+        /// <summary>「哪些地图上有药店」。懒加载一次（按地图 Index 排序，保证结果稳定）。</summary>
+        private static List<MapInfo> _pharmacyMaps;
+
+        /// <summary>
+        /// 全服范围内，哪些地图上有**药店**（补给目的地的候选集）。
+        /// <para>
+        /// <b>为什么需要它</b>：补给原先只会回「绑定点主城」，而绑定点是两回事 ——
+        /// 它由「序号取模」分配，还会随「走进任意安全区」漂移（引擎 <c>UpdateBindPoint</c>）。
+        /// 于是在比奇城边打怪的假人可能绑在潘夜村，断药后要横跨两张图去补给，
+        /// 规划失败就干等 60 秒（2026-11-13 用户实测报的现象）。
+        /// 有了这张表就能挑「**走得到的、跳数最少的**有药店的城」。
+        /// </para>
+        /// <para>
+        /// 只读 NPC 数据里的 <c>Region.Map</c>，**不加载地图**（同 <see cref="RepairMapsFor"/>）。
+        /// </para>
+        /// </summary>
+        public static List<MapInfo> PharmacyMaps()
+        {
+            if (_pharmacyMaps == null)
+            {
+                List<MapInfo> maps = new List<MapInfo>();
+
+                foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+                {
+                    MapInfo map = npc?.Region?.Map;
+
+                    if (map == null) continue;
+                    if (!IsPharmacy(npc)) continue;
+                    if (maps.Contains(map)) continue;
+
+                    maps.Add(map);
+                }
+
+                // 空表说明数据还没加载完，别缓存（同 GetMapInfo）。
+                if (maps.Count == 0) return maps;
+
+                maps.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+                _pharmacyMaps = maps;
+            }
+
+            return _pharmacyMaps;
+        }
+
+        /// <summary>这张图上有药店吗（不加载地图，只查 NPC 数据）。</summary>
+        public static bool HasPharmacy(MapInfo map)
+        {
+            if (map == null) return false;
+
+            return PharmacyMaps().Contains(map);
+        }
 
         /// <summary>
         /// 全服范围内，哪些地图上有**收这一类装备**的修理铺。

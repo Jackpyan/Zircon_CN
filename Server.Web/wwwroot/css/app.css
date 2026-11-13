@@ -157,7 +157,15 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
    每次刷新都不一样（打怪 0.2/0.0 → 回城卖药 186,298），列宽就跟着跳，整张表像在抖。
    只作用在实时表上 —— 档案表内容稳定，Diagnostics 的表格又没给全列宽，不能一起改。 */
 .admin-table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 11px; }
-.bot-live-table { table-layout: fixed; }
+/* min-width 是这张表的命门（2026-11-13 用户反馈「有些列太宽、看着不协调」）：
+   table-layout:fixed + width:100% 时，18 列的指定宽度加起来远超容器（约 870px），
+   浏览器会把每一列**等比例压扁** —— 结果是列宽既不是设计的宽度、内容又被截断，
+   看着又挤又散。给一个和「列宽之和 + 内边距」接近的 min-width，
+   列宽就按设计走，超出部分交给 .table-scroll 横向滚动。 */
+.bot-live-table { table-layout: fixed; min-width: 1650px; }
+/* 18 列 × 左右各 12px = 432px 的内边距，比任何一列都宽。实时表降到 8px，
+   省出 288px 全给内容 —— 这也是「列太宽」观感的一半来源。 */
+.bot-live-table th, .bot-live-table td { padding-left: 8px; padding-right: 8px; }
 .admin-table th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; text-align: left; color: #839399; background: #0d1315; border-bottom: 1px solid var(--line); font: 500 10px var(--mono); }
 .admin-table td { max-width: 240px; overflow: hidden; text-overflow: ellipsis; padding: 8px 12px; border-bottom: 1px solid #1d272a; color: #bac4c7; }
 .admin-table tr { cursor: pointer; }
@@ -516,6 +524,16 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .doll-slot:hover { border-color: #4a6b74; }
 .doll-slot.selected { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber) inset, 0 0 12px #f1b84b3d; }
 .doll-slot img { max-width: 92%; max-height: 92%; object-fit: contain; pointer-events: none; }
+/* 图集图标：一张 atlas.png 用 background-position 定位（一格 36px，见 Services/ItemIconAtlas.cs）。
+   background-position / background-size 由页面内联给（图集尺寸随图标数变化，不能写死在 CSS 里）。
+   这里固定 36px 不缩放 —— 缩放就得同时改 position，容易算错；装备槽 39px 装得下。 */
+.item-ic {
+    display: inline-block; flex: 0 0 auto;
+    width: 36px; height: 36px;
+    background-image: url("/icons/items/atlas.png");
+    background-repeat: no-repeat;
+    pointer-events: none;
+}
 .doll-slot-text { padding: 0 3px; color: #74898f; font: 10px/1.2 var(--sans); text-align: center; }
 .doll-slot.empty { background: #0a0f11; border-style: dashed; border-color: #222e32; }
 .doll-worn {

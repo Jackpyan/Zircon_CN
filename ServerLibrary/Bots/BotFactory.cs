@@ -262,7 +262,7 @@ namespace Server.Bots
             {
                 // 必须是 Warn：这里曾是 Info，被 BotLogLevel=2 过滤掉，
                 // 结果「金币永远是 500」查了半天看不到任何线索。
-                BotLog.Warn(seq, string.Format("启动资源：金币 {0} 已达阈值 {1}（BotNewbieGold={2}），跳过",
+                BotLog.Info(seq, string.Format("启动资源：金币 {0} 已达阈值 {1}（BotNewbieGold={2}），跳过",
                     gold.Amount, threshold, Config.BotNewbieGold));
 
                 return false;
@@ -277,7 +277,10 @@ namespace Server.Bots
             }
 
             if (Config.BotNewbiePotionCount > 0)
-                granted += GrantPotions(player, Config.BotNewbiePotionCount);
+                granted += GrantPotions(player, Config.BotNewbiePotionCount, seq);
+
+            if (Config.BotNewbieTownScrollCount > 0)
+                granted += GrantTownScrolls(player, Config.BotNewbieTownScrollCount);
 
             if (granted == 0)
             {
@@ -286,8 +289,9 @@ namespace Server.Bots
                 return false;
             }
 
-            BotLog.Warn(seq, string.Format("启动资源已发放：{0} 金币 + {1} 瓶药",
-                Config.BotNewbieGold, Config.BotNewbiePotionCount));
+            BotLog.Info(seq, string.Format("启动资源已发放：{0} 金币 + {1} 瓶药 + {2} 张回城卷（负重 {3}/{4}）",
+                Config.BotNewbieGold, Config.BotNewbiePotionCount, Config.BotNewbieTownScrollCount,
+                player.BagWeight, player.Stats[Stat.BagWeight]));
 
             return true;
         }
@@ -300,24 +304,56 @@ namespace Server.Bots
         /// 就是几十点永久负重。实测（2026-11-12）<c>三更雪</c>、<c>江湖客</c>
         /// 两个战士背包里各躺着 40 瓶魔法药，负重 153/84、165/84。
         /// </para>
+        /// <para>
+        /// <b>按负重预算发，不按配置硬发</b>（2026-11-13）：配置写 20 就是红蓝各 20 瓶，
+        /// 1 级号基础负重只有几十点，出生即超重 → 捡不了任何东西，用户实测就是这么发现的。
+        /// 现在先算「药最多占六成负重」，配置配大了也只会少发，不会把号压垮。
+        /// </para>
         /// </summary>
-        private static int GrantPotions(PlayerObject player, int count)
+        private static int GrantPotions(PlayerObject player, int count, int seq)
         {
-            int granted = 0;
+            int budget = PotionWeightBudget(player);
 
-            granted += GivePotion(player, Stat.Health, count);
+            int granted = GivePotion(player, Stat.Health, count, ref budget, seq);
 
             if (BotItemRules.NeedsManaPotions(player.Character?.Class ?? MirClass.Warrior))
-                granted += GivePotion(player, Stat.Mana, count);
+                granted += GivePotion(player, Stat.Mana, count, ref budget, seq);
 
             return granted;
         }
 
-        private static int GivePotion(PlayerObject player, Stat restoreStat, int count)
+        /// <summary>
+        /// 药/卷还能占多少负重（**六成上限**，剩下四成留给掉落物）。
+        /// 返回的是「重量」，不是瓶数 —— 不同药的 <c>Weight</c> 不一样，按瓶算会算错。
+        /// </summary>
+        private static int PotionWeightBudget(PlayerObject player)
+        {
+            int max = player?.Stats?[Stat.BagWeight] ?? 0;
+
+            if (max <= 0) return 0;
+
+            int target = max * 60 / 100;
+
+            return Math.Max(0, target - player.BagWeight);
+        }
+
+        private static int GivePotion(PlayerObject player, Stat restoreStat, int count, ref int budget, int seq)
         {
             ItemInfo potion = FindPotion(restoreStat, player.Level);
 
             if (potion == null) return 0;
+
+            // 重量 0 的按 1 算，避免除零；这样「没重量的药」也还是按瓶数发。
+            int per = Math.Max(1, potion.Weight);
+            int allowed = Math.Min(count, budget / per);
+
+            if (allowed <= 0)
+            {
+                BotLog.Info(seq, string.Format(
+                    "启动资源：{0} 负重不够，跳过（预算 {1}，单瓶重 {2}）", potion.ItemName, budget, per));
+
+                return 0;
+            }
 
             // 不带 Bound | Worthless：
             //   · Worthless 被引擎 NPCSell 直接拒收（价格 0 干脆不卖），
@@ -325,7 +361,38 @@ namespace Server.Bots
             //   · 假人不做玩家交易，Bound 对它没有任何保护作用。
             // 结果就是「发的药越多、负重越死」—— 实测 40 瓶绑定蓝药 = 40 点永久负重，
             // 而 BotNewbieGold=50 万，靠卖启动药换钱根本不构成套利。
-            ItemCheck check = new ItemCheck(potion, count, UserItemFlags.None, TimeSpan.Zero);
+            ItemCheck check = new ItemCheck(potion, allowed, UserItemFlags.None, TimeSpan.Zero);
+
+            if (!player.CanGainItems(false, check)) return 0;
+
+            UserItem item = SEnvir.CreateFreshItem(check);
+
+            if (item == null) return 0;
+
+            player.GainItem(item);
+
+            budget -= allowed * per;
+
+            return 1;
+        }
+
+        /// <summary>
+        /// 发回城卷（新号 2 张，够跑通「断药 → 回城 → 买卷再出来」一次闭环）。
+        /// 判定口径与 <see cref="BotActions.IsTownScroll(ItemInfo)"/> 一致：<c>Consumable</c> + <c>Shape == 2</c>。
+        /// </summary>
+        private static int GrantTownScrolls(PlayerObject player, int count)
+        {
+            ItemInfo scroll = FindTownScroll();
+
+            if (scroll == null) return 0;
+
+            int budget = PotionWeightBudget(player);
+            int per = Math.Max(1, scroll.Weight);
+            int allowed = Math.Min(count, budget / per);
+
+            if (allowed <= 0) return 0;
+
+            ItemCheck check = new ItemCheck(scroll, allowed, UserItemFlags.None, TimeSpan.Zero);
 
             if (!player.CanGainItems(false, check)) return 0;
 
@@ -336,6 +403,101 @@ namespace Server.Bots
             player.GainItem(item);
 
             return 1;
+        }
+
+        /// <summary>
+        /// 1 级新手装：一件布衣 + 一把木剑，**按性别 / 职业 / 等级自动解析**，穿上就走。
+        /// <para>
+        /// 为什么要发：假人光着身子出生，真人一眼就能看出「这不是人」。
+        /// 视觉上布衣 + 木剑就是本服 1 级号的标配（库里 126 木剑 / 127 布衣男 / 128 布衣女，
+        /// 需求等级都是 1，职业 WarWizTao）。
+        /// </para>
+        /// <para>
+        /// 为什么不写死 Index：物品表改过索引就全废。这里按「类型 + 需求等级 ≤ 当前等级」
+        /// 从库里按 Index 升序取第一件 <c>CanWearItem</c> 能过的 —— 性别、职业、负重
+        /// 三道限制全部交给引擎自己的判据，不自己再写一遍。
+        /// </para>
+        /// <para>
+        /// <b>幂等</b>：槽位已经有装备就跳过。所以老号下次上线也会自动补上，
+        /// 不用重建角色（和 <see cref="GrantNewbieKit"/> 的「金币低于阈值才发」是两套判据，
+        /// 那个管钱，这个管穿）。
+        /// </para>
+        /// <para>
+        /// 刺客拿不到：库里刺客最低的护甲是「潜行法衣」需求 11 级、武器也没有 1 级的，
+        /// 1 级刺客本来就该光着 —— 与真人一致，不放宽门槛。
+        /// </para>
+        /// </summary>
+        public static int EnsureStarterGear(PlayerObject player, int seq)
+        {
+            if (player?.Character == null) return 0;
+
+            int granted = 0;
+
+            granted += EnsureGearSlot(player, EquipmentSlot.Armour, ItemType.Armour, seq);
+            granted += EnsureGearSlot(player, EquipmentSlot.Weapon, ItemType.Weapon, seq);
+
+            return granted;
+        }
+
+        private static int EnsureGearSlot(PlayerObject player, EquipmentSlot slot, ItemType type, int seq)
+        {
+            if (player.Equipment[(int)slot] != null) return 0;
+
+            foreach (ItemInfo info in SEnvir.ItemInfoList.Binding)
+            {
+                if (info.ItemType != type) continue;
+                if (info.RequiredAmount > player.Level) continue;
+                if (!Functions.CorrectSlot(info.ItemType, slot)) continue;
+
+                ItemCheck check = new ItemCheck(info, 1, UserItemFlags.None, TimeSpan.Zero);
+
+                if (!player.CanGainItems(false, check)) return 0;
+
+                UserItem item = SEnvir.CreateFreshItem(check);
+
+                if (item == null) continue;
+
+                // 性别 / 职业 / 负重：全交给引擎判。不过就换下一件（比如女号自动跳过「布衣（男）」）。
+                if (!player.CanWearItem(item, slot)) continue;
+
+                player.GainItem(item);
+
+                int index = Array.IndexOf(player.Inventory, item);
+
+                if (index < 0) continue;
+
+                if (!BotBrain.TryEquip(player, index))
+                {
+                    // 发下去了但穿不上（负重卡住 / 槽位判定不一致）—— 留在背包里不删，
+                    // 至少下次拾取时 TryEquipBetter 还有机会换。
+                    BotLog.Warn(seq, string.Format("新手装：{0} 已发到背包但没穿上（槽位 {1}）", info.ItemName, slot));
+
+                    return 0;
+                }
+
+                BotLog.Info(seq, string.Format("新手装：{0}（需求 {1} 级）→ {2}", info.ItemName, info.RequiredAmount, slot));
+
+                return 1;
+            }
+
+            return 0;
+        }
+
+        /// <summary>找一张「等级要求最低」的回城卷（判定同 <see cref="BotActions.IsTownScroll(ItemInfo)"/>）。</summary>
+        private static ItemInfo FindTownScroll()
+        {
+            ItemInfo best = null;
+
+            foreach (ItemInfo info in SEnvir.ItemInfoList.Binding)
+            {
+                if (!BotActions.IsTownScroll(info)) continue;
+
+                if (info.RequiredAmount > 0 && info.RequiredAmount > 1) continue;
+
+                if (best == null || info.Price < best.Price) best = info;
+            }
+
+            return best;
         }
 
         /// <summary>按恢复属性找一瓶「等级要求最低」的药水。</summary>

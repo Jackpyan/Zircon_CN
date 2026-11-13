@@ -1,3 +1,4 @@
+using Library;
 using Server.Bots;
 using Server.Envir;
 
@@ -222,6 +223,78 @@ BotMetrics.Chat();
 
 Check(BotMetrics.MapChanges == 2, $"跨图计数（实测 {BotMetrics.MapChanges}）");
 Check(BotMetrics.Chats == 1, $"发言计数（实测 {BotMetrics.Chats}）");
+
+Console.WriteLine();
+Console.WriteLine("新号与运行参数默认值（P5-8）：");
+
+// 用户实测踩过的坑：BotNewbieGold 默认 5000 → 六合石跨图一次要几千金，
+// 假人判「没钱」只能退化成 A* 逐格走，洞穴图一绕就规划失败、卡死在半路。
+Check(Config.BotNewbieGold >= 100000,
+    $"启动金币默认值够跨图传送（实测 {Config.BotNewbieGold:N0}，5000 连一趟都不够）");
+Check(Config.BotNewbieGold / 10 == 50000,
+    $"补发阈值 = 启动金币的 10%（实测 {Config.BotNewbieGold / 10:N0}，掉到它以下才补）");
+Check(Config.BotNewbiePotionCount is > 0 and <= 20,
+    $"启动药水不会一出生就超重（实测 {Config.BotNewbiePotionCount} 瓶，红蓝各这么多）");
+Check(Config.BotNewbieTownScrollCount is > 0 and <= 10,
+    $"启动回城卷够跑一次闭环（实测 {Config.BotNewbieTownScrollCount} 张）");
+Check(Config.BotStartupRampSeconds >= 1 && Config.BotRosterIntervalSeconds >= 1,
+    $"铺量/重算间隔都 ≥ 1 秒（实测 {Config.BotStartupRampSeconds} s / {Config.BotRosterIntervalSeconds} s）");
+Check(Config.BotStepDelayMaxMs >= Config.BotStepDelayMinMs,
+    $"上线分步间隔上限不小于下限（实测 {Config.BotStepDelayMinMs}~{Config.BotStepDelayMaxMs} ms）");
+Check(Config.BotLogLevel is >= 0 and <= 3,
+    $"日志级别落在 0~3（实测 {Config.BotLogLevel}；调 2 会把正常事件也藏起来）");
+Check(Config.BotNightMinHour != Config.BotNightMaxHour,
+    $"夜间时段起止不相同（实测 {Config.BotNightMinHour}~{Config.BotNightMaxHour} 点）");
+Check(Config.BotNightScalePercent is > 0 and <= 100,
+    $"夜间比例在 1~100（实测 {Config.BotNightScalePercent}%）");
+
+// ── 群攻技能表自洽（2026-11-13）────────────────────────────────
+// BotSkills.GroupWanted 里的技能必须同时出现在 Wanted 里，否则假人**永远不会学它**
+// ——「群攻」就成了一段永远走不到的死代码。这个检查专门防这种手写表漏配。
+foreach (MirClass cls in new[] { MirClass.Wizard, MirClass.Taoist })
+{
+    var learned = BotSkills.Wanted(cls).ToHashSet();
+    var groups = BotSkills.GroupWanted(cls).ToList();
+
+    Check(groups.Count > 0, $"{cls} 配了群攻技能（实测 {groups.Count} 个）");
+
+    foreach (MagicType group in groups)
+    {
+        Check(learned.Contains(group),
+            $"{cls} 的群攻 {group} 也在补技能名单里（不在的话永远学不会）");
+    }
+}
+
+Check(!BotSkills.GroupWanted(MirClass.Warrior).Any(), "战士没有群攻（平砍就是输出）");
+
+// ── 弹药表自洽（2026-11-13）────────────────────────────────────
+// 三条不变量，都是「手写表漏配就会静默失效」的类型：
+// ① 施毒术是纯 debuff（只 ApplyPoison、零直接伤害），**绝不能**当攻击技能选出来 ——
+//    否则 12 级道士会站在 10 格外一直放毒、永不贴脸砍（用户 2026-11-13 报的就是这个）。
+// ② 要弹药的技能必须都在补技能名单里，否则买回来的护身符/毒药粉永远用不上。
+// ③ 反过来：攻击/群攻表里的技能如果漏登记弹药，就会「没弹药也照选」→ 空放（有动画、扣蓝、零伤害）。
+var taoistLearned = BotSkills.Wanted(MirClass.Taoist).ToHashSet();
+
+Check(!BotSkills.AttackSkillsOf(MirClass.Taoist).Contains(MagicType.PoisonDust),
+    "施毒术不在道士攻击技能表里（纯 debuff，只能当开场）");
+
+Check(taoistLearned.Contains(MagicType.PoisonDust),
+    "施毒术仍在补技能名单里（不在的话 TryOpenWithPoison 永远放不出来）");
+
+foreach (MagicType ammo in BotSkills.AmmoSkillTypes)
+{
+    bool learned = BotSkills.Wanted(MirClass.Taoist).Contains(ammo)
+                   || BotSkills.Wanted(MirClass.Wizard).Contains(ammo)
+                   || BotSkills.GroupWanted(MirClass.Taoist).Contains(ammo)
+                   || BotSkills.GroupWanted(MirClass.Wizard).Contains(ammo);
+
+    Check(learned, $"要弹药的 {ammo} 也在某个补技能名单里（不在的话弹药白买）");
+
+    EquipmentSlot slot = BotSkills.AmmoSlotOf(ammo);
+
+    Check(slot == EquipmentSlot.Amulet || slot == EquipmentSlot.Poison,
+        $"要弹药的 {ammo} 登记在 护身符/毒药 槽（实测 {slot}）");
+}
 
 Console.WriteLine();
 Console.WriteLine(new string('-', 60));

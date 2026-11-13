@@ -539,6 +539,110 @@ namespace Server.Bots
             return best;
         }
 
+        /// <summary>
+        /// 在当前 NPC 页里找「某一类弹药」（护身符 / 毒药粉），取最便宜的。
+        /// <para>
+        /// 弹药和药水的判定维度不同：药按恢复量挑档位，弹药只按类型 + 买得起筛。
+        /// 没有它的时候道士会**一直空放技能**（<c>UseAmulet</c>/<c>UsePoison</c> 失败，
+        /// 有动画、扣蓝、零伤害），所以补给必须能买到。
+        /// </para>
+        /// </summary>
+        public static NPCGood FindAmmoGood(PlayerObject player, ItemType itemType, long budget)
+        {
+            if (player?.NPCPage?.Goods == null) return null;
+
+            NPCGood best = null;
+
+            foreach (NPCGood good in player.NPCPage.Goods)
+            {
+                if (good?.Item == null) continue;
+                if (good.Item.ItemType != itemType) continue;
+
+                if (good.Cost > budget) continue;
+
+                if (best == null || good.Cost < best.Cost)
+                    best = good;
+            }
+
+            return best;
+        }
+
+        /// <summary>数一数背包里某类物品的总数量（含堆叠）。</summary>
+        public static int CountBag(PlayerObject player, ItemType itemType)
+        {
+            if (player?.Inventory == null) return 0;
+
+            int total = 0;
+
+            foreach (UserItem item in player.Inventory)
+            {
+                if (item?.Info == null) continue;
+                if (item.Info.ItemType != itemType) continue;
+
+                total += (int)item.Count;
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// 把背包里的弹药（护身符 / 毒药粉）装到对应装备槽。
+        /// <para>
+        /// <b>为什么必须做</b>：<c>UseAmulet</c> / <c>UsePoison</c> 读的是
+        /// <c>Equipment[Amulet]</c> / <c>Equipment[Poison]</c>，而买回来的东西进的是<b>背包</b>。
+        /// 不装上就等于没买 —— 技能照样空放，补给日志还会显示「买了 0 份」
+        /// （2026-11-13 本地实测：买是买到了，只是躺在背包里没装）。
+        /// </para>
+        /// <para>走真人同一条 <see cref="PlayerObject.ItemMove"/>（背包 → 装备槽），不做特权。</para>
+        /// </summary>
+        public static bool TryEquipAmmo(PlayerObject player, EquipmentSlot slot)
+        {
+            if (player?.Inventory == null) return false;
+
+            ItemType expect = slot == EquipmentSlot.Poison ? ItemType.Poison : ItemType.Amulet;
+
+            long before = player.Equipment?[(int)slot]?.Count ?? 0;
+
+            for (int i = 0; i < player.Inventory.Length; i++)
+            {
+                UserItem item = player.Inventory[i];
+
+                if (item?.Info == null) continue;
+                if (item.Info.ItemType != expect) continue;
+
+                UserItem target = player.Equipment?[(int)slot];
+
+                // **MergeItem 只能在槽里已经有同款时用**。
+                // `ItemMove` 的合并分支第一句就是
+                // `if (toItem == null || toItem.Info != fromItem.Info ...) return;`
+                // —— 槽是空的时候传 MergeItem = true 等于什么都不做
+                // （2026-11-13 本地实测：背包里有 10 份护身符，装备槽一直是 0）。
+                bool merge = target != null && target.Info == item.Info;
+
+                if (MoveToSlot(player, i, slot, merge) > before) return true;
+
+                // 合并被拒（标记不同：买来的是 Locked、旧的是别的来源）→ 退一步直接换上去。
+                if (merge && MoveToSlot(player, i, slot, false) > before) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>把背包第 <paramref name="fromSlot"/> 格移到装备槽，返回移动后槽里的数量。</summary>
+        private static long MoveToSlot(PlayerObject player, int fromSlot, EquipmentSlot slot, bool merge)
+        {
+            player.ItemMove(new C.ItemMove
+            {
+                FromGrid = GridType.Inventory,
+                FromSlot = fromSlot,
+                ToGrid = GridType.Equipment,
+                ToSlot = (int)slot,
+                MergeItem = merge,
+            });
+
+            return player.Equipment?[(int)slot]?.Count ?? 0;
+        }
+
         #endregion
     }
 }

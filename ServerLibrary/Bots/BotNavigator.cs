@@ -78,6 +78,73 @@ namespace Server.Bots
             return player.CurrentLocation != before ? BotMoveResult.Moved : BotMoveResult.Blocked;
         }
 
+        /// <summary>
+        /// 「避让活物」地朝目标迈一步 —— 专门用来破「原地打转」。
+        /// <para>
+        /// <see cref="TryStepTowards"/> 内部调 A* 时传的是 <c>avoidLiveObjects: false</c>
+        /// （不把别的角色/宝宝当障碍），于是被一个站着不动的假人挡住时会变成：
+        /// A* 指向同一格 → 迈不动 → 侧移一步 → 下一帧 A* 又指回原来那格 → 再侧移回来。
+        /// 每步都在动，看起来就是「围着遮挡物绕圈」，实测能把假人钉在原地好几分钟。
+        /// </para>
+        /// <para>
+        /// 这里改用 <c>avoidLiveObjects: true</c> 重算，A* 会主动绕开人群。
+        /// <b>调用方必须自己节流</b>：整图 A* 一次 20~30ms，30 个假人每帧都算会把主线程吃光。
+        /// </para>
+        /// <para>算不出「绕开活物」的路时返回 false，调用方应退回原来的侧移/换点逻辑。</para>
+        /// </summary>
+        public static bool TryStepAvoidingLive(PlayerObject player, Point target)
+        {
+            if (player == null || player.Dead || player.CurrentMap == null) return false;
+
+            if (player.CurrentLocation == target) return false;
+
+            if (!player.CanMove) return false;
+
+            if (!AutoPathRoutePlanner.TryBuildCurrentPath(player, target, true, out List<Point> path)) return false;
+
+            if (path == null || path.Count < 2) return false;
+
+            Point before = player.CurrentLocation;
+
+            player.Move(Functions.DirectionFromPoint(before, path[1]), 1);
+
+            return player.CurrentLocation != before;
+        }
+
+        /// <summary>
+        /// 「避让活物」地朝目标**附近**迈一步 —— 追怪专用。
+        /// <para>
+        /// 为什么不能直接用 <see cref="TryStepAvoidingLive"/> 追怪：怪自己站的那格是阻挡物，
+        /// A* 的终点永远迈不进去，路径算不出来。所以终点集合要换成「目标周围 radius 格内的可走格」，
+        /// 这和 <see cref="TryStepTowardsNear"/> 的做法一致。
+        /// </para>
+        /// <para>
+        /// 实测（2026-11-13 第三轮）：BOT#21 在潘夜村 (157,182) 追一头 11 格外的猪，
+        /// 8 秒内活动范围只有 1×1 格、一刀没砍出去 —— 就是「侧移 → 下一帧 A* 又指回去」的横跳。
+        /// <b>调用方必须自己节流</b>（整图 A* 一次 20~30ms）。
+        /// </para>
+        /// </summary>
+        public static bool TryStepAvoidingLiveNear(PlayerObject player, Point target, int radius)
+        {
+            if (player == null || player.Dead || player.CurrentMap == null) return false;
+
+            if (!player.CanMove) return false;
+
+            HashSet<Point> targets = CollectWalkableAround(player, player.CurrentMap, target, radius);
+
+            if (targets.Count == 0) return false;
+
+            if (!AutoPathRoutePlanner.TryBuildCurrentPathTo(player, targets, true, out List<Point> path)) return false;
+
+            if (path == null || path.Count < 2) return false;
+
+            Point before = player.CurrentLocation;
+
+            player.Move(Functions.DirectionFromPoint(before, path[1]), 1);
+
+            return player.CurrentLocation != before;
+        }
+
         /// <summary>只算路不走路，用于「这个点到底去不去得」的预检和调试。</summary>
         public static bool TryGetNextStep(PlayerObject player, Point target, out Point next)
         {

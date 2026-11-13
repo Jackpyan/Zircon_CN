@@ -6,6 +6,7 @@
 @using Server.Web.Services
 @using Library
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Hosting
 @using System.Security.Claims
 @inject BotAdminService Admin
 @inject IGameServerController GameServer
@@ -13,6 +14,7 @@
 @inject LogBufferService Logs
 @inject ConfigurationService ConfigurationManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IWebHostEnvironment Env
 
 <PageTitle>AI 假人 · Zircon</PageTitle>
 
@@ -49,7 +51,7 @@
 {
     <div class="alert warning" style="margin-bottom:12px;">
         假人调度当前<strong>已停用</strong>。点右上角「启用假人」后，调度器会在下一轮按水位开始拉人。
-        参数在「配置 → Bots」，改完即时生效，不用重启。
+        参数在「上线管理」和「配置 → Bots」，改完即时生效，不用重启。
     </div>
 }
 
@@ -188,24 +190,24 @@
                 <table class="admin-table bot-live-table">
                     <thead>
                         <tr>
-                            <th style="width:40px;">#</th>
-                            <th style="width:110px;">角色</th>
-                            <th style="width:52px;">职业</th>
-                            <th style="width:62px;">等级</th>
-                            <th style="width:96px;">HP</th>
-                            <th style="width:88px;">MP</th>
-                            <th style="width:110px;">地图</th>
-                            <th style="width:76px;">坐标</th>
-                            <th style="width:88px;">状态</th>
-                            <th style="width:56px;">击杀</th>
-                            <th style="width:52px;">复活</th>
-                            <th style="width:66px;">在线</th>
-                            <th style="width:86px;">金币</th>
-                            <th style="width:104px;">负重</th>
-                            <th style="width:86px;">装备持久</th>
-                            <th style="width:96px;">最近技能</th>
-                            <th style="width:180px;">最近动作 / 最后错误</th>
-                            <th style="width:196px;">操作</th>
+                            <th style="width:34px;">#</th>
+                            <th style="width:92px;">角色</th>
+                            <th style="width:44px;">职业</th>
+                            <th style="width:52px;">等级</th>
+                            <th style="width:78px;">HP</th>
+                            <th style="width:72px;">MP</th>
+                            <th style="width:86px;">地图</th>
+                            <th style="width:60px;">坐标</th>
+                            <th style="width:76px;">状态</th>
+                            <th style="width:42px;">击杀</th>
+                            <th style="width:42px;">复活</th>
+                            <th style="width:54px;">在线</th>
+                            <th style="width:76px;">金币</th>
+                            <th style="width:90px;">负重</th>
+                            <th style="width:58px;">装备持久</th>
+                            <th style="width:76px;">最近技能</th>
+                            <th style="width:160px;">最近动作 / 最后错误</th>
+                            <th style="width:168px;">操作</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -247,10 +249,11 @@
                                 <td>@row.Deaths</td>
                                 <td>@(string.IsNullOrEmpty(row.OnlineFor) ? "—" : row.OnlineFor)</td>
                                 <td>@row.Gold.ToString("N0")</td>
-                                <td>
+                                @* 负重压成两行（数值 + 条），「45% · 16/32 格」挪进 title。
+                                   原来是三行，比任何一列都高，整行被它撑起来 —— 也是「看着不协调」的一部分。 *@
+                                <td title="@row.BagWeightPercent% · @row.UsedSlots/@row.SlotCount 格">
                                     <div class="cell-stack">
                                         <b class="@WeightClass(row)">@row.BagWeight / @row.MaxBagWeight</b>
-                                        <small>@row.BagWeightPercent% · @row.UsedSlots/@row.SlotCount 格</small>
                                         <span class="bar weight @WeightBarClass(row)"><i style="width:@BarWidth(Math.Min(100, row.BagWeightPercent))"></i></span>
                                     </div>
                                 </td>
@@ -327,6 +330,19 @@
 @* ============================ 上线管理 ============================ *@
 @if (_tab == TabManage)
 {
+    @* 这是「假人全军覆没」的头号原因，而且现象极具误导性：
+       SEnvir.StartGame 第一行就 Disabled 直接 return，不写日志、不改连接状态，
+       假人只表现为「进图中」20 秒超时 → 连失败 3 次 Broken。
+       AdminAutoStartGameServer（开机自动起游戏服）不管这个开关，别以为起了就能进。 *@
+    @if (!Config.AllowStartGame)
+    {
+        <div class="alert danger" style="margin-bottom:14px;">
+            <b>「允许进入游戏」是关闭的</b>（<code>控制 → 允许进入游戏</code>）——
+            假人和真人都进不了图，假人会在「进图中」干等 20 秒后报阶段超时，
+            连失败 3 次就被标记 Broken。请到「配置 → Control」勾上「允许进入游戏」并保存。
+        </div>
+    }
+
     <AuthorizeView Policy="@AdminPermissions.PolicyOperate">
         <div class="control-cluster" style="margin-bottom:14px;">
             <RadzenButton Text="上 5 个" Icon="group_add" ButtonStyle="ButtonStyle.Light"
@@ -374,8 +390,8 @@
         </div>
 
         <div class="control-cluster" style="margin:14px 0;">
-            <RadzenButton Text="保存水位" Icon="save" ButtonStyle="ButtonStyle.Primary"
-                          Click="SaveWatermark" />
+            <RadzenButton Text="@(_saving ? "保存中…" : "保存水位")" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveWatermark" Disabled="@_saving" />
             <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
                           Click="LoadWatermark" />
             <span style="font-size:12px;opacity:.7;align-self:center;">
@@ -426,8 +442,8 @@
         </div>
 
         <div class="control-cluster" style="margin:14px 0;">
-            <RadzenButton Text="保存熔断设置" Icon="save" ButtonStyle="ButtonStyle.Primary"
-                          Click="SaveBreaker" />
+            <RadzenButton Text="@(_saving ? "保存中…" : "保存熔断设置")" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveBreaker" Disabled="@_saving" />
             <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
                           Click="LoadWatermark" />
             <RadzenButton Text="立即解除熔断" Icon="lock_open" ButtonStyle="ButtonStyle.Warning"
@@ -439,6 +455,144 @@
                 {
                     <b style="color:var(--red);"> · 上限已压到 @Perf.BreakerCeiling</b>
                 }
+            </span>
+        </div>
+
+        <h2 style="margin:26px 0 8px;font-size:16px;">
+            新号与运行参数
+            <small style="font-size:11px;font-weight:400;opacity:.6;">P5-8 · 以前只能改 Server.ini</small>
+        </h2>
+        <p style="opacity:.75;font-size:13px;margin:0 0 12px;line-height:1.7;">
+            这些以前<b>只能在服务器上改 <code>Server.ini</code></b>，改完还得重启，出问题（比如新号钱不够传送）
+            只能靠人登服务器。现在搬到这里在线改，和「配置 → Bots」写的是同一份数据。
+            <br />
+            <b>注意：<code>Server.ini</code> 里写过的键会盖住代码默认值</b> —— 老部署里
+            <code>BotNewbieGold=5000</code> 是当年落盘的，代码把默认值改成 50 万也救不回来，
+            必须在这里改一次、点保存才会写回去。
+        </p>
+
+        <h3 style="margin:16px 0 6px;font-size:13px;font-weight:600;opacity:.85;">新号启动资源</h3>
+        <div class="water-grid">
+            <div class="config-field">
+                <span>启动金币 <em>BotNewbieGold</em></span>
+                <input type="number" min="0" max="100000000" step="10000" @bind="_newbieGold" />
+                <span class="field-note">默认 50 万；低于本值 10% 才补发，有满额就永远跳过</span>
+            </div>
+            <div class="config-field">
+                <span>启动药水 <em>BotNewbiePotionCount</em></span>
+                <input type="number" min="0" max="200" @bind="_newbiePotion" />
+                <span class="field-note">红蓝<b>各</b>这么多瓶；还受负重预算约束（最多到负重 60%）</span>
+            </div>
+            <div class="config-field">
+                <span>启动回城卷 <em>BotNewbieTownScrollCount</em></span>
+                <input type="number" min="0" max="50" @bind="_newbieScroll" />
+                <span class="field-note">回城卷只能回绑定点，绑定点不一定在练级图附近</span>
+            </div>
+        </div>
+
+        <h3 style="margin:16px 0 6px;font-size:13px;font-weight:600;opacity:.85;">上线节奏</h3>
+        <div class="water-grid">
+            <div class="config-field">
+                <span>冷启动铺量间隔 <em>BotStartupRampSeconds</em></span>
+                <input type="number" min="1" max="3600" @bind="_rampSeconds" />
+                <span class="field-note">首次铺满时每放一个人等几秒；铺完转回水位节奏</span>
+            </div>
+            <div class="config-field">
+                <span>水位重算间隔 <em>BotRosterIntervalSeconds</em></span>
+                <input type="number" min="1" max="600" @bind="_rosterInterval" />
+                <span class="field-note">稳态补人/撤人的节奏（秒）</span>
+            </div>
+            <div class="config-field">
+                <span>上线分步间隔 <em>BotStepDelayMin~MaxMs</em></span>
+                <div class="water-range">
+                    <input type="number" min="0" max="60000" @bind="_stepMinMs" />
+                    <span>~</span>
+                    <input type="number" min="0" max="60000" @bind="_stepMaxMs" />
+                </div>
+                <span class="field-note">连接/登录/进图每步之间随机等这么久（毫秒）</span>
+            </div>
+            <div class="config-field">
+                <span>日志级别 <em>BotLogLevel</em></span>
+                <select @bind="_logLevel">
+                    <option value="0">0 · Debug（每帧细节，很吵）</option>
+                    <option value="1">1 · Info（默认，正常事件）</option>
+                    <option value="2">2 · Warn（只看异常）</option>
+                    <option value="3">3 · Error（只看错误）</option>
+                </select>
+                <span class="field-note">调到 2/3 会把正常事件也藏起来，排查时记得调回 1</span>
+            </div>
+        </div>
+
+        <h3 style="margin:16px 0 6px;font-size:13px;font-weight:600;opacity:.85;">补给阈值</h3>
+        <div class="water-grid">
+            <div class="config-field">
+                <span>断药判定 <em>BotRestockPotionLow</em></span>
+                <input type="number" min="0" max="200" @bind="_restockLow" />
+                <span class="field-note">某种药低于这个数就去补给</span>
+            </div>
+            <div class="config-field">
+                <span>每次买红药 <em>BotRestockBuyRed</em></span>
+                <input type="number" min="0" max="500" @bind="_buyRed" />
+                <span class="field-note">一次补给买多少瓶红（实际受金币和负重限制）</span>
+            </div>
+            <div class="config-field">
+                <span>每次买蓝药 <em>BotRestockBuyBlue</em></span>
+                <input type="number" min="0" max="500" @bind="_buyBlue" />
+                <span class="field-note">战士不发也不喝蓝，这个值对战士无效</span>
+            </div>
+            <div class="config-field">
+                <span>每次买回城卷 <em>BotRestockBuyTownScroll</em></span>
+                <input type="number" min="0" max="50" @bind="_buyTownScroll" />
+                <span class="field-note">补到几张就停，别囤太多占负重</span>
+            </div>
+        </div>
+
+        <h3 style="margin:16px 0 6px;font-size:13px;font-weight:600;opacity:.85;">夜间作息</h3>
+        <div class="water-grid">
+            <div class="config-field">
+                <span>启用夜间缩水 <em>BotNightEnabled</em></span>
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                    <input type="checkbox" @bind="_nightEnabled" />
+                    <span>@(_nightEnabled ? "已启用" : "不缩水")</span>
+                </label>
+                <span class="field-note">按<b>服务器本机时区</b>算（现在 @NightClockText）</span>
+            </div>
+            <div class="config-field">
+                <span>夜间时段 <em>BotNightMin~MaxHour</em></span>
+                <div class="water-range">
+                    <input type="number" min="0" max="23" @bind="_nightMin" />
+                    <span>~</span>
+                    <input type="number" min="0" max="23" @bind="_nightMax" />
+                </div>
+                <span class="field-note">终点不含；起止相等 = 不启用</span>
+            </div>
+            <div class="config-field">
+                <span>夜间比例 <em>BotNightScalePercent</em></span>
+                <input type="number" min="1" max="100" @bind="_nightScale" />
+                <span class="field-note">夜间在线目标按这个百分比缩水（50 = 减半）</span>
+            </div>
+            <div class="config-field">
+                <span>当前生效</span>
+                <strong>@BotRoster.EffectiveTarget</strong>
+                <span class="field-note">
+                    水位目标 @Config.BotTargetOnline → 实际 @BotRoster.EffectiveTarget
+                    @if (BotRoster.IsNightNow)
+                    {
+                        <b style="color:var(--amber,#b8860b);"> · 夜间中</b>
+                    }
+                </span>
+            </div>
+        </div>
+
+        <div class="control-cluster" style="margin:14px 0 4px;">
+            <RadzenButton Text="@(_saving ? "保存中…" : "保存假人参数")" Icon="save" ButtonStyle="ButtonStyle.Primary"
+                          Click="SaveBotParams" Disabled="@_saving" />
+            <RadzenButton Text="还原" Icon="undo" ButtonStyle="ButtonStyle.Light"
+                          Click="LoadWatermark" />
+            <span style="font-size:12px;opacity:.7;align-self:center;">
+                当前生效：金币 @Config.BotNewbieGold.ToString("N0") · 药 @Config.BotNewbiePotionCount ·
+                卷 @Config.BotNewbieTownScrollCount · 日志 @Config.BotLogLevel ·
+                夜间 @(Config.BotNightEnabled ? Config.BotNightScalePercent + "%" : "关")
             </span>
         </div>
     </AuthorizeView>
@@ -622,7 +776,8 @@
 
     <h2 style="margin:18px 0 8px;font-size:16px;">当前生效参数（只读）</h2>
     <p style="opacity:.75;font-size:13px;margin:0 0 10px;">
-        改这些要去「配置 → Bots」，保存后即时生效。这里只是让运营不用来回跳页就能确认现值。
+        改这些去「上线管理」（水位 / 熔断 / 新号与运行参数）或「配置 → Bots」，保存后即时生效。
+        这里只是让运营不用来回跳页就能确认现值。
     </p>
 
     <div class="readonly-grid">
@@ -630,6 +785,9 @@
         <div><span>水位 目标/最小/最大</span><b>@Config.BotTargetOnline / @Config.BotMinOnline / @Config.BotMaxOnline</b></div>
         <div><span>每轮变更上限</span><b>@Config.BotMaxChangePerTick</b></div>
         <div><span>分图容量</span><b>@Config.BotMapCapacity</b></div>
+        <div><span>新号启动</span><b>@Config.BotNewbieGold.ToString("N0") 金 · 药 @Config.BotNewbiePotionCount · 卷 @Config.BotNewbieTownScrollCount</b></div>
+        <div><span>上线节奏</span><b>铺量 @Config.BotStartupRampSeconds s · 重算 @Config.BotRosterIntervalSeconds s · 分步 @Config.BotStepDelayMinMs~@Config.BotStepDelayMaxMs ms</b></div>
+        <div><span>补给</span><b>低于 @Config.BotRestockPotionLow 就补 · 红 @Config.BotRestockBuyRed / 蓝 @Config.BotRestockBuyBlue / 卷 @Config.BotRestockBuyTownScroll</b></div>
         <div><span>日志级别</span><b>@Config.BotLogLevel</b></div>
         <div><span>聊天</span><b>@(Config.BotChatEnabled ? "开" : "关") @Config.BotChatIntervalMinSeconds~@Config.BotChatIntervalMaxSeconds 秒</b></div>
         <div><span>社交总开关</span><b>@(Config.BotSocialEnabled ? "开" : "关")</b></div>
@@ -777,7 +935,7 @@
                                         @onclick="() => SelectSlot(captured)">
                                     @if (slot.HasItem)
                                     {
-                                        <img src="@ItemIconUrl(slot.Image)" alt="@slot.ItemName" loading="lazy" />
+                                        @ItemIcon(slot.Image, slot.ItemName)
                                         @if (slot.HasDurability && slot.DurabilityPercent <= 20)
                                         {
                                             <i class="doll-worn"></i>
@@ -792,6 +950,13 @@
                         </div>
 
                         <p class="doll-hint">点槽位看物品详情 · 红点 = 持久 ≤20%</p>
+                        @if (!ItemIconAtlas.Ready)
+                        {
+                            <p class="doll-hint" style="color:var(--amber,#b8860b);">
+                                图标图集没加载（@ItemIconAtlas.LastError）—— 装备图标会显示不出来。
+                                在开发机跑 <code>iconpack.exe &lt;Data&gt; &lt;Server.Web\wwwroot\icons\items&gt; &lt;Server.Web&gt; --equip-only --atlas</code> 生成。
+                            </p>
+                        }
                     </div>
 
                     @* ---------- 右：物品卡 ---------- *@
@@ -810,7 +975,7 @@
                         else
                         {
                             <div class="item-card-head">
-                                <img src="@ItemIconUrl(_detailSlot.Image)" alt="@_detailSlot.ItemName" />
+                                @ItemIcon(_detailSlot.Image, _detailSlot.ItemName)
                                 <div>
                                     <b>@_detailSlot.ItemName</b>
                                     <small>@SlotText(_detailSlot.SlotName) · @_detailSlot.TypeName</small>
@@ -943,6 +1108,19 @@
 
     #region P4-5 过载熔断设置
 
+    /// <summary>
+    /// 正在写 Server.ini。
+    /// <para>
+    /// 2026-11-13 用户反馈「第一次点启用熔断，网页和客户端一起卡了几秒」：
+    /// <see cref="ConfigurationService.Save"/> 是**同步**调用，反射 196 个属性 +
+    /// 重写 Server.ini + 给客户端 exe 算一次 SHA256 + 同步写审计 jsonl，
+    /// 全部压在 Blazor 电路线程上；首次还要现做程序集反射和文件句柄冷启动，
+    /// 于是整个页面停在那儿。现在统一走 <see cref="SaveConfigAsync"/> 丢到线程池，
+    /// 期间按钮置灰并显示「保存中…」，页面不会再僵住。
+    /// </para>
+    /// </summary>
+    private bool _saving;
+
     /// <summary>是否启用全局熔断。</summary>
     private bool _breakerEnabled;
 
@@ -954,6 +1132,58 @@
 
     /// <summary>回落到阈值一半以下并持续多少秒解除。</summary>
     private int _breakerRecoverSeconds;
+
+    #endregion
+
+    #region P5-8 新号与运行参数在线编辑
+
+    /// <summary>新号启动金币。</summary>
+    private int _newbieGold;
+
+    /// <summary>新号启动药水（红蓝各）。</summary>
+    private int _newbiePotion;
+
+    /// <summary>新号启动回城卷。</summary>
+    private int _newbieScroll;
+
+    /// <summary>冷启动铺量间隔（秒）。</summary>
+    private int _rampSeconds;
+
+    /// <summary>水位重算间隔（秒）。</summary>
+    private int _rosterInterval;
+
+    /// <summary>上线分步最小间隔（毫秒）。</summary>
+    private int _stepMinMs;
+
+    /// <summary>上线分步最大间隔（毫秒）。</summary>
+    private int _stepMaxMs;
+
+    /// <summary>日志级别 0~3。</summary>
+    private int _logLevel;
+
+    /// <summary>断药判定阈值。</summary>
+    private int _restockLow;
+
+    /// <summary>一次补给买多少红药。</summary>
+    private int _buyRed;
+
+    /// <summary>一次补给买多少蓝药。</summary>
+    private int _buyBlue;
+
+    /// <summary>一次补给买多少回城卷。</summary>
+    private int _buyTownScroll;
+
+    /// <summary>是否启用夜间缩水。</summary>
+    private bool _nightEnabled;
+
+    /// <summary>夜间时段起点（点）。</summary>
+    private int _nightMin;
+
+    /// <summary>夜间时段终点（点，不含）。</summary>
+    private int _nightMax;
+
+    /// <summary>夜间在线比例（%）。</summary>
+    private int _nightScale;
 
     #endregion
 
@@ -1143,8 +1373,43 @@
             ? $"{slot.ItemName}（{SlotText(slot.SlotName)}）{slot.DurabilityPercent}%"
             : SlotText(slot.SlotName);
 
-    /// <summary>图标静态路径。<c>Image</c> 为负说明这件物品没配图标，返回空串让 img 自然不显示。</summary>
+    /// <summary>老路径：一张张 png（图集不可用时的兜底）。<c>Image</c> 为负说明这件物品没配图标。</summary>
     private static string ItemIconUrl(int image) => image < 0 ? string.Empty : $"/icons/items/{image}.png";
+
+    /// <summary>
+    /// 画一个物品图标。
+    /// <para>
+    /// 首选<b>图集</b>（<see cref="ItemIconAtlas"/>）：<c>icons/items/atlas.png</c> 里一格一张，
+    /// 用 <c>background-position</c> 定位，部署目录里就只有 2 个文件而不是 700 多个。
+    /// 图集缺失/没收录这个序号时，退回老的「一张张 png」——老部署不重跑 iconpack 也不会变成一片空白。
+    /// </para>
+    /// </summary>
+    private static RenderFragment ItemIcon(int image, string alt) => builder =>
+    {
+        if (image < 0) return;
+
+        if (ItemIconAtlas.TryGet(image, out int col, out int row))
+        {
+            int cell = ItemIconAtlas.Cell;
+
+            builder.OpenElement(0, "i");
+            builder.AddAttribute(1, "class", "item-ic");
+            builder.AddAttribute(2, "title", alt);
+            builder.AddAttribute(3, "style",
+                $"background-position:{-col * cell}px {-row * cell}px;" +
+                $"background-size:{ItemIconAtlas.Width}px {ItemIconAtlas.Height}px;");
+            builder.CloseElement();
+
+            return;
+        }
+
+        builder.OpenElement(4, "img");
+        builder.AddAttribute(5, "src", ItemIconUrl(image));
+        builder.AddAttribute(6, "alt", alt);
+        builder.AddAttribute(7, "loading", "lazy");
+        builder.AddAttribute(8, "onerror", "this.style.display='none'");
+        builder.CloseElement();
+    };
 
     private static string DurabilityClass(int percent) =>
         percent <= 20 ? "text-danger" : percent <= 50 ? "text-warn" : string.Empty;
@@ -1167,6 +1432,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // 图标图集索引（icons/items/atlas.json）——只读一次，之后全是内存查表
+        ItemIconAtlas.Initialize(Env.WebRootPath);
+
         AuthenticationState state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
 
         _user = state.User;
@@ -1429,6 +1697,35 @@
         _breakerSharePercent = Config.BotBreakerSharePercent;
         _breakerTripSeconds = Config.BotBreakerTripSeconds;
         _breakerRecoverSeconds = Config.BotBreakerRecoverSeconds;
+
+        LoadBotParams();
+    }
+
+    /// <summary>
+    /// 把「新号与运行参数」填回输入框。和 <see cref="LoadWatermark"/> 分开只是为了让
+    /// 那一段别继续膨胀 —— 两个区块共用同一个「还原」按钮，所以这里由它串起来调。
+    /// </summary>
+    private void LoadBotParams()
+    {
+        _newbieGold = Config.BotNewbieGold;
+        _newbiePotion = Config.BotNewbiePotionCount;
+        _newbieScroll = Config.BotNewbieTownScrollCount;
+
+        _rampSeconds = Config.BotStartupRampSeconds;
+        _rosterInterval = Config.BotRosterIntervalSeconds;
+        _stepMinMs = Config.BotStepDelayMinMs;
+        _stepMaxMs = Config.BotStepDelayMaxMs;
+        _logLevel = Config.BotLogLevel;
+
+        _restockLow = Config.BotRestockPotionLow;
+        _buyRed = Config.BotRestockBuyRed;
+        _buyBlue = Config.BotRestockBuyBlue;
+        _buyTownScroll = Config.BotRestockBuyTownScroll;
+
+        _nightEnabled = Config.BotNightEnabled;
+        _nightMin = Config.BotNightMinHour;
+        _nightMax = Config.BotNightMaxHour;
+        _nightScale = Config.BotNightScalePercent;
     }
 
     /// <summary>
@@ -1465,20 +1762,9 @@
             [nameof(Config.BotMapCapacity)] = _waterMapCapacity.ToString(),
         };
 
-        try
-        {
-            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
-
-            ConfigurationManager.Save(values, user);
-
-            Report(BotCommandResult.Success(
-                $"水位已保存：目标 {Config.BotTargetOnline}（{Config.BotMinOnline}~{Config.BotMaxOnline}）、" +
-                $"每轮 ±{Config.BotMaxChangePerTick}、分图容量 {Config.BotMapCapacity}。下一轮调度生效。"));
-        }
-        catch (Exception ex)
-        {
-            Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
-        }
+        await SaveConfigAsync(values,
+            $"水位已保存：目标 {_waterTarget}（{_waterMin}~{_waterMax}）、" +
+            $"每轮 ±{_waterStep}、分图容量 {_waterMapCapacity}。下一轮调度生效。");
     }
 
     #endregion
@@ -1512,24 +1798,118 @@
             [nameof(Config.BotBreakerRecoverSeconds)] = _breakerRecoverSeconds.ToString(),
         };
 
-        try
-        {
-            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
-
-            ConfigurationManager.Save(values, user);
-
-            Report(BotCommandResult.Success(
-                $"熔断设置已保存：{(_breakerEnabled ? "启用" : "关闭")}、" +
-                $"{Config.BotBreakerSharePercent}% / {Config.BotBreakerTripSeconds} s / {Config.BotBreakerRecoverSeconds} s。下一轮评估生效。"));
-        }
-        catch (Exception ex)
-        {
-            Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
-        }
+        await SaveConfigAsync(values,
+            $"熔断设置已保存：{(_breakerEnabled ? "启用" : "关闭")}、" +
+            $"{_breakerSharePercent}% / {_breakerTripSeconds} s / {_breakerRecoverSeconds} s。下一轮评估生效。");
     }
 
     /// <summary>手动解除熔断（误触发时的逃生口）。</summary>
     private async Task ResetBreaker() => Report(await Admin.ResetBreakerAsync(_user));
+
+    #endregion
+
+    #region P5-8 新号与运行参数
+
+    /// <summary>
+    /// 保存「新号与运行参数」。和 <see cref="SaveWatermark"/> 一样走
+    /// <see cref="ConfigurationManager.Save"/>，理由也一样：写文件、刷 <see cref="Config"/>、
+    /// 失败回滚、记 <c>Configuration.Save</c> 审计，四件事都在它里面，自己写文件必漏。
+    /// </summary>
+    private async Task SaveBotParams()
+    {
+        if (_newbieGold < 0 || _newbieGold > 100000000)
+        {
+            Report(BotCommandResult.Fail("启动金币必须在 0 ~ 1 亿之间"));
+
+            return;
+        }
+
+        if (_newbiePotion < 0 || _newbiePotion > 200 || _newbieScroll < 0 || _newbieScroll > 50)
+        {
+            Report(BotCommandResult.Fail("启动药水要在 0 ~ 200 之间、回城卷要在 0 ~ 50 之间"));
+
+            return;
+        }
+
+        if (_rampSeconds < 1 || _rosterInterval < 1)
+        {
+            Report(BotCommandResult.Fail("冷启动铺量间隔与水位重算间隔都必须 ≥ 1 秒"));
+
+            return;
+        }
+
+        if (_stepMinMs < 0 || _stepMaxMs < _stepMinMs)
+        {
+            Report(BotCommandResult.Fail($"上线分步间隔不合法：{_stepMinMs} ~ {_stepMaxMs}（上限不能小于下限）"));
+
+            return;
+        }
+
+        if (_logLevel < 0 || _logLevel > 3)
+        {
+            Report(BotCommandResult.Fail("日志级别只能是 0~3（Debug/Info/Warn/Error）"));
+
+            return;
+        }
+
+        if (_restockLow < 0 || _buyRed < 0 || _buyBlue < 0 || _buyTownScroll < 0)
+        {
+            Report(BotCommandResult.Fail("补给阈值与购买数量都不能是负数"));
+
+            return;
+        }
+
+        if (_nightMin < 0 || _nightMin > 23 || _nightMax < 0 || _nightMax > 23)
+        {
+            Report(BotCommandResult.Fail("夜间时段必须在 0 ~ 23 点之间"));
+
+            return;
+        }
+
+        if (_nightEnabled && _nightMin == _nightMax)
+        {
+            Report(BotCommandResult.Fail("夜间时段起止不能相同（相同等于不启用，请直接关掉开关）"));
+
+            return;
+        }
+
+        if (_nightScale < 1 || _nightScale > 100)
+        {
+            Report(BotCommandResult.Fail("夜间比例必须在 1 ~ 100 之间"));
+
+            return;
+        }
+
+        Dictionary<string, string?> values = new()
+        {
+            [nameof(Config.BotNewbieGold)] = _newbieGold.ToString(),
+            [nameof(Config.BotNewbiePotionCount)] = _newbiePotion.ToString(),
+            [nameof(Config.BotNewbieTownScrollCount)] = _newbieScroll.ToString(),
+            [nameof(Config.BotStartupRampSeconds)] = _rampSeconds.ToString(),
+            [nameof(Config.BotRosterIntervalSeconds)] = _rosterInterval.ToString(),
+            [nameof(Config.BotStepDelayMinMs)] = _stepMinMs.ToString(),
+            [nameof(Config.BotStepDelayMaxMs)] = _stepMaxMs.ToString(),
+            [nameof(Config.BotLogLevel)] = _logLevel.ToString(),
+            [nameof(Config.BotRestockPotionLow)] = _restockLow.ToString(),
+            [nameof(Config.BotRestockBuyRed)] = _buyRed.ToString(),
+            [nameof(Config.BotRestockBuyBlue)] = _buyBlue.ToString(),
+            [nameof(Config.BotRestockBuyTownScroll)] = _buyTownScroll.ToString(),
+            [nameof(Config.BotNightEnabled)] = _nightEnabled ? "True" : "False",
+            [nameof(Config.BotNightMinHour)] = _nightMin.ToString(),
+            [nameof(Config.BotNightMaxHour)] = _nightMax.ToString(),
+            [nameof(Config.BotNightScalePercent)] = _nightScale.ToString(),
+        };
+
+        // 5000 金就是用户踩过的坑：连一趟跨图传送都不够，跨图只能退化成 A* 走，
+        // 洞穴图一绕就规划失败。不拦住（有人可能故意配 0），但必须在成功提示里点出来。
+        string hint = _newbieGold > 0 && _newbieGold < 10000
+            ? $"（注意：{_newbieGold:N0} 金连一趟跨图传送都不够，新号会「没钱」走不动）"
+            : string.Empty;
+
+        await SaveConfigAsync(values,
+            $"假人参数已保存：金币 {_newbieGold:N0}、药 {_newbiePotion}、卷 {_newbieScroll}、" +
+            $"日志 {_logLevel}、夜间 {(_nightEnabled ? _nightScale + "%" : "关")}。{hint}下一轮生效。");
+    }
 
     #endregion
 
@@ -1576,6 +1956,46 @@
         _messageOk = result.Ok;
 
         Refresh();
+    }
+
+    /// <summary>
+    /// 统一保存入口：把 <see cref="ConfigurationService.Save"/> 挪到线程池上执行。
+    /// <para>
+    /// 为什么必须挪：它是同步的（反射 Config 全部属性 → 重写 Server.ini →
+    /// 给客户端 exe 算 SHA256 → 同步追加审计 jsonl）。放在电路线程上直接调，
+    /// 首次点击会出现「整页僵住几秒」（2026-11-13 用户实测，见 <see cref="_saving"/> 的注释）。
+    /// </para>
+    /// <para>
+    /// 副作用是安全的：<c>Save</c> 只写静态 <see cref="Config"/> 字段 + 文件，
+    /// 和游戏线程之间本来就没有锁依赖（改配置从来不需要停服）。
+    /// </para>
+    /// </summary>
+    private async Task SaveConfigAsync(Dictionary<string, string?> values, string successMessage)
+    {
+        if (_saving) return;
+
+        _saving = true;
+
+        // 必须立刻重绘一次：Blazor 要等事件处理器**整体返回**才渲染，
+        // 不主动 StateHasChanged 的话，「保存中…」要等到保存完才出现 —— 等于没有。
+        StateHasChanged();
+
+        try
+        {
+            string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+            await Task.Run(() => ConfigurationManager.Save(values, user));
+
+            Report(BotCommandResult.Success(successMessage));
+        }
+        catch (Exception ex)
+        {
+            Report(BotCommandResult.Fail($"保存失败：{ex.Message}"));
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private static string ClassText(string className) => className switch

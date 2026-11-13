@@ -64,9 +64,46 @@ namespace Client
 
             TaskScheduler.UnobservedTaskException += (o, e) =>
             {
+                // 断线时挂起的异步接收会被「中止 I/O」收尾（SocketException 995）：
+                // 套接字先关、接收任务后完成，异常没人 await → 由终结器线程兜底抛出来。
+                // 这是**正常拆链的副产物**，不是崩溃。以前它带着完整堆栈写进 Errors\，
+                // 2026-11-13 用户看到后以为客户端崩了 —— 现在单独一行说明。
+                if (IsSocketTeardown(e.Exception))
+                {
+                    CEnvir.SaveError("[任务] 连接已断开：挂起的套接字接收被中止（SocketException 995），属正常拆链，不影响运行。");
+                    e.SetObserved();
+                    return;
+                }
+
                 CEnvir.SaveError("[任务]\r\n" + e.Exception);
                 e.SetObserved();
             };
+        }
+
+        /// <summary>
+        /// 是否是「套接字被关掉」这一类的收尾异常（OperationAborted / Interrupted / 已释放）。
+        /// 逐层拆 <see cref="AggregateException"/>，因为 Socket 内部会把它们包一层。
+        /// </summary>
+        private static bool IsSocketTeardown(Exception exception)
+        {
+            if (exception == null) return false;
+
+            if (exception is AggregateException aggregate)
+            {
+                foreach (Exception inner in aggregate.Flatten().InnerExceptions)
+                    if (IsSocketTeardown(inner)) return true;
+
+                return false;
+            }
+
+            if (exception is ObjectDisposedException) return true;
+
+            if (exception is System.Net.Sockets.SocketException socket)
+                return socket.SocketErrorCode is System.Net.Sockets.SocketError.OperationAborted
+                    or System.Net.Sockets.SocketError.Interrupted
+                    or System.Net.Sockets.SocketError.NotSocket;
+
+            return false;
         }
 
         static void Init(string[] args)

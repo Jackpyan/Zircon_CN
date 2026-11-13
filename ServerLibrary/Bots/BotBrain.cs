@@ -156,6 +156,13 @@ namespace Server.Bots
         private DateTime _stateDeadline;
         private DateTime _restockCooldown;
 
+        /// <summary>
+        /// 最近一次**真的把攻击动作打出去**的时刻（平砍或技能）。
+        /// 用来区分「站着输出」和「站在那儿够不到」—— 两者位置都不变，
+        /// 但前者每 1~2 秒会刷新这个时间，后者不会。
+        /// </summary>
+        private DateTime _lastAttackTime;
+
         /// <summary>连续补给失败次数。用来做退避：失败越多，下次重试间隔越长。</summary>
         private int _restockFailStreak;
 
@@ -223,12 +230,47 @@ namespace Server.Bots
         private int _blockedCount;
 
         /// <summary>
+        /// 最近 <see cref="StuckWindow"/> 秒走过的位置轨迹（每 500ms 采一个点），用于识别「绕圈」。
+        /// <para>
+        /// 为什么需要：原来的 <c>TrackStuck</c> 只比「当前格 vs 上一格」，只要迈出去一步就清零。
+        /// 而卡在遮挡物 / 人群前的典型表现恰恰是<b>左右横跳</b> —— 每步都在动，10 秒后还在原地 3 格内，
+        /// 于是永远判不出来（用户 2026-11-13 录屏复现）。
+        /// </para>
+        /// </summary>
+        private readonly List<(DateTime Time, Point Location)> _trail = new List<(DateTime, Point)>();
+
+        /// <summary>避让活物的 A* 下次允许时间（节流，见 <see cref="TryStepAvoidingLive"/> 的注释）。</summary>
+        private DateTime _nextAvoidStepTime;
+
+        /// <summary>
+        /// 连续「绕圈」次数，用来做分级脱困（1 轻 / 2 中 / 3 重）。
+        /// <para>
+        /// 为什么必须分级：绕圈脱困只走一步的话，<b>8 秒后必然原地再绕一圈</b> ——
+        /// 本地实测 BOT#14 在比奇城 (163,222) 卡了 2 分多钟，每 8 秒打一条
+        /// 「原地绕圈…主动脱困」，位置一动不动。只挪一步治不了「目标本身走不到」。
+        /// </para>
+        /// </summary>
+        private int _circleStrikes;
+
+        /// <summary>绕圈日志节流（30 秒最多一条），否则一个卡住的假人能把 Logs.txt 刷满。</summary>
+        private DateTime _nextStuckLogTime;
+
+        /// <summary>
+        /// 近期判定为「走不到」的刷怪点及其解禁时间。
+        /// <para>
+        /// 不加这个的话，弃掉刷怪点后 <see cref="TryPickHuntPoint"/> 会按「最近」把它<b>又选回来</b>，
+        /// 于是「弃点 → 重选同一点 → 再绕圈」无限循环。
+        /// </para>
+        /// </summary>
+        private readonly Dictionary<Point, DateTime> _badHuntPoints = new Dictionary<Point, DateTime>();
+
+        /// <summary>
         /// 连续捡不到东西的次数（P1）。
         /// 背包满 / 负重超 / 被别人抢先，都会导致引擎拒绝拾取；
         /// 连着失败 3 次就别再死磕这一件，换目标或回城卖货。
         /// </summary>
         private int _lootFailCount;
-        private Point _lastLocation;
+
         private MonsterObject _target;
 
         private MapInfo _travelMap;
@@ -295,6 +337,18 @@ namespace Server.Bots
 
         /// <summary>连续几次回城中转失败（没卷 / 走不回去 / 没绑定主城）。</summary>
         private int _returnHomeFailStreak;
+
+        /// <summary>
+        /// 本次补给的目的城（「走得到的、跳数最少的、有药店的城」）。
+        /// <para>
+        /// 只在补给状态里用，<see cref="_supplyDestSourceMap"/> 记住是按哪张图算出来的 ——
+        /// 一旦跨图（走到半路进了下一张图）就重算，因为「最近」是相对当前图说的。
+        /// </para>
+        /// </summary>
+        private MapInfo _supplyDest;
+
+        /// <summary>上面那个目的地是按哪张图算出来的（-1 = 还没算过）。</summary>
+        private int _supplyDestSourceMap = -1;
 
         /// <summary>
         /// 回城中转的退避冷却。
@@ -420,7 +474,14 @@ namespace Server.Bots
             Potion = 0,
             /// <summary>去杂货商买回城卷（下次断药就能秒回城）。</summary>
             TownScroll = 1,
+            /// <summary>去杂货商买护身符 / 毒药粉（只有道士需要，没弹药 = 技能全空放）。</summary>
+            Ammo = 2,
         }
+
+        /// <summary>
+        /// 这一阶段是不是在**杂货商**那儿办（买卷 / 买弹药共用一个 NPC，可以一次跑完）。
+        /// </summary>
+        private bool IsGrocerStage => _restockStage == RestockStage.TownScroll || _restockStage == RestockStage.Ammo;
 
         /// <summary>当前要挖的尸体。</summary>
         private MonsterObject _harvestTarget;
@@ -434,7 +495,6 @@ namespace Server.Bots
             Profile = profile;
             StateSince = SEnvir.Now;
             ExperienceStart = player?.Experience ?? 0;
-            _lastLocation = player?.CurrentLocation ?? Point.Empty;
 
             // 上线先修一次存量：买来的药带 Locked、启动资源发的药带 Bound|Worthless，
             // 两种标记引擎/假人自己都不肯卖，会把负重永久占死。
@@ -488,7 +548,7 @@ namespace Server.Bots
             }
 
             if (log && repaired > 0)
-                BotLog.Warn(Profile.Seq, string.Format("修复 {0} 堆药的卖不掉标记（原 Locked/Bound/Worthless，卖不掉也丢不掉）", repaired));
+                BotLog.Info(Profile.Seq, string.Format("修复 {0} 堆药的卖不掉标记（原 Locked/Bound/Worthless，卖不掉也丢不掉）", repaired));
         }
 
         /// <summary>
@@ -668,12 +728,12 @@ namespace Server.Bots
             }
 
             // 路上看到怪就先打，不必走到点上（1 级号 52 血，闷头走容易被围死）。
-            MonsterObject monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss);
+            MonsterObject monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss, Profile.Seq);
 
             if (monster != null)
             {
                 EnterState(BotState.Fight, string.Format("路上遇到 {0}", MonsterName(monster)), TimeSpan.FromSeconds(60));
-                _target = monster;
+                SetTarget(monster);
                 return;
             }
 
@@ -687,6 +747,7 @@ namespace Server.Bots
 
                 case BotMoveResult.Arrived:
                     _target = null;
+                    _circleStrikes = 0;   // 真走到了 = 脱困成功，绕圈计数归零
                     BotLog.Debug(Profile.Seq, string.Format(
                         "到达刷怪点 {0},{1}，30 格内怪 {2} 只、全图怪 {3} 只",
                         _huntPoint.X, _huntPoint.Y,
@@ -711,6 +772,22 @@ namespace Server.Bots
                         return;
                     }
 
+                    // 侧移都不行 —— 多半是下一步被别的假人/宝宝长期占着。
+                    // 这时用「避让活物」的 A* 重算一次，让它绕开人群而不是一直撞同一格
+                    // （一直撞 → 侧移 → 下一帧又撞 → 原地打转，用户 2026-11-13 录屏）。
+                    // 必须节流：整图 A* 一次 20~30ms，30 个假人每帧都算会把主线程吃光。
+                    if (SEnvir.Now >= _nextAvoidStepTime)
+                    {
+                        _nextAvoidStepTime = SEnvir.Now.AddMilliseconds(400);
+
+                        if (BotNavigator.TryStepAvoidingLive(_player, _huntPoint))
+                        {
+                            TrackStuck();
+                            _blockedCount = 0;
+                            return;
+                        }
+                    }
+
                     if (_blockedCount < 10) return;
 
                     _blockedCount = 0;
@@ -732,10 +809,20 @@ namespace Server.Bots
 
             MonsterObject monster = _target;
 
+            // 目标还活着就续期认领（TTL 12 秒，正常战斗每帧都会走到这里）。
+            // 不续期的话，打着打着认领就过期了，别的假人又会扑上来一起砍。
+            if (monster != null && !monster.Dead)
+                BotClaims.Claim(monster, Profile.Seq);
+
             // 上一刀把它砍死了：记一次击杀，再去找下一只。
             if (monster != null && monster.Dead)
             {
                 Kills++;
+
+                _circleStrikes = 0;   // 真砍死了 = 打到了东西，绕圈计数归零
+
+                // 死了就没必要再占着，让别的假人立刻可以去打（虽然 Prune 也会清）。
+                BotClaims.Release(monster, Profile.Seq);
 
                 // 累计击杀落库（2026-11-11）：进程内的 Kills 重启就归零，
                 // 落库后后台「假人档案」才能显示跨重启的历史战绩。
@@ -778,8 +865,8 @@ namespace Server.Bots
 
             if (monster == null || monster.Node == null)
             {
-                monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss);
-                _target = monster;
+                monster = BotPerception.FindHuntTarget(_player, HuntRadius, Options.RespectRealPlayerTags, Options.SkipBoss, Profile.Seq);
+                SetTarget(monster);
             }
 
             if (monster == null)
@@ -838,11 +925,32 @@ namespace Server.Bots
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, monster.CurrentLocation);
 
+            // 道士开场：目标还没中毒、身上也有毒药粉 → 先上毒一次，然后照常打。
+            //
+            // 施毒术是**纯 debuff**（只 ApplyPoison，无直接伤害），所以它不在攻击技能表里，
+            // 只在这里当一次性开场。以前它在攻击表里，于是 12 级的道士假人站在 10 格外
+            // 一直放毒、从不贴脸砍 —— 用户 2026-11-13 在后台「最近技能」里看到的就是这个。
+            if (BotSkills.TryOpenWithPoison(_player, monster))
+            {
+                _lastAttackTime = SEnvir.Now;
+                LastMagic = BotText.Magic(MagicType.PoisonDust);
+
+                LastDetail = string.Format("给 {0} 上毒（距离 {1}）", MonsterName(monster), distance);
+
+                BotLog.Debug(Profile.Seq, LastDetail);
+
+                return;
+            }
+
             // 法师/道士先用魔法：射程 10 格，不用贴脸挨打。
             // 技能不可用（蓝不够/冷却中）时**原地等**，别往前凑 —— 法师近战等于送死。
             if (_player.Class != MirClass.Warrior && distance <= Globals.MagicRange && distance > AttackRange)
             {
-                MagicType attack = BotSkills.PickAttack(_player);
+                // 周围 ≥2 只怪 → 优先群攻；群攻冷却/蓝不够会自动退回单体，不会干等。
+                // 这条判断照客户端辅助挂机的 MapControl.PickAutoSkillType 抄的。
+                bool preferGroup = BotPerception.CountMonstersAround(_player, Globals.MagicRange) >= 2;
+
+                MagicType attack = BotSkills.PickAttack(_player, preferGroup);
 
                 if (attack != MagicType.None)
                 {
@@ -852,9 +960,10 @@ namespace Server.Bots
                         return;
                     }
 
-                    if (BotSkills.TryCastAttack(_player, monster))
+                    if (BotSkills.TryCastAttack(_player, monster, preferGroup))
                     {
                         LastMagic = BotText.Magic(attack);
+                        _lastAttackTime = SEnvir.Now;
 
                         LastDetail = string.Format("{0} 打 {1}（距离 {2}，蓝 {3}/{4}）",
                             attack, MonsterName(monster), distance, _player.CurrentMP, _player.Stats[Stat.Mana]);
@@ -870,12 +979,23 @@ namespace Server.Bots
             if (distance <= AttackRange)
             {
                 if (BotActions.TryAttack(_player, monster))
+                {
+                    _lastAttackTime = SEnvir.Now;
+
                     LastDetail = string.Format("砍 {0}（HP {1}/{2}）", MonsterName(monster), monster.CurrentHP, monster.Stats[Stat.Health]);
+                }
 
                 return;
             }
 
-            BotMoveResult result = BotNavigator.TryStepTowards(_player, monster.CurrentLocation);
+            // 贴身（≤3 格）直接朝怪走一步，不跑整图 A*。
+            //
+            // 客户端自动挂机的 MoveTowardTarget 也是这个口径（distance > 3 才寻路，
+            // 且寻路结果缓存 600ms）—— 近战追击时绝大多数帧都在这条路径上，
+            // 每帧一次整图 A*（20~30ms）纯属浪费，30 个假人同时追击就能把主线程吃光。
+            BotMoveResult result = distance <= 3
+                ? (BotNavigator.TryStepAdjacent(_player, monster.CurrentLocation) ? BotMoveResult.Moved : BotMoveResult.Blocked)
+                : BotNavigator.TryStepTowards(_player, monster.CurrentLocation);
 
             if (result == BotMoveResult.Moved)
             {
@@ -893,6 +1013,24 @@ namespace Server.Bots
                 TrackStuck();
                 LastDetail = string.Format("贴向 {0}（距离 {1}）", MonsterName(monster), distance);
                 return;
+            }
+
+            // 侧移也不行 —— 多半是下一步被别的假人/宝宝长期占着。
+            // 用「避让活物」的 A* 朝怪身边重算一次（终点是怪周围的可走格，不是怪自己那格）。
+            //
+            // 这一段之前只在 ProcessGoHunt 里有，追击路径上缺了它，
+            // 结果就是 BOT#21 在潘夜村追 11 格外的猪时 8 秒只挪了 1 格（2026-11-13 第三轮实测）。
+            // 同样要节流：整图 A* 一次 20~30ms。
+            if (SEnvir.Now >= _nextAvoidStepTime)
+            {
+                _nextAvoidStepTime = SEnvir.Now.AddMilliseconds(400);
+
+                if (BotNavigator.TryStepAvoidingLiveNear(_player, monster.CurrentLocation, AttackRange))
+                {
+                    TrackStuck();
+                    LastDetail = string.Format("绕行靠近 {0}（距离 {1}）", MonsterName(monster), distance);
+                    return;
+                }
             }
 
             // 这只真的够不到，换一片区域。
@@ -1051,7 +1189,7 @@ namespace Server.Bots
             {
                 Deaths++;
                 EnterState(BotState.Dead, "死了，准备回城复活", TimeSpan.FromSeconds(2));
-                BotLog.Warn(Profile.Seq, string.Format("死亡（累计 {0} 次），2 秒后回城复活", Deaths));
+                BotLog.Info(Profile.Seq, string.Format("死亡（累计 {0} 次），2 秒后回城复活", Deaths));
                 return;
             }
 
@@ -1241,7 +1379,7 @@ namespace Server.Bots
                     _travelFailures = 0;
                     _emptyHunts = 0;
 
-                    BotLog.Warn(Profile.Seq, string.Format(
+                    BotLog.Info(Profile.Seq, string.Format(
                         "跨图(A*)：{0}[{1}] → {2}[{3}]，白名单 {{{4}}}，当前图六合石={5}",
                         current.Info.Description, current.Info.Index,
                         map.Description, map.Index,
@@ -1294,7 +1432,7 @@ namespace Server.Bots
                     : string.Format("{0}[{1}]=可传", map.Description, map.Index));
             }
 
-            BotLog.Warn(Profile.Seq, string.Format(
+            BotLog.Info(Profile.Seq, string.Format(
                 "跨图候选 {0} 个（本图 {1} 有石头）：{2}",
                 candidates.Count, current.Info.Description, string.Join("，", parts)));
         }
@@ -1609,7 +1747,7 @@ namespace Server.Bots
 
             int scrolls = BotActions.CountTownScroll(_player);
 
-            BotLog.Warn(Profile.Seq, string.Format(
+            BotLog.Info(Profile.Seq, string.Format(
                 "跨图中转：{0}[{1}] 没有可用的六合石传送，先回 {2}[{3}] 再选图（回城卷 {4} 张）",
                 current.Info.Description, current.Info.Index,
                 home.Description, home.Index, scrolls));
@@ -1645,7 +1783,7 @@ namespace Server.Bots
                 _blockedCount = 0;
                 _travelFailures = 0;
 
-                BotLog.Warn(Profile.Seq, string.Format("已回到 {0}，改用六合石传送", home.Description));
+                BotLog.Info(Profile.Seq, string.Format("已回到 {0}，改用六合石传送", home.Description));
 
                 LastDetail = string.Format("已回到 {0}，准备用六合石传送", home.Description);
                 return;
@@ -1762,7 +1900,7 @@ namespace Server.Bots
             // 而「这次跨图到底走的是传送还是腿儿着」是判断跨图机制有没有生效的唯一线索。
             if (via == null)
             {
-                BotLog.Warn(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），传送去 {2}（花费 {3}）",
+                BotLog.Info(Profile.Seq, string.Format("{0} 已不适合继续练级（{1} 级），传送去 {2}（花费 {3}）",
                     _player.CurrentMap.Info.Description, _player.Level, map.Description,
                     cost > 0 ? cost.ToString() : "免费"));
 
@@ -1770,7 +1908,7 @@ namespace Server.Bots
             }
             else
             {
-                BotLog.Warn(Profile.Seq, string.Format(
+                BotLog.Info(Profile.Seq, string.Format(
                     "{0} 没有直达 {1} 的六合石，走两跳：{0} → {2} → {1}（总花费 {3}）",
                     _player.CurrentMap.Info.Description, map.Description, via.Description,
                     cost > 0 ? cost.ToString() : "免费"));
@@ -1821,7 +1959,7 @@ namespace Server.Bots
                 _rebirthBaseCount = _player.Character.Rebirth;
                 _rebirthSnapshot = BotRebirthAudit.Capture(_player);
 
-                BotLog.Warn(Profile.Seq, string.Format("满级（{0} 级），去市政厅找管理员转生（已转生 {1} 次）",
+                BotLog.Info(Profile.Seq, string.Format("满级（{0} 级），去市政厅找管理员转生（已转生 {1} 次）",
                     _player.Level, _player.Character.Rebirth));
 
                 EnterState(BotState.Rebirth, "满级了，去市政厅转生", TimeSpan.FromMinutes(10));
@@ -1979,7 +2117,7 @@ namespace Server.Bots
                 {
                     // 转生后立刻核对「不该丢的东西有没有丢」。
                     // 用 Warn：生产配置 BotLogLevel=2，Info 会被过滤，而这条是唯一的转生验收证据。
-                    BotLog.Warn(Profile.Seq, BotRebirthAudit.DescribeDiff(_rebirthSnapshot, BotRebirthAudit.Capture(_player)));
+                    BotLog.Info(Profile.Seq, BotRebirthAudit.DescribeDiff(_rebirthSnapshot, BotRebirthAudit.Capture(_player)));
 
                     FinishRebirth(string.Format("转生完成：等级回到 {0}，累计转生 {1} 次",
                         _player.Level, _player.Character.Rebirth));
@@ -2147,6 +2285,89 @@ namespace Server.Bots
             EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(5));
         }
 
+        /// <summary>
+        /// 挑补给的目的城：**走得到的、跨图次数最少的、有药店的城**。
+        /// <para>
+        /// <b>为什么不再无脑回绑定点</b>：绑定点是「死亡复活点」，由序号取模分配，
+        /// 还会随「走进任意安全区」漂移（引擎 <c>UpdateBindPoint</c>）。拿它当补给目的地会出两种怪事：
+        /// ① 在比奇城边打怪的假人绑在潘夜村，断药后横跨两张图去补给，规划失败就干等 60 秒；
+        /// ② 人明明站在有药店的主城里，却要走去另一座城。
+        /// </para>
+        /// <para>
+        /// 判据用 <see cref="AutoPathService.GetHopsFrom"/> 的跳数表（与真正规划同一套出口检查），
+        /// 所以「挑中了」就等于「AutoPath 走得通」，不会再出现挑完才失败。
+        /// 同跳数时绑定点优先（有回城卷 1 秒直达），其次按地图 Index 小的（结果稳定，重启不变）。
+        /// </para>
+        /// </summary>
+        private MapInfo ResolveSupplyDestination(MapInfo bind)
+        {
+            Map current = _player.CurrentMap;
+
+            if (current?.Info == null) return bind;
+
+            // 同图复用上一次的结果：这个函数要跑一次地图级 BFS，别每帧算。
+            if (_supplyDest != null && _supplyDestSourceMap == current.Info.Index) return _supplyDest;
+
+            Dictionary<MapInfo, int> hops = AutoPathService.Instance.GetHopsFrom(_player);
+
+            MapInfo best = null;
+            int bestHops = int.MaxValue;
+
+            foreach (MapInfo town in BotPerception.PharmacyMaps())
+            {
+                if (!hops.TryGetValue(town, out int distance)) continue;   // 走不到的直接不考虑
+                if (town != bind && IsTradeMapBlocked(town)) continue;      // 刚被判定去不了
+
+                bool better;
+
+                if (distance < bestHops)
+                {
+                    better = true;
+                }
+                else if (distance > bestHops)
+                {
+                    better = false;
+                }
+                else if (town == bind)
+                {
+                    better = true;                                          // 同跳数：绑定点优先
+                }
+                else if (best == bind)
+                {
+                    better = false;
+                }
+                else
+                {
+                    better = best == null || town.Index < best.Index;       // 再按 Index，保证稳定
+                }
+
+                if (!better) continue;
+
+                best = town;
+                bestHops = distance;
+            }
+
+            // 一座有药店的城都走不到（孤岛图）→ 退回绑定点，行为和改动前一致。
+            if (best == null) best = bind;
+
+            _supplyDest = best;
+            _supplyDestSourceMap = current.Info.Index;
+
+            // 把「为什么去这座城」写进日志：这正是用户会问的问题
+            //（「在比奇城打怪，怎么规划到潘夜村去了？」），一行字省掉一次翻代码。
+            if (best != null)
+            {
+                hops.TryGetValue(best, out int finalHops);
+
+                BotLog.Info(Profile.Seq, string.Format(
+                    "补给目的地：{0}（{1} 跳，绑定点 {2}{3}）",
+                    best.Description, finalHops, bind?.Description ?? "-",
+                    best == current.Info ? "，本图有药店就地补给" : ""));
+            }
+
+            return best;
+        }
+
         private void ProcessRestock()
         {
             if (SEnvir.Now >= _stateDeadline)
@@ -2170,28 +2391,35 @@ namespace Server.Bots
                 _restockBaselineScrolls = BotActions.CountTownScroll(_player);
             }
 
-            // 对话已打开：按当前子阶段办事（买药 / 买回城卷）
+            // 对话已打开：按当前子阶段办事（买药 / 买回城卷 / 买弹药）
             if (_player.NPCPage != null)
             {
                 if (_restockStage == RestockStage.TownScroll) BuyTownScrolls();
+                else if (_restockStage == RestockStage.Ammo) BuyAmmo();
                 else BuyPotions();
 
                 return;
             }
 
-            MapInfo home = _player.Character.BindPoint?.BindRegion?.Map;
+            MapInfo bind = _player.Character?.BindPoint?.BindRegion?.Map;
 
-            if (home == null)
+            if (bind == null)
             {
                 FinishRestock("角色没有绑定主城，无法补给");
                 return;
             }
 
-            // 不在主城：优先用**回城卷**瞬移（省掉 AutoPath 走 60 秒+），
-            // 没有卷才退回 AutoPath 跨图走回去。
+            // 目的地**不一定是绑定点**：绑定点由「序号取模」分配，还会随「走进任意安全区」漂移，
+            // 于是出现「在比奇城边打怪、断药后却要横跨两张图回潘夜村补给」这种反直觉行为，
+            // 规划失败就干等 60 秒（2026-11-13 用户实测报的）。
+            // 现在改成「走得到的、跳数最少的、有药店的城」，见 ResolveSupplyDestination。
+            MapInfo home = ResolveSupplyDestination(bind);
+
+            // 不在目的地：先瞬移，再走路。
             if (_player.CurrentMap?.Info != home)
             {
-                if (TryReturnHomeByScroll(home)) return;
+                // ① 目的地正好是绑定点 → 回城卷 1 秒直达，最省。
+                if (home == bind && TryReturnHomeByScroll(home)) return;
 
                 if (_player.AutoPath != null)
                 {
@@ -2199,9 +2427,26 @@ namespace Server.Bots
                     return;
                 }
 
-                if (!AutoPathService.Instance.TryStart(_player, home, HomePoint(home)))
+                if (!AutoPathService.Instance.TryStart(_player, home, TownPoint(home)))
                 {
-                    FinishRestock(string.Format("回 {0} 的路线规划失败（等级/道具限制），60 秒后再试", home.Description));
+                    string reason = AutoPathService.LastFailureReason ?? "未知原因";
+
+                    // ② 兜底：目的地不是绑定点、但绑定点有药店，且身上还有卷 ——
+                    //    烧一张先回得去再说（哪怕远），总比在野外干等 60 秒强。
+                    //    回城卷永远只回绑定点，所以这一步只在「绑定点本身能补给」时才做。
+                    if (home != bind && BotPerception.HasPharmacy(bind) && TryReturnHomeByScroll(bind))
+                    {
+                        BotLog.Warn(Profile.Seq, string.Format(
+                            "回 {0} 的路线规划失败（{1}），改烧回城卷回绑定点 {2} 补给",
+                            home.Description, reason, bind.Description));
+
+                        _supplyDest = bind;
+                        _supplyDestSourceMap = _player.CurrentMap?.Info?.Index ?? -1;
+
+                        return;
+                    }
+
+                    FinishRestock(string.Format("回 {0} 的路线规划失败（{1}），60 秒后再试", home.Description, reason));
                     return;
                 }
 
@@ -2209,16 +2454,16 @@ namespace Server.Bots
                 return;
             }
 
-            // 在主城：找当前阶段对应的 NPC
-            NPCObject npc = _restockStage == RestockStage.TownScroll
+            // 在目的地：找当前阶段对应的 NPC
+            NPCObject npc = IsGrocerStage
                 ? BotPerception.FindScrollShop(_player.CurrentMap)
                 : BotPerception.FindPharmacy(_player.CurrentMap);
 
             if (npc == null)
             {
-                if (_restockStage == RestockStage.TownScroll)
+                if (IsGrocerStage)
                 {
-                    // 买不到卷不是致命错误 —— 药已经买到了，回城卷只是加速手段。
+                    // 买不到卷/弹药不是致命错误 —— 药已经买到了，回城卷只是加速手段。
                     FinishRestock(string.Format("{0} 里没有卖回城卷的杂货商", home.Description));
                 }
                 else
@@ -2231,7 +2476,7 @@ namespace Server.Bots
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, npc.CurrentLocation);
 
-            string npcKind = _restockStage == RestockStage.TownScroll ? "杂货商" : "药店";
+            string npcKind = IsGrocerStage ? "杂货商" : "药店";
 
             // 远距离先交给引擎 AutoPath：贪心走格在城内拐角/城墙会原地打转，
             // 实测有假人卡在「走不到药店 117 格外始终过不去」直到补给超时。
@@ -2301,7 +2546,10 @@ namespace Server.Bots
 
             _blockedCount = 0;
 
-            LastDetail = string.Format("打开 {0}，准备{1}", npc.Name, _restockStage == RestockStage.TownScroll ? "买回城卷" : "买药");
+            LastDetail = string.Format("打开 {0}，准备{1}", npc.Name,
+                _restockStage == RestockStage.TownScroll ? "买回城卷"
+                : _restockStage == RestockStage.Ammo ? "买护身符 / 毒药粉"
+                : "买药");
         }
 
         /// <summary>
@@ -2346,7 +2594,7 @@ namespace Server.Bots
             _emptyHunts = 0;
             _teleportViaHome = false;
 
-            BotLog.Warn(Profile.Seq, string.Format("卖货用六合石传送去 {0}（花费 {1}）",
+            BotLog.Info(Profile.Seq, string.Format("卖货用六合石传送去 {0}（花费 {1}）",
                 dest.Description, cost > 0 ? cost.ToString() : "免费"));
 
             EnterState(BotState.Teleport, string.Format("传送去 {0} 卖货", dest.Description), TimeSpan.FromMinutes(5));
@@ -2440,6 +2688,22 @@ namespace Server.Bots
                 return;
             }
 
+            // 药买完了（或买不起）。接着去杂货商 —— 先买弹药（道士），再买回城卷。
+            //
+            // 弹药排在前面：没护身符/毒药粉的道士**技能全空放**（有动画、扣蓝、无伤害），
+            // 会卡在「站在怪堆里一直放技能但怪不死」的状态，比少一张回城卷严重得多。
+            if (ShouldBuyAmmo())
+            {
+                _restockStage = RestockStage.Ammo;
+
+                // 换 NPC 必须先关掉当前对话，否则引擎会一直停在药店的页上。
+                BotActions.CloseNpc(_player);
+
+                LastDetail = "药买完了，去买护身符 / 毒药粉";
+
+                return;
+            }
+
             // 药买完了（或买不起）。接着去杂货商买回城卷 —— 下次断药就能秒回城。
             if (ShouldBuyTownScroll())
             {
@@ -2457,6 +2721,167 @@ namespace Server.Bots
                 BotActions.CountPotion(_player, Stat.Health),
                 BotActions.CountPotion(_player, Stat.Mana), gold));
         }
+        /// <summary>
+        /// 一次买多少弹药（护身符 / 毒药粉都按这个数）。
+        /// 10 次够打一轮补给间隔；再多就是纯压负重（每份重 1，而 13 级道士负重只有几十）。
+        /// </summary>
+        private const int AmmoTarget = 10;
+
+        /// <summary>
+        /// 要不要顺路买弹药（护身符 / 毒药粉）？
+        /// <para>
+        /// 只有道士需要，而且<b>只买已学会技能要用的那种</b>：
+        /// 施毒术 12 级、灵魂火符 13 级（本服 <c>MagicInfo.NeedLevel1</c>），
+        /// 没学就买回来只是占负重。
+        /// </para>
+        /// <para>
+        /// <b>为什么必须买</b>：这两种弹药缺了，道士的技能全部「空放」——
+        /// <c>UseAmulet</c> / <c>UsePoison</c> 失败时 <c>MagicCast</c> 直接 break，
+        /// 结果是有动画、扣蓝、一个目标都没有，假人站在怪堆里永远打不死怪。
+        /// </para>
+        /// </summary>
+        private bool ShouldBuyAmmo()
+        {
+            if (_player.Class != MirClass.Taoist) return false;
+
+            bool needAmulet = false;
+            bool needPoison = false;
+
+            foreach ((EquipmentSlot slot, MagicType _) in BotSkills.AmmoSkills(_player))
+            {
+                int have = BotSkills.CountEquip(_player, slot);
+
+                if (have >= AmmoTarget) continue;
+
+                if (slot == EquipmentSlot.Amulet) needAmulet = true;
+                else needPoison = true;
+            }
+
+            if (!needAmulet && !needPoison) return false;
+
+            // 至少买得起一份再跑这一趟（护身符 / 毒药粉都是几十金币一份）。
+            return GoldAmount() >= 50;
+        }
+
+        /// <summary>
+        /// 在杂货商处买护身符 / 毒药粉。买完（或买不起）就接着判断要不要买回城卷。
+        /// <para>
+        /// 三种东西在同一个 NPC 的同一个买卖页里，所以这一趟顺手全办掉，不再单独跑。
+        /// </para>
+        /// </summary>
+        private void BuyAmmo()
+        {
+            // 当前页没有弹药 → 点按钮进买卖页（与买回城卷是同一个入口）
+            if (BotActions.FindAmmoGood(_player, ItemType.Amulet, long.MaxValue) == null &&
+                BotActions.FindAmmoGood(_player, ItemType.Poison, long.MaxValue) == null)
+            {
+                int button = BotPerception.FindGoodsButton(_player.NPC?.NPCInfo, ItemType.Amulet);
+
+                if (button <= 0)
+                    button = BotPerception.FindGoodsButton(_player.NPC?.NPCInfo, ItemType.Poison);
+
+                if (button <= 0)
+                {
+                    FinishRestock("这个杂货商不卖护身符 / 毒药粉，先回去练级");
+                    return;
+                }
+
+                BotActions.TryPressButton(_player, button);
+                LastDetail = "打开卖护身符 / 毒药粉的页";
+
+                return;
+            }
+
+            long gold = GoldAmount();
+
+            int boughtAmulet = 0;
+            int boughtPoison = 0;
+
+            foreach ((EquipmentSlot slot, MagicType _) in BotSkills.AmmoSkills(_player))
+            {
+                ItemType itemType = slot == EquipmentSlot.Poison ? ItemType.Poison : ItemType.Amulet;
+
+                // 先把背包里已有的装上（上一轮买了但没装、或者捡到过），再算还缺多少 ——
+                // 否则会重复买，越攒越多纯压负重。
+                BotActions.TryEquipAmmo(_player, slot);
+
+                int have = BotSkills.CountEquip(_player, slot);
+                int need = Math.Max(0, AmmoTarget - have);
+
+                if (need <= 0) continue;
+
+                NPCGood good = BotActions.FindAmmoGood(_player, itemType, gold);
+
+                if (good == null) continue;
+
+                // 三个上限取最小：还缺多少 / 买得起几份 / 负重装得下几份。
+                // 漏了负重这条会「金币够、引擎静默拒绝」，日志里就是买了 0 份。
+                int per = Math.Max(1, good.Item.Weight);
+                int freeWeight = Math.Max(0, _player.Stats[Stat.BagWeight] - _player.BagWeight);
+                int byWeight = freeWeight / per;
+
+                int affordable = (int)Math.Min(need, Math.Min(gold / Math.Max(1, good.Cost), byWeight));
+
+                // 单次下单量不能超过堆叠上限 —— NPCBuy 里
+                // `if (amountToBuy > good.Item.StackSize) return;` 会**静默拒绝整个请求**。
+                // 假人没有客户端、收不到拒绝提示，表现就是「金币够、负重够，但一份都没买到」
+                // （2026-11-13 本地实测原话：金币 498200 一分没少、护身符 0）。
+                if (good.Item != null && good.Item.StackSize > 0)
+                    affordable = Math.Min(affordable, good.Item.StackSize);
+
+                if (affordable <= 0) continue;
+
+                BotActions.TryBuy(_player, good.Index, affordable);
+
+                // 买回来的东西在**背包**里，必须装到装备槽才生效（UseAmulet 读的是 Equipment）。
+                BotActions.TryEquipAmmo(_player, slot);
+
+                // 用**实际装上的数量**判定，不看金币差额 ——
+                // 背包满 / 负重超时引擎会静默拒绝，金币没扣、东西也没到。
+                int got = BotSkills.CountEquip(_player, slot) - have;
+
+                if (got <= 0) continue;
+
+                gold -= (long)got * good.Cost;
+
+                if (slot == EquipmentSlot.Poison) boughtPoison += got;
+                else boughtAmulet += got;
+            }
+
+            if (boughtAmulet > 0 || boughtPoison > 0)
+            {
+                LastDetail = string.Format("买弹药：护身符 {0}、毒药粉 {1}（金币 {2}）", boughtAmulet, boughtPoison, gold);
+
+                BotLog.Info(Profile.Seq, string.Format("补给：买护身符 {0} 份、毒药粉 {1} 份，金币剩 {2}",
+                    boughtAmulet, boughtPoison, gold));
+            }
+            else
+            {
+                BotLog.Info(Profile.Seq, string.Format(
+                    "补给：护身符 / 毒药粉 一份都没买到（金币 {0}，负重 {1}/{2}）｜装备槽 符{3}/毒{4}，背包 符{5}/毒{6}｜{7}",
+                    gold, _player.BagWeight, _player.Stats[Stat.BagWeight],
+                    BotSkills.CountEquip(_player, EquipmentSlot.Amulet),
+                    BotSkills.CountEquip(_player, EquipmentSlot.Poison),
+                    BotActions.CountBag(_player, ItemType.Amulet),
+                    BotActions.CountBag(_player, ItemType.Poison),
+                    DumpAmmoGoods()));
+            }
+
+            // 同一个 NPC 顺手把回城卷也买了。
+            if (ShouldBuyTownScroll())
+            {
+                _restockStage = RestockStage.TownScroll;
+
+                LastDetail = "弹药买完了，接着买回城卷";
+
+                return;
+            }
+
+            FinishRestock(string.Format("补给结束：护身符 {0}、毒药粉 {1}，金币 {2}",
+                BotSkills.CountEquip(_player, EquipmentSlot.Amulet),
+                BotSkills.CountEquip(_player, EquipmentSlot.Poison), gold));
+        }
+
         /// <summary>
         /// 要不要顺路买回城卷？
         /// <para>
@@ -2702,6 +3127,43 @@ namespace Server.Bots
                 parts.Count == 0 ? "无商品" : string.Join(" | ", parts));
         }
 
+        /// <summary>
+        /// 弹药诊断：把当前页里所有 Amulet / Poison 类商品连同 <c>GoodsIndex</c> 打出来。
+        /// <para>
+        /// 为什么要带 GoodsIndex：<c>NPCBuy</c> 里有
+        /// <c>if (good.GoodsIndex != NPC.NPCInfo.GoodsIndex) continue;</c> ——
+        /// 对不上号时整条购买请求被<b>静默跳过</b>（不报错、不扣钱），
+        /// 表现就是「页面上明明有护身符，就是买不到」。
+        /// </para>
+        /// </summary>
+        private string DumpAmmoGoods()
+        {
+            NPCPage page = _player.NPCPage;
+
+            if (page == null) return "无页";
+            if (page.Goods == null) return string.Format("[{0}] 无商品", page.Description);
+
+            var parts = new List<string>();
+
+            foreach (NPCGood good in page.Goods)
+            {
+                if (good?.Item == null) continue;
+
+                if (good.Item.ItemType != ItemType.Amulet && good.Item.ItemType != ItemType.Poison) continue;
+
+                parts.Add(string.Format("{0}({1},价={2},堆={3},GoodsIndex={4},NPC={5})",
+                    good.Item.ItemName,
+                    good.Item.ItemType,
+                    good.Cost,
+                    good.Item.StackSize,
+                    good.GoodsIndex,
+                    _player.NPC?.NPCInfo?.GoodsIndex ?? -1));
+            }
+
+            return string.Format("[{0}] {1}", page.Description,
+                parts.Count == 0 ? "没有任何护身符/毒药粉" : string.Join(" | ", parts));
+        }
+
         /// <summary>收尾：关对话、上冷却、回练级。</summary>
         private void FinishRestock(string detail)
         {
@@ -2755,12 +3217,16 @@ namespace Server.Bots
 
             _restockCooldown = SEnvir.Now.AddSeconds(cooldown);
 
-            // 必须是 Warn：补给成败是 D5 验收的核心指标，而 Info 会被 BotLogLevel=2 整体过滤。
-            // 2026-11-12 又踩了一次：补给成功率掉到 38%，日志里一个字都看不到，只能靠猜。
-            // 把「药/卷的前后数量」一起打出来，才能区分「根本没买到」和「买了但期间喝掉了」。
-            BotLog.Warn(Profile.Seq, string.Format("补给{0}：{1}（药 {2}→{3}，卷 {4}→{5}）",
+            // 成功走 Info、失败走 Warn：补给是**日常动作**，一天几十次，
+            // 全按 Warn 记会把日志刷成一片 WARN，真异常反而淹了（2026-11-13 用户反馈）。
+            // 失败仍要留痕，并且把「药/卷的前后数量」一起打出来 ——
+            // 才能区分「根本没买到」和「买了但期间喝掉了」。
+            string restockLine = string.Format("补给{0}：{1}（药 {2}→{3}，卷 {4}→{5}）",
                 success ? "成功" : "失败", detail,
-                basePotions, potions, baseScrolls, scrolls));
+                basePotions, potions, baseScrolls, scrolls);
+
+            if (success) BotLog.Info(Profile.Seq, restockLine);
+            else BotLog.Warn(Profile.Seq, restockLine);
 
             // 办完事不一定要立刻出城：按概率在城里待一会儿（P2-3）。
             LeaveTownOrStroll(detail);
@@ -3883,7 +4349,7 @@ namespace Server.Bots
             LastDetail = string.Format("卖了 {0}，金币 {1} → {2}", links.Count, goldBefore, goldAfter);
 
             FinishTrade(string.Format("卖了 {0} 件 {1}，赚了 {2} 金币",
-                links.Count, BotText.Item(_tradeItemType), goldAfter - goldBefore));
+                links.Count, BotText.Item(_tradeItemType), goldAfter - goldBefore), true);
         }
 
         /// <summary>构造要卖出的物品列表（只挑当前商店收、且引擎允许卖的那些）。</summary>
@@ -3967,7 +4433,7 @@ namespace Server.Bots
 
             // 日志要写清**修的是哪几件**：只写「修了 1 件装备」分不清修的是武器还是衣服，
             // 而「衣服到底修没修上」正是这一轮要验证的东西（三家铺子各收一类，很容易修错家）。
-            FinishTrade(string.Format("修了 {0}，花了 {1} 金币", RepairNames(links), goldBefore - goldAfter));
+            FinishTrade(string.Format("修了 {0}，花了 {1} 金币", RepairNames(links), goldBefore - goldAfter), true);
         }
 
         /// <summary>把要修的槽位翻成「布衣（男）、铁剑」这样的名字串，给日志用。</summary>
@@ -4029,8 +4495,11 @@ namespace Server.Bots
             return links;
         }
 
-        /// <summary>交易收尾：关对话、上冷却、回练级。</summary>
-        private void FinishTrade(string detail)
+        /// <summary>
+        /// 交易收尾：关对话、上冷却、回练级。
+        /// <paramref name="ok"/> = 这趟真的卖出/修好了（走 Info）；否则（超时、走不到、没商人）走 Warn。
+        /// </summary>
+        private void FinishTrade(string detail, bool ok = false)
         {
             BotActions.CloseNpc(_player);
 
@@ -4052,10 +4521,10 @@ namespace Server.Bots
             TradeCount++;
             _player.Character.BotTrades++;
 
-            // Warn 而不是 Info：BotLogLevel=2（生产默认）会把 Info 全部过滤掉。
-            // 本次排查就吃过这个亏 —— 「没有收 Meat 的商人」在日志里一个字都没有，
-            // 只能从后台面板的 detail 里看到。
-            BotLog.Warn(Profile.Seq, detail);
+            // 成功 Info / 失败 Warn：卖货是日常动作，全按 Warn 记会把日志刷成一片 WARN。
+            // 但失败必须留痕 —— 「没有收 Meat 的商人」曾经一个字都没有，只能靠面板猜。
+            if (ok) BotLog.Info(Profile.Seq, detail);
+            else BotLog.Warn(Profile.Seq, detail);
 
             // 卖完 / 修完同样按概率在城里待一会儿（P2-3）。
             LeaveTownOrStroll(detail);
@@ -4072,6 +4541,33 @@ namespace Server.Bots
                 return region.PointList[SEnvir.Random.Next(region.PointList.Count)];
 
             Map map = SEnvir.GetMap(home);
+
+            if (map != null) return new Point(map.Width / 2, map.Height / 2);
+
+            return _player.CurrentLocation;
+        }
+
+        /// <summary>
+        /// 任意一座城的落点。**不能复用 <see cref="HomePoint"/>** —— 那个取的是绑定点安全区，
+        /// 目的地不是绑定点时会返回另一张图上的坐标，AutoPath 会直接判「目标不在本图」。
+        /// </summary>
+        private Point TownPoint(MapInfo town)
+        {
+            if (town == null) return _player.CurrentLocation;
+
+            foreach (SafeZoneInfo zone in SEnvir.SafeZoneInfoList.Binding)
+            {
+                if (zone?.BindRegion?.Map != town) continue;
+
+                // ValidBindPoints 是引擎挑过的「能站的格子」，比 PointList 更保险。
+                if (zone.ValidBindPoints != null && zone.ValidBindPoints.Count > 0)
+                    return zone.ValidBindPoints[SEnvir.Random.Next(zone.ValidBindPoints.Count)];
+
+                if (zone.BindRegion.PointList != null && zone.BindRegion.PointList.Count > 0)
+                    return zone.BindRegion.PointList[SEnvir.Random.Next(zone.BindRegion.PointList.Count)];
+            }
+
+            Map map = SEnvir.GetMap(town);
 
             if (map != null) return new Point(map.Width / 2, map.Height / 2);
 
@@ -4180,12 +4676,17 @@ namespace Server.Bots
             // 最近的一批点里也有走不通的（隔河、被墙围住），逐个算一次路，通了才用。
             foreach (Point candidate in nearest)
             {
+                // 刚因为「绕圈走不到」被拉黑的点，3 分钟内不再选 ——
+                // 否则按距离排序会把它原样选回来，形成「弃点 → 重选同一点 → 再绕圈」的死循环。
+                if (IsBadHuntPoint(candidate)) continue;
+
                 if (!BotNavigator.TryGetNextStep(_player, candidate, out _)) continue;
 
                 _huntPoint = candidate;
                 _stuckCount = 0;
                 _blockedCount = 0;
-                _lastLocation = _player.CurrentLocation;
+                _trail.Clear();          // 换了刷怪点 = 重新起算「绕圈」窗口
+                _nextAvoidStepTime = default;
 
                 return true;
             }
@@ -4193,25 +4694,256 @@ namespace Server.Bots
             return false;
         }
 
+        /// <summary>环形卡死的观察窗口（秒）与容忍半径（格）。</summary>
+        private const double StuckWindowSeconds = 8;
+        private const int StuckRadius = 4;
+
         /// <summary>
-        /// 连续 40 次「发了走路指令但坐标没变」视为卡住，强制回待机换目标。
-        /// 40 × 250ms = 10 秒：追会跑的怪时坐标短暂不变是常态，阈值太小学生会一直放弃。
+        /// 换目标 —— 同时把「这只怪归我」的认领登记上，并释放上一只。
+        /// <para>
+        /// 认领的必要性见 <see cref="BotClaims"/>：不加的话 30 个假人各自独立打分，
+        /// 算出来必然是同一只怪（最近的 + 血最少的），于是刚刷的怪被一群人同时扑上去。
+        /// </para>
+        /// </summary>
+        private void SetTarget(MonsterObject monster)
+        {
+            if (_target != null && !ReferenceEquals(_target, monster))
+                BotClaims.Release(_target, Profile.Seq);
+
+            _target = monster;
+
+            if (monster != null)
+                BotClaims.Claim(monster, Profile.Seq);
+        }
+
+        /// <summary>
+        /// 「在原地绕圈」判定 —— 不是「站着不动」，是「一直在走但没走出去」。
+        /// <para>
+        /// 旧实现只比「当前格 vs 上一格」：只要迈出去一步就把计数清零。
+        /// 而卡在遮挡物 / 人群前的典型表现恰恰是<b>左右横跳</b>：
+        /// A* 指向被占住的那格 → 迈不动 → 侧移一步 → 下一帧 A* 又指回原格 → 再侧移回来。
+        /// 每步都在动，10 秒后还在原地 3 格内，于是<b>永远判不出来</b>
+        /// （用户 2026-11-13 录屏复现：假人围着遮挡物转圈转到天荒地老）。
+        /// </para>
+        /// <para>
+        /// 现在的判据：把最近 <see cref="StuckWindowSeconds"/> 秒的位置每 500ms 采一个点，
+        /// 算这些点的<b>包围盒</b>；长和宽都 ≤ <see cref="StuckRadius"/> 格就认定「绕圈」。
+        /// </para>
+        /// <para>
+        /// 脱困顺序（照客户端自动挂机的思路：先绕、再换怪、最后换地方）：
+        /// ① 用「避让活物」的 A* 重算一次（能绕开人群就直接走）；
+        /// ② 还不行 → 弃掉当前怪；
+        /// ③ 再不行 → 回待机，由 <see cref="ProcessIdle"/> 重新挑刷怪点或跨图。
+        /// </para>
         /// </summary>
         private void TrackStuck()
         {
-            if (_player.CurrentLocation != _lastLocation)
+            DateTime now = SEnvir.Now;
+            Point here = _player.CurrentLocation;
+
+            // 「围着目标打」在有些状态下是**正确行为**，绝不能算绕圈。
+            //
+            // 实测（2026-11-13 本地）：第一版判据在这里误报了 —— BOT#27 在潘夜村砍鸡，
+            // 8 秒打一条「原地绕圈…目标=鸡」，而它其实一直跟着鸡在小范围里转。
+            // 用「可移动=False」当判据也不行：走路/挥刀动作期间 ActionTime 在将来，
+            // 采样随时可能撞上 false，会把真卡死全滤掉。
+            if (IsEngagedWithNearbyTarget())
             {
-                _lastLocation = _player.CurrentLocation;
-                _stuckCount = 0;
+                _trail.Clear();
                 return;
             }
 
-            _stuckCount++;
+            // 每 500ms 采一个点：每帧采太密（8 秒 480 个点），对判定精度也没帮助。
+            if (_trail.Count == 0 || now - _trail[_trail.Count - 1].Time >= TimeSpan.FromMilliseconds(500))
+                _trail.Add((now, here));
 
-            if (_stuckCount < 40) return;
+            // 关于「能不能动」：这里**没有**用 `_player.CanMove` 做判据，是被实测否掉的。
+            //
+            // 2026-11-13 第四轮试过「CanMove 连续 10 秒 false 就判被定住」，
+            // 结果 5 分钟刷了 161 条「不能移动 274 秒」，全是假的。两个原因：
+            // ① TrackStuck 是**刚迈完一步**才调用的，而 `player.Move` 会把 MoveTime
+            //    推到 Now+0.6s —— 也就是说「正在正常走路」的假人在这里采样永远是 false；
+            // ② `_cannotMoveSince` 只在「非战斗且能移动」时才会被清，正常打怪的假人
+            //    一天走不到那个分支，起点就一直是几分钟前。
+            // 结论：这个采样点上 `CanMove` 没有判别力。真正要看的（动作/移动/硬直/中毒）
+            // 已经打进下面的绕圈日志里，需要时看那一行就够。
 
-            _stuckCount = 0;
-            EnterState(BotState.Idle, "卡住了，换个目标", TimeSpan.FromSeconds(2));
+            int drop = 0;
+
+            while (drop < _trail.Count && now - _trail[drop].Time > TimeSpan.FromSeconds(StuckWindowSeconds))
+                drop++;
+
+            if (drop > 0) _trail.RemoveRange(0, drop);
+
+            // 窗口没铺满不判：刚出发那几秒本来就在原地附近。
+            if (_trail.Count < 4) return;
+
+            if (now - _trail[0].Time < TimeSpan.FromSeconds(StuckWindowSeconds - 1.5)) return;
+
+            int minX = int.MaxValue, maxX = int.MinValue, minY = int.MaxValue, maxY = int.MinValue;
+
+            foreach ((DateTime _, Point point) in _trail)
+            {
+                if (point.X < minX) minX = point.X;
+                if (point.X > maxX) maxX = point.X;
+                if (point.Y < minY) minY = point.Y;
+                if (point.Y > maxY) maxY = point.Y;
+            }
+
+            if (maxX - minX > StuckRadius || maxY - minY > StuckRadius) return;
+
+            // 真的在原地绕圈了。
+            _trail.Clear();
+
+            _circleStrikes++;
+
+            // 日志带全现场：只写「绕圈 8 秒」的话，事后完全看不出它到底想去哪
+            // （2026-11-13 本地实测就是靠这行才发现「绕圈的是想去刷怪点、而不是追怪」）。
+            // 节流 30 秒：一个卡死的假人 8 秒一条会把 Logs.txt 刷满。
+            if (SEnvir.Now >= _nextStuckLogTime)
+            {
+                _nextStuckLogTime = SEnvir.Now.AddSeconds(30);
+
+                BotLog.Info(Profile.Seq, string.Format(
+                    "原地绕圈 {0:0.#} 秒（活动范围 {1}×{2} 格，位置 {3},{4}）｜状态={5} 地图={6} 刷怪点={7} 目标={8} 目标距离={9} 距上次攻击={10:0.#}s 可移动={11}（动作+{12:0.#}s 移动+{13:0.#}s 硬直+{14:0.#}s 中毒={15}）｜第 {16} 次脱困",
+                    StuckWindowSeconds, maxX - minX, maxY - minY, here.X, here.Y,
+                    State,
+                    _player.CurrentMap?.Info?.PlayerDescription ?? "?",
+                    _huntPoint == default ? "无" : string.Format("{0},{1}", _huntPoint.X, _huntPoint.Y),
+                    _target == null ? "无" : MonsterName(_target),
+                    _target == null ? -1 : BotNavigator.Distance(here, _target.CurrentLocation),
+                    (SEnvir.Now - _lastAttackTime).TotalSeconds,
+                    _player.CanMove,
+                    (_player.ActionTime - SEnvir.Now).TotalSeconds,
+                    (_player.MoveTime - SEnvir.Now).TotalSeconds,
+                    (_player.ShockTime - SEnvir.Now).TotalSeconds,
+                    _player.Poison,
+                    _circleStrikes));
+            }
+
+            // ① 第一次：先试「避让活物」重算一步，绕开堵路的假人/宝宝。
+            //
+            // 只挪一步就完事是**不够**的 —— 若目标本身走不到（隔墙 / 隔河 / 在另一张图），
+            // 挪一步之后下一帧 A* 照样指回原方向，8 秒后又绕一圈。所以后面还要升级。
+            if (_circleStrikes == 1)
+            {
+                if (_huntPoint != default && BotNavigator.TryStepAvoidingLive(_player, _huntPoint)) return;
+                if (_target != null && BotNavigator.TryStepAdjacent(_player, _target.CurrentLocation)) return;
+
+                TryShuffleStep();
+                return;
+            }
+
+            // ② 第二次：这个目标/刷怪点确实走不到 —— 弃掉，并且**拉黑**，
+            // 否则 TryPickHuntPoint 会按「最近」把同一个点又选回来，形成死循环。
+            if (_circleStrikes == 2)
+            {
+                if (_huntPoint != default)
+                {
+                    _badHuntPoints[_huntPoint] = SEnvir.Now.AddMinutes(3);
+                    _huntPoint = default;
+                }
+
+                _target = null;
+                TryShuffleStep();
+
+                EnterState(BotState.Idle, "绕圈脱困：弃掉走不到的刷怪点", TimeSpan.FromSeconds(2));
+                return;
+            }
+
+            // ③ 第三次以上：本图这一片整体走不通（河岸 / 城墙死角 / 人堆），直接跨图。
+            // 跨不过去（没钱 / 没石头）就烧一张回城卷瞬移脱身 ——
+            // 这是**唯一不依赖走路**的逃生手段，专门对付「A* 根本算不出路」的死角。
+            // 连卷都没有就退回待机，把等待时间拉长，别再空转。
+            // 停在 3 而不是清零：清零的话日志会一直写「第 1 次脱困」，
+            // 看不出「这具假人已经反复升级到最重一档了」。真正归零只在有进展时做。
+            _circleStrikes = 3;
+
+            _huntPoint = default;
+            _target = null;
+            TryShuffleStep();
+
+            if (TryTravelToHuntMap()) return;
+
+            if (TryEscapeByScroll()) return;
+
+            EnterState(BotState.Idle, "绕圈脱困：本图走不通，歇一会儿", TimeSpan.FromSeconds(15));
+        }
+
+        /// <summary>
+        /// 兜底脱困：烧一张回城卷瞬移回绑定点。
+        /// <para>
+        /// 走不动的时候（A* 从当前格算不出任何路、或者被围死）只有瞬移能自救。
+        /// 和补给路径上的 <see cref="TryReturnHomeByScroll"/> 不同，这里**不检查「是不是已经在主城」** ——
+        /// 卡在同一张图的死角里同样需要脱身。
+        /// </para>
+        /// </summary>
+        private bool TryEscapeByScroll()
+        {
+            if (BotActions.CountTownScroll(_player) <= 0) return false;
+
+            if (!BotActions.CanUseTownScrollHere(_player)) return false;
+
+            // 引擎的 UseItemTime 是共用冷却，冷却没到发包会被静默拒绝。
+            if (!BotActions.ItemUseCooldownReady(_player)) return false;
+
+            if (!BotActions.TryUseTownScroll(_player)) return false;
+
+            TownScrollUseCount++;
+
+            if (_player.Character != null) _player.Character.BotTownScrollUses++;
+
+            if (_player.AutoPath != null) AutoPathService.Instance.Cancel(_player);
+
+            BotLog.Info(Profile.Seq, string.Format("绕圈脱困：烧回城卷瞬移（还剩 {0} 张）",
+                BotActions.CountTownScroll(_player)));
+
+            EnterState(BotState.Idle, "绕圈脱困：回城卷脱身", TimeSpan.FromSeconds(3));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 是否正在「围着目标打」：Fight 态、目标活着同图、距离 ≤ 3 格。
+        /// 这种位置不变是正常行为，不能判成绕圈。
+        /// <para>
+        /// 为什么不能用「距离 ≤ <c>Globals.MagicRange</c>」：实测 BOT#27/BOT#21 打鸡时
+        /// 距离在 2~3 格来回（鸡自己会跑），8 秒内活动范围只有 2×2 格 ——
+        /// **位置没扩大是因为目标在原地绕，不是因为路走不通**。
+        /// 判据要问「有没有在往目标靠近」，而不是「离得够不够近」。
+        /// </para>
+        /// <para>
+        /// 距离 &gt; 3 还缩在小范围里，才是真的「追不上 / 走不过去」，那时才计数。
+        /// 另外「贴脸但隔着墙砍不到」这种，<see cref="ProcessFight"/> 末尾的
+        /// 「这只真的够不到」分支会自己弃目标，不依赖这里。
+        /// </para>
+        /// </summary>
+        private bool IsEngagedWithNearbyTarget()
+        {
+            if (State != BotState.Fight) return false;
+
+            MonsterObject monster = _target;
+
+            if (monster == null || monster.Dead || monster.CurrentMap != _player.CurrentMap) return false;
+
+            return BotNavigator.Distance(_player.CurrentLocation, monster.CurrentLocation) <= 3;
+        }
+
+        /// <summary>
+        /// 刷怪点是否在「近期走不到」的黑名单里（<see cref="TryPickHuntPoint"/> 选点时调用）。
+        /// 顺带清掉过期的条目 —— 黑名单只有几十项，遍历成本可忽略。
+        /// </summary>
+        private bool IsBadHuntPoint(Point point)
+        {
+            if (_badHuntPoints.Count == 0) return false;
+
+            if (!_badHuntPoints.TryGetValue(point, out DateTime expire)) return false;
+
+            if (SEnvir.Now < expire) return true;
+
+            _badHuntPoints.Remove(point);
+
+            return false;
         }
 
         #endregion
@@ -4219,7 +4951,14 @@ namespace Server.Bots
         private void EnterState(BotState state, string detail, TimeSpan duration)
         {
             if (State != state)
+            {
                 BotLog.Debug(Profile.Seq, string.Format("{0} → {1}：{2}", State, state, detail));
+
+                // 换了目标状态，上一段的轨迹和避让节流都作废 —— 否则新目标一开始
+                // 就会被旧轨迹判成「还在绕圈」。
+                _trail.Clear();
+                _nextAvoidStepTime = default;
+            }
 
             State = state;
             LastDetail = detail;
@@ -4538,7 +5277,7 @@ namespace Server.Bots
                 _slowUntil = DateTime.MinValue;
                 _topSince = DateTime.MinValue;
 
-                BotLog.Warn(Profile.Seq, "榜首降速结束，恢复练级");
+                BotLog.Info(Profile.Seq, "榜首降速结束，恢复练级");
 
                 EnterState(BotState.Idle, "降速结束，准备继续练级", TimeSpan.FromSeconds(3));
                 return false;
@@ -4550,7 +5289,7 @@ namespace Server.Bots
                 if (_topSince != DateTime.MinValue)
                 {
                     _topSince = DateTime.MinValue;
-                    BotLog.Warn(Profile.Seq, string.Format("已掉出排行榜前 {0}，取消降速计时", Options.TopRankLimit));
+                    BotLog.Info(Profile.Seq, string.Format("已掉出排行榜前 {0}，取消降速计时", Options.TopRankLimit));
                 }
 
                 return false;
@@ -4561,7 +5300,7 @@ namespace Server.Bots
             {
                 _topSince = SEnvir.Now;
 
-                BotLog.Warn(Profile.Seq, string.Format("进入排行榜前 {0}（{1} 级），开始计时",
+                BotLog.Info(Profile.Seq, string.Format("进入排行榜前 {0}（{1} 级），开始计时",
                     Options.TopRankLimit, _player.Level));
 
                 return false;
@@ -4573,7 +5312,7 @@ namespace Server.Bots
             _slowUntil = SEnvir.Now.AddMinutes(Options.TopSlowMinutes);
             _topSince = DateTime.MinValue;
 
-            BotLog.Warn(Profile.Seq, string.Format(
+            BotLog.Info(Profile.Seq, string.Format(
                 "连续 {0} 分钟占据排行榜前 {1}，暂停练级 {2} 分钟（把名次让给真人）",
                 Options.TopHoldMinutes, Options.TopRankLimit, Options.TopSlowMinutes));
 
@@ -4743,7 +5482,7 @@ namespace Server.Bots
 
             _pkCount++;
 
-            BotLog.Warn(Profile.Seq, string.Format("红名 PK：{0}（对方血量 {1}%）",
+            BotLog.Info(Profile.Seq, string.Format("红名 PK：{0}（对方血量 {1}%）",
                 target.Name, BotPerception.HealthPercent(target)));
 
             return true;

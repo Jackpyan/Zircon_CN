@@ -225,18 +225,58 @@ namespace Server.Envir
         /// <summary>上线分步的最小/最大间隔（毫秒），连接、登录、进图每一步之间随机等待。</summary>
         public static int BotStepDelayMinMs { get; set; } = 300;
         public static int BotStepDelayMaxMs { get; set; } = 1200;
-        /// <summary>新号一次性启动金币（0 = 不发放）。只在首次建角色时发，之后不补。</summary>
-        public static int BotNewbieGold { get; set; } = 5000;
-        /// <summary>新号一次性启动药水数量（红蓝各这么多，0 = 不发放）。</summary>
-        public static int BotNewbiePotionCount { get; set; } = 20;
+        /// <summary>
+        /// 新号一次性启动金币（0 = 不发放）。
+        /// <para>
+        /// 默认 <b>50 万</b>，不是 5000。5000 连一趟跨图传送都不够 ——
+        /// 六合石按次收费（几千金一次）、回城卷几百金一张、修装备和买药另算，
+        /// 结果就是 <c>BotBrain</c> 里 <c>GoldAmount() &lt; cost</c> 判「没钱」，
+        /// 跨图只能退化成 A* 逐格走，洞穴图一绕就规划失败、卡死在半路
+        /// （2026-11-13 用户实测：「在比奇城打怪，触发回城后规划到潘夜村并且路线失败」）。
+        /// </para>
+        /// <para>
+        /// 只补一次：低于本值的 10% 才发放（见 <c>BotFactory.GrantNewbieKit</c>），
+        /// 有满额之后永远跳过，不会无限刷钱。假人靠打怪卖垃圾自己滚起来。
+        /// </para>
+        /// </summary>
+        public static int BotNewbieGold { get; set; } = 500000;
+        /// <summary>
+        /// 新号一次性启动药水数量（红蓝**各**这么多，0 = 不发放）。
+        /// <para>
+        /// 默认 6 而不是 20：药是按堆叠发的，20 红 + 20 蓝 = 40 点负重，
+        /// 1 级号的基础负重只有几十点，出生即超重 → 捡不了任何东西（2026-11-13 用户实测）。
+        /// 而且现在有「负重预算」兜底（见 <c>BotFactory.GrantPotions</c>），
+        /// 配大了也只会按剩余负重发，不会再把号压垮。
+        /// </para>
+        /// </summary>
+        public static int BotNewbiePotionCount { get; set; } = 6;
+
+        /// <summary>
+        /// 新号一次性启动**回城卷**张数（0 = 不发放）。
+        /// <para>
+        /// 给 2 张的理由：回城卷只能回绑定点，而假人的绑定点是「序号取模」分的，
+        /// 常在离练级图很远的城 —— 没有卷就只能腿儿着跨图，低级号在路上容易被打死。
+        /// 2 张够「断药回城 → 买完卷再出来」跑通一次闭环，之后靠杂货商补货。
+        /// </para>
+        /// </summary>
+        public static int BotNewbieTownScrollCount { get; set; } = 2;
         /// <summary>是否按等级自动补技能（法师/道士不补会一直平砍，一眼假）。</summary>
         public static bool BotAutoSkill { get; set; } = true;
         /// <summary>假人等级上限，0 = 不封顶（已决策不封顶，留这个开关只为应急）。</summary>
         public static int BotLevelCap { get; set; } = 0;
         /// <summary>允许练级的 MapInfo.Index，逗号分隔；留空 = 不限制（P0 建议填 3~5 张低级图）。</summary>
         public static string BotHuntMaps { get; set; } = string.Empty;
-        /// <summary>日志级别：0=Debug 1=Info 2=Warn 3=Error，默认只记 Warn 以上。</summary>
-        public static int BotLogLevel { get; set; } = 2;
+        /// <summary>
+        /// 日志级别：0=Debug 1=Info 2=Warn 3=Error。
+        /// <para>
+        /// 默认 1（Info）：原来是 2，结果<b>后台「运行日志」里全是 WARN</b> ——
+        /// 因为所有正常事件（死亡、补给成功、进排行榜、跨图决策）都被逼着用 Warn 才显示得出来，
+        /// 级别语义彻底失效，真出异常时反而看不出来（2026-11-13 用户反馈）。
+        /// 现在恢复语义：正常事件 Info、真异常 Warn、每帧细节 Debug（默认不出）。
+        /// 嫌吵就调 2，只想看异常就调 3。
+        /// </para>
+        /// </summary>
+        public static int BotLogLevel { get; set; } = 1;
         /// <summary>连续上线失败多少次后标记 Broken，不再自动拉起（后台可手动重置）。</summary>
         public static int BotMaxFailures { get; set; } = 3;
 

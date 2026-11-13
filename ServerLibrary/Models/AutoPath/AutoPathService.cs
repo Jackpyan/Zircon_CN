@@ -72,6 +72,14 @@ namespace Server.Models.AutoPath
             });
         }
 
+        /// <summary>
+        /// 「从当前图走到各张图要跨几道图」的跳数表（当前图 = 0）。
+        /// 判据与真正规划时一致（同样的出口可用性检查），所以表里有跳数 = AutoPath 走得通。
+        /// 用途：挑最近的补给城，见 <c>BotBrain.ResolveSupplyDestination</c>。
+        /// </summary>
+        public Dictionary<MapInfo, int> GetHopsFrom(PlayerObject player)
+            => AutoPathRoutePlanner.GetHopsFrom(player);
+
         public bool TryStart(PlayerObject player, MapRegion region)
         {
             if (player == null || region?.Map == null) return false;

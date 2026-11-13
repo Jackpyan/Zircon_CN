@@ -421,9 +421,55 @@ namespace Server.Models.AutoPath
             return result;
         }
 
+        /// <summary>
+        /// 从 <paramref name="actor"/> 当前所在图出发，按「真的能走过去」的出口做一次正向 BFS，
+        /// 返回「每张图要跨几道图」（当前图 = 0）。
+        /// <para>
+        /// 用途是**挑目的地**：补给要回城时得知道「哪座城最近」，而不是无脑回绑定点。
+        /// 门槛判定复用 <see cref="CanUseMovement"/>，所以规划器走不通的图不会出现在结果里 ——
+        /// 「跳数存在」和「AutoPath 能规划出来」是同一套判据，不会出现「挑了却规划失败」。
+        /// </para>
+        /// <para>
+        /// 一次 BFS 只扫地图级邻接（几百条边），不跑整图 A*，可以在状态切换时放心调用。
+        /// </para>
+        /// </summary>
+        public static Dictionary<MapInfo, int> GetHopsFrom(MapObject actor)
+        {
+            Dictionary<MapInfo, int> result = new Dictionary<MapInfo, int>();
+
+            MapInfo start = actor?.CurrentMap?.Info;
+
+            if (start == null) return result;
+
+            result[start] = 0;
+
+            Queue<MapInfo> pending = new Queue<MapInfo>();
+            pending.Enqueue(start);
+
+            while (pending.Count > 0)
+            {
+                MapInfo current = pending.Dequeue();
+                int distance = result[current] + 1;
+
+                foreach (MovementInfo movement in GetOutgoingMovements(current))
+                {
+                    MapInfo next = movement.DestinationRegion?.Map;
+
+                    if (next == null || result.ContainsKey(next) || !next.CanAutoPath) continue;
+                    if (!CanUseMovement(actor, movement, current)) continue;
+
+                    result[next] = distance;
+                    pending.Enqueue(next);
+                }
+            }
+
+            return result;
+        }
+
         private static IEnumerable<MovementInfo> GetOutgoingMovements(MapInfo map)
         {
             if (map?.Regions == null) yield break;
+
 
             foreach (MapRegion region in map.Regions)
             {

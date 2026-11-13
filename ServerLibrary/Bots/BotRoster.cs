@@ -364,6 +364,11 @@ namespace Server.Bots
             {
                 _nextSnapshotTime = SEnvir.Now.AddSeconds(1);
 
+                // 认领表回收：清掉死了 / 消失了 / 过期的条目。
+                // 字典的 key 是怪物对象本身，不清会一直攥着已经 despawn 的对象。
+                // 每秒一次就够 —— 里面只是一次字典遍历（几十条）。
+                BotClaims.Prune();
+
                 // 全局熔断（P4-5）：每秒看一次假人段耗时，超阈值就压住水位上限。
                 // 放在 RebuildSnapshot 之前 —— 同一秒里快照读到的上限就是压过之后的，
                 // 否则页面会先显示「目标 30」再跳到「目标 12」，看着像抖了一下。

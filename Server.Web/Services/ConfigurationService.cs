@@ -69,6 +69,14 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
     {
         lock (_sync)
         {
+            // 计时：2026-11-13 用户反馈「点保存后网页和客户端一起卡几秒」，
+            // 但当时没有任何耗时数据，只能猜。
+            //
+            // 一开始只在 ≥200ms 时才落日志，结果用户实测「保存正常、但没看到那行」——
+            // 因为本地保存本来就只要几十毫秒（慢的是**首次**反射 + 冷启动，而且卡的是电路线程）。
+            // 现在**每次都落**：后台保存是低频动作（一天几次），多一行日志换来「有数可看」值得。
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+
             Dictionary<PropertyInfo, object?> originals = [];
             try
             {
@@ -100,6 +108,11 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
                     });
                 }
                 audit.Record(user, "Configuration.Save", $"Updated {originals.Count} configuration values");
+
+                watch.Stop();
+
+                SEnvir.Log(string.Format("[配置] 保存 {0} 项耗时 {1} ms{2}", originals.Count, watch.ElapsedMilliseconds,
+                    watch.ElapsedMilliseconds >= 200 ? "（写 Server.ini + 算客户端哈希 + 审计落盘，偏慢）" : ""));
             }
             catch
             {
@@ -191,9 +204,20 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
 
     public string GenerateEncryptionKey() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
-    private static IEnumerable<PropertyInfo> GetProperties() => typeof(Config)
+    /// <summary>
+    /// <see cref="Config"/> 的公开静态属性，按声明顺序缓存。
+    /// <para>
+    /// 原来每次 <see cref="Read"/>/<see cref="Save"/> 都现调 <c>assembly.GetTypes()</c> 再筛一遍 ——
+    /// 那是整个程序集的元数据遍历，首次调用要几百毫秒（2026-11-13「点保存卡几秒」的一半成本）。
+    /// Config 的属性集合在进程生命周期内不会变，缓存是安全的。
+    /// </para>
+    /// </summary>
+    private static readonly PropertyInfo[] ConfigProperties = typeof(Config)
         .GetProperties(BindingFlags.Public | BindingFlags.Static)
-        .OrderBy(property => property.MetadataToken);
+        .OrderBy(property => property.MetadataToken)
+        .ToArray();
+
+    private static IEnumerable<PropertyInfo> GetProperties() => ConfigProperties;
 
     private static string Format(object? value) => value switch
     {

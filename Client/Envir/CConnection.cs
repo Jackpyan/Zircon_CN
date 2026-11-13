@@ -28,6 +28,12 @@ namespace Client.Envir
 
         public int Ping;
 
+        /// <summary>本连接建立的时刻，用来在断线日志里给出「在线多久」。</summary>
+        private readonly DateTime _connectedAt = DateTime.Now;
+
+        /// <summary>断线日志只写一次（Disconnect / Process(Disconnect) 可能连着来）。</summary>
+        private bool _disconnectLogged;
+
         public CConnection(TcpClient client)
             : base(client)
         {
@@ -40,12 +46,38 @@ namespace Client.Envir
             BeginReceive();
         }
 
+        /// <summary>
+        /// 把「为什么断」写进 <c>Errors\</c>，只记一行、不带堆栈。
+        /// <para>
+        /// 起因（2026-11-13）：客户端中途掉线，`Errors\` 里只有一条 SocketException 995 ——
+        /// 那是拆链的副产物，真正的断线原因（被踢 / 超时 / 服务端崩）一个字都没有，
+        /// 等于没得查。现在把原因、ping、收发字节、在线时长一起落下来。
+        /// </para>
+        /// </summary>
+        private void LogDisconnect(string reason)
+        {
+            if (_disconnectLogged) return;
+
+            _disconnectLogged = true;
+
+            CEnvir.SaveError(string.Format(
+                "[断线] 原因={0}｜ping={1}ms｜收 {2:N0} / 发 {3:N0} 字节｜在线 {4:0.#} 分钟",
+                reason, Ping, TotalBytesReceived, TotalBytesSent,
+                (DateTime.Now - _connectedAt).TotalMinutes));
+        }
+
         public override void TryDisconnect()
         {
             Disconnect();
         }
         public override void Disconnect()
         {
+            // 先记原因再清 CEnvir.Connection：清完就分不清「是这条连接断的」还是「已经换了一条」。
+            // 这里走到的都是套接字层面断的（服务器 RST、超时、本机网络断），
+            // 由服务器主动下发原因的走 Process(G.Disconnect)，那边记的是枚举原因。
+            if (CEnvir.Connection == this)
+                LogDisconnect("套接字关闭（超时 / 服务器重置 / 网络中断）");
+
             base.Disconnect();
 
             if (CEnvir.Connection == this)
@@ -73,6 +105,10 @@ namespace Client.Envir
 
         public void Process(G.Disconnect p)
         {
+            // 服务器主动下发原因 —— 这是排查「被踢 / 版本不对 / 服务器关闭」唯一的线索，
+            // 以前只弹框给玩家看，日志里什么都不留。
+            LogDisconnect("服务器下发 " + p.Reason);
+
             Disconnecting = true;
 
             LoginScene scene = DXControl.ActiveScene as LoginScene;
