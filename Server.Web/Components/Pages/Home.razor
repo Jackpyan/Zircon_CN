@@ -58,7 +58,7 @@
 
 <div class="resource-head">
     <span>主机资源</span>
-    <small>每秒采样 · 进程 = 游戏服与后台共用的这个进程</small>
+    <small>每秒采样 · 整机口径（含所有进程，同 SSH 的 top）</small>
 </div>
 
 <section class="resource-grid">
@@ -69,7 +69,7 @@
     </div>
     <div class="resource-cell @MemoryClass">
         <span>内存占用</span>
-        <strong>@FormatBytes(Snapshot.MemoryBytes)</strong>
+        <strong>@FormatBytes(Snapshot.MemoryUsedBytes)</strong>
         <small>@MemoryNote</small>
     </div>
     <div class="resource-cell">
@@ -185,7 +185,7 @@
 
     private double MemoryPercent => Snapshot.MemoryTotalBytes <= 0
         ? 0
-        : Snapshot.MemoryBytes * 100.0 / Snapshot.MemoryTotalBytes;
+        : Snapshot.MemoryUsedBytes * 100.0 / Snapshot.MemoryTotalBytes;
 
     private string CpuNote
     {
@@ -193,15 +193,16 @@
         {
             string cores = $"{Environment.ProcessorCount} 核";
             // 负载均值只有 Linux 有；Windows 下采样器返回 0，就不显示这一段。
-            return Snapshot.LoadAverage1 > 0
-                ? $"{cores} · 负载 {Snapshot.LoadAverage1:0.00}"
-                : cores;
+            string load = Snapshot.LoadAverage1 > 0 ? $" · 负载 {Snapshot.LoadAverage1:0.00}" : string.Empty;
+
+            // 整机数字旁边带上本进程，用来回答「这台机器上到底是谁在吃 CPU」。
+            return $"{cores}{load} · 进程 {Snapshot.ProcessCpuPercent:0.0}%";
         }
     }
 
     private string MemoryNote => Snapshot.MemoryTotalBytes <= 0
         ? "共 —"
-        : $"共 {FormatBytes(Snapshot.MemoryTotalBytes)} · {MemoryPercent:0.0}%";
+        : $"共 {FormatBytes(Snapshot.MemoryTotalBytes)} · {MemoryPercent:0.0}% · 进程 {FormatBytes(Snapshot.ProcessMemoryBytes)}";
 
     private static string FormatUptime(TimeSpan value)
     {

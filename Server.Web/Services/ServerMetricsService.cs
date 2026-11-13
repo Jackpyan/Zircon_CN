@@ -44,12 +44,14 @@ public sealed class ServerMetricsService(IGameServerController controller, HostR
                     controller.LastError)
                 {
                     CpuPercent = resources.CpuPercent,
-                    MemoryBytes = resources.MemoryBytes,
+                    MemoryUsedBytes = resources.MemoryUsedBytes,
                     MemoryTotalBytes = resources.MemoryTotalBytes,
                     NetworkReceiveBytesPerSecond = resources.NetworkReceiveBytesPerSecond,
                     NetworkSendBytesPerSecond = resources.NetworkSendBytesPerSecond,
                     LoadAverage1 = resources.LoadAverage1,
                     ProcessUptime = resources.ProcessUptime,
+                    ProcessCpuPercent = resources.ProcessCpuPercent,
+                    ProcessMemoryBytes = resources.ProcessMemoryBytes,
                     GameServerUptime = _gameRunningSince is { } since
                         ? DateTimeOffset.Now - since
                         : TimeSpan.Zero
