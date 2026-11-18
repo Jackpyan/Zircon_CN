@@ -1,0 +1,50 @@
+[Unit]
+Description=Zircon Server (Server.Web: Web console + game server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ==== 必须按实际情况修改 ====
+WorkingDirectory=/opt/zircon
+ExecStart=/opt/zircon/Server.Web
+# 若你的程序是 dotnet Server.Web.dll，改用：
+# ExecStart=/usr/bin/dotnet /opt/zircon/Server.Web.dll
+
+# systemd 的环境变量极简，不继承 ~/.bashrc。
+# 若 dotnet 不是装在 /usr/share/dotnet（例如用 dotnet-install.sh 装到 ~/.dotnet），
+# apphost 会找不到运行时 → 启动即以 131 退出。用下面命令查实际路径后填进来：
+#   readlink -f "$(command -v dotnet)"
+# 输出 /root/.dotnet/dotnet 则填 /root/.dotnet
+Environment=DOTNET_ROOT=/usr/share/dotnet
+# 兜底 PATH，避免脚本类工具找不到命令
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 运行身份（推荐改成专用用户；不写则用 root）
+# User=zircon
+# Group=zircon
+
+Restart=on-failure
+RestartSec=5
+
+# ==== 优雅停服（关键）====
+# SIGTERM → 程序进入优雅关闭：停网络 → 全量保存数据库 → 写回 Server.ini
+# 代码里 HostOptions.ShutdownTimeout = 120s，这里必须比它大
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=180
+SendSIGKILL=yes
+
+# 资源与日志
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zircon-web
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+
+[Install]
+WantedBy=multi-user.target

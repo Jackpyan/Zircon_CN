@@ -1,0 +1,35 @@
+[Unit]
+Description=Zircon Game Server (standalone Server)
+After=network-online.target
+Wants=network-online.target
+# 只在「单独跑游戏服、不跑 Server.Web」时使用本单元。
+# 若用 Server.Web（Web 后台 + 游戏服同进程），不要装这个，否则端口冲突。
+
+[Service]
+Type=simple
+
+WorkingDirectory=/opt/zircon-server
+ExecStart=/opt/zircon-server/Server
+# 若是 dll 形式：ExecStart=/usr/bin/dotnet /opt/zircon-server/Server.dll
+
+# User=zircon
+# Group=zircon
+
+Restart=on-failure
+RestartSec=5
+
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=180
+SendSIGKILL=yes
+
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zircon-server
+
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+
+[Install]
+WantedBy=multi-user.target

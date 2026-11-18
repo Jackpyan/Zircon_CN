@@ -1,0 +1,9 @@
+# 部署到 Linux 的脚本与 systemd unit 必须是 LF。
+#
+# 本机 core.autocrlf=true：检出时会把这些文件转成 CRLF，直接拷到 Linux 就变成
+#   install.sh: $'\r': not found
+#   systemd: Failed to parse service file
+# 这类报错完全不提「换行符」，很难联想。这里显式钉死 LF，与 autocrlf 设置无关。
+
+*.sh      text eol=lf
+*.service text eol=lf
