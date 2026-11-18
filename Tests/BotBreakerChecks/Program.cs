@@ -276,10 +276,10 @@ Check(!BotSkills.GroupWanted(MirClass.Warrior).Any(), "战士没有群攻（平�
 var taoistLearned = BotSkills.Wanted(MirClass.Taoist).ToHashSet();
 
 Check(!BotSkills.AttackSkillsOf(MirClass.Taoist).Contains(MagicType.PoisonDust),
-    "施毒术不在道士攻击技能表里（纯 debuff，只能当开场）");
+    "施毒术不在道士攻击技能表里（纯 debuff，只能循环补毒）");
 
 Check(taoistLearned.Contains(MagicType.PoisonDust),
-    "施毒术仍在补技能名单里（不在的话 TryOpenWithPoison 永远放不出来）");
+    "施毒术仍在补技能名单里（不在的话 TryApplyPoison 永远放不出来）");
 
 foreach (MagicType ammo in BotSkills.AmmoSkillTypes)
 {

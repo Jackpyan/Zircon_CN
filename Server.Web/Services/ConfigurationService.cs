@@ -95,6 +95,10 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
                 Config.LoadVersion();
                 if (SEnvir.Started) SEnvir.ServerBuffChanged = true;
 
+                // 假人调度器把 Bots 配置缓存了一秒（每帧现建会吃掉主循环），
+                // 后台保存后必须打掉缓存，否则「改完即时生效」变成「最多慢一秒」。
+                Server.Bots.BotRoster.InvalidateOptions();
+
                 // 寄售费率/最低费变化 → 立即推给在线玩家，避免「弹窗显示旧费、实际按新费扣」
                 if (SEnvir.Started && originals.Keys.Any(property =>
                         property.Name is nameof(Config.MarketPlaceFeeRate) or nameof(Config.MarketPlaceFeeMinimum)))
@@ -129,6 +133,7 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
         {
             ConfigReader.Load(_assembly);
             Config.LoadVersion();
+            Server.Bots.BotRoster.InvalidateOptions();
             audit.Record(user, "Configuration.Reload", "Reloaded Server.ini");
         }
     }

@@ -426,6 +426,10 @@ namespace Server.Bots
                 // 这期间别的假人会把这几只怪当「有人打」绕开。
                 BotClaims.ReleaseAll(Profile.Seq);
 
+                // 下线了也别再占着目标图（现象 1）：不清的话要等 180 秒 TTL 到期，
+                // 这期间别的假人会一直跳过这张目标图。
+                BotMapClaims.ReleaseAll(Profile.Seq);
+
                 if (Connection?.Player != null)
                     Connection.Player.Bot = null;
             }

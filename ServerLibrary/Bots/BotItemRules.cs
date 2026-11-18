@@ -54,13 +54,33 @@ namespace Server.Bots
         /// <summary>
         /// 这个职业要不要带蓝药。
         ///
-        /// <para><b>战士不要</b>：<c>BotBrain</c> 的喝药分支是「非战士且蓝低于 30% 才喝」，
+        /// <para><b>战士默认不要</b>：<c>BotBrain</c> 的喝药分支是「非战士且蓝低于 30% 才喝」，
         /// 战士一辈子喝不掉一瓶，而发下来的蓝药又卖不掉（见上），
         /// 于是每发一次就是几十点永久负重。实测两个战士各囤 40 瓶魔法药。</para>
+        /// <para>
+        /// 2026-11-16（D1）补充：战士 <b>24 级起</b>需要蓝药（24 级起 BotBrain 会喝蓝），
+        /// 见带等级的重载 <see cref="NeedsManaPotions(MirClass, int)"/>。
+        /// 本单参版本保持原语义（战士不发），供不需要等级的场景与旧断言使用。
+        /// </para>
         /// </summary>
         public static bool NeedsManaPotions(MirClass @class)
         {
             return @class != MirClass.Warrior;
+        }
+
+        /// <summary>
+        /// 战士需要蓝药的起始等级（D1，2026-11-16）：24 级起战士有耗蓝技能、BotBrain 开始喝蓝，
+        /// 发药/买药/捡药/喝蓝全部以此为统一判据，避免多处硬编码。
+        /// </summary>
+        public const int WarriorManaPotionLevel = 24;
+
+        /// <summary>
+        /// 这个职业在指定等级下要不要带蓝药（喝蓝/买蓝/发药/捡药的统一口径）。
+        /// <para>法师/道士始终需要；战士 24 级起需要，24 级前不需要（无耗蓝技能、省负重）。</para>
+        /// </summary>
+        public static bool NeedsManaPotions(MirClass @class, int level)
+        {
+            return @class != MirClass.Warrior || level >= WarriorManaPotionLevel;
         }
 
         /// <summary>

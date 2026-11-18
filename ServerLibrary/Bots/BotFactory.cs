@@ -299,10 +299,11 @@ namespace Server.Bots
         /// <summary>
         /// 发红蓝药。库里找不到对应药水时静默跳过（不阻断上线）。
         /// <para>
-        /// 战士<b>不发蓝药</b>（<see cref="BotItemRules.NeedsManaPotions"/>）：喝药分支是
+        /// 战士<b>默认不发蓝药</b>（<see cref="BotItemRules.NeedsManaPotions"/>）：喝药分支是
         /// 「非战士且蓝低于 30% 才喝」，战士一辈子喝不掉一瓶，而发下来的药卖不掉的话
         /// 就是几十点永久负重。实测（2026-11-12）<c>三更雪</c>、<c>江湖客</c>
         /// 两个战士背包里各躺着 40 瓶魔法药，负重 153/84、165/84。
+        /// 2026-11-16（D1）起：战士 <b>24 级起发蓝药</b>（24 级起会喝蓝），按等级判据发。
         /// </para>
         /// <para>
         /// <b>按负重预算发，不按配置硬发</b>（2026-11-13）：配置写 20 就是红蓝各 20 瓶，
@@ -316,7 +317,7 @@ namespace Server.Bots
 
             int granted = GivePotion(player, Stat.Health, count, ref budget, seq);
 
-            if (BotItemRules.NeedsManaPotions(player.Character?.Class ?? MirClass.Warrior))
+            if (BotItemRules.NeedsManaPotions(player.Character?.Class ?? MirClass.Warrior, player.Level))
                 granted += GivePotion(player, Stat.Mana, count, ref budget, seq);
 
             return granted;

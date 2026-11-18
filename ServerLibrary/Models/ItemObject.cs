@@ -123,7 +123,12 @@ namespace Server.Models
         public bool PickUpItem(PlayerObject ob)
         {
             if (!CanPickUpItem(ob))
+            {
+                // 归属校验失败（物品属于他人且不满足共享/定时可捡条件）时，
+                // 给客户端一个明确提示，否则玩家点拾取毫无反应，不知道为何捡不起来（2026-11-15）。
+                ob?.NotifyPickUpDenied();
                 return false;
+            }
 
             long taxableAmount = GetGuildTax();
 

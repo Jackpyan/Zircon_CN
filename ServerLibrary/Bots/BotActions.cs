@@ -25,6 +25,9 @@ namespace Server.Bots
             if (player.Dead || !player.CanAttack) return false;
             if (target.Dead || target.Node == null) return false;
 
+            // 目标不可见（如食人花未冒出地面）时不可攻击，否则贴脸打永远打不中。
+            if (!target.Visible) return false;
+
             if (BotNavigator.Distance(player.CurrentLocation, target.CurrentLocation) > 1) return false;
 
             player.Attack(Functions.DirectionFromPoint(player.CurrentLocation, target.CurrentLocation), MagicType.None);

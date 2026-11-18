@@ -48,6 +48,11 @@ namespace Server.Bots
             {
                 if (!(ob is MonsterObject monster)) continue;
                 if (monster.Dead || monster.Node == null) continue;
+
+                // 食人花等地下怪：未冒出地面时引擎置 Visible=false，此时不可攻击。
+                // 不过滤的话假人会把它选为目标、贴脸打却打不中，一直重复（用户 2026-11-14 观察）。
+                if (!monster.Visible) continue;
+
                 if (monster.Stats[Stat.Health] <= 0) continue;
 
                 MonsterInfo info = monster.MonsterInfo;
@@ -103,6 +108,58 @@ namespace Server.Bots
         /// </para>
         /// </summary>
         public static ItemObject FindNearestLoot(PlayerObject player, int radius)
+            => FindNearestLoot(player, player?.CurrentLocation ?? default, radius);
+
+        /// <summary>
+        /// 找一件地上的掉落物（就近），排除指定的那件。
+        /// <para>
+        /// 2026-11-15 生产诊断（DIAG-C）：掉落物 dist=3、周围零怪、值得捡，
+        /// 仍因 A* 终点不可达（地形/其它阻挡物）被放弃。原实现只找「最近」一件，
+        /// 够不到就放弃，遗留物品。现在够不到时排除这件、换次近的，逐步把够不到的
+        /// 目标筛掉，直到找到够得到的或没有可换的。
+        /// </para>
+        /// </summary>
+        public static ItemObject FindNearestLootExcluding(PlayerObject player, int radius, ItemObject exclude)
+            => FindNearestLootExcluding(player, player?.CurrentLocation ?? default, radius, exclude);
+
+        /// <summary>以指定中心点找最近的掉落物（半径内），排除指定的那件。</summary>
+        public static ItemObject FindNearestLootExcluding(PlayerObject player, Point center, int radius, ItemObject exclude)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            ItemObject best = null;
+            int bestDistance = int.MaxValue;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is ItemObject item)) continue;
+                if (item.Node == null) continue;
+                if (item == exclude) continue;
+
+                int distance = BotNavigator.Distance(center, item.CurrentLocation);
+
+                if (distance > radius || distance >= bestDistance) continue;
+
+                if (!IsWorthPickingUp(item)) continue;
+                if (IsPotionSurplus(player, item.Item)) continue;
+
+                best = item;
+                bestDistance = distance;
+            }
+
+            return best;
+        }
+
+        /// <summary>以指定中心点找最近的掉落物（半径内）。</summary>
+        /// <para>
+        /// 击杀后用：掉落物落在怪物死亡位置周围 <see cref="Config.DropDistance"/> 格内，
+        /// 以「击杀位置」为中心找，能覆盖远程击杀（法师/道士）时掉落物超出玩家身边
+        /// <c>LootRadius</c> 的情况 —— 否则假人因找不到掉落物而不进拾取态，直接去打怪，
+        /// 遗留战利品永不回收（用户 2026-11-14 观察）。
+        /// </para>
+        public static ItemObject FindNearestLoot(PlayerObject player, Point center, int radius)
         {
             Map map = player?.CurrentMap;
 
@@ -116,7 +173,7 @@ namespace Server.Bots
                 if (!(ob is ItemObject item)) continue;
                 if (item.Node == null) continue;
 
-                int distance = BotNavigator.Distance(player.CurrentLocation, item.CurrentLocation);
+                int distance = BotNavigator.Distance(center, item.CurrentLocation);
 
                 if (distance > radius || distance >= bestDistance) continue;
 
@@ -153,6 +210,37 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 找正在攻击该玩家的怪（2026-11-15，威胁检测用）。
+        /// <para>
+        /// 判据是 <c>monster.Target == player</c>（怪已锁定并正在攻击该玩家），
+        /// 比「附近有怪」精确：路过的怪、刚刷出来的怪不会误触发「被攻击切战斗」。
+        /// 假人没有「被攻击切战斗」的威胁检测时，在捡取/挖尸/走位途中被偷袭只能挨打，
+        /// 清完怪后也不会清剿遗留（用户 2026-11-15 观察）。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindAttacker(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null || !monster.Visible) continue;
+
+                // 怪的目标必须正好是该玩家（正在被打）。
+                if (!ReferenceEquals(monster.Target, player)) continue;
+
+                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                return monster;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// 统计半径内活着的怪（**不分配 List**）。
         /// 给「该放单体还是群攻」这种每帧都要问一次的高频判断用 ——
         /// 用 <see cref="GetMonstersAround"/> 每帧建一个 List，30 个假人就是每秒上千次分配。
@@ -171,6 +259,33 @@ namespace Server.Bots
                 if (monster.Dead || monster.Node == null) continue;
 
                 if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 统计地图上以**任意点**为中心、半径内的活怪数（**不分配 List**）。
+        /// <para>
+        /// 与 <see cref="CountMonstersAround"/> 的区别：那个以玩家当前位置为中心，
+        /// 这个以任意坐标为中心 —— 放风筝选退方向时，要评估**候选格**周围怪多不多，
+        /// 不能拿玩家自己的位置去量。
+        /// </para>
+        /// </summary>
+        public static int CountMonstersAt(Map map, Point point, int radius)
+        {
+            if (map == null) return 0;
+
+            int count = 0;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+
+                if (BotNavigator.Distance(point, monster.CurrentLocation) > radius) continue;
 
                 count++;
             }
@@ -248,8 +363,9 @@ namespace Server.Bots
 
             Stat stat = heals ? Stat.Health : Stat.Mana;
 
-            // 战士不喝蓝药，地上的也别捡。
-            if (stat == Stat.Mana && player.Character?.Class == MirClass.Warrior) return true;
+            // 不需要蓝药的（战士 24 级前）不喝蓝药，地上的也别捡。
+            if (stat == Stat.Mana && player.Character?.Class == MirClass.Warrior
+                && player.Level < BotItemRules.WarriorManaPotionLevel) return true;
 
             int target = stat == Stat.Health ? Config.BotRestockBuyRed : Config.BotRestockBuyBlue;
             int limit = PotionStockLimit(target);
@@ -312,6 +428,14 @@ namespace Server.Bots
                 case ItemType.Emblem:
                 case ItemType.SocketGem:
                     return true;
+
+                // 无类型物品（潘夜宝石、暗黑潘夜宝石、圣物、各类材料…）：
+                // 库里有 104 个 Nothing 物品，既有值钱的（潘夜宝石 600、暗黑潘夜宝石 1400、
+                // 圣物 1800、结晶暗黑矿石 1800），也有 0 价格杂物（魔方/宝珠/饰物/钥匙/碎片…）。
+                // 只捡有收购价的：能卖钱或能用；0 价格的捡了只占背包格，不捡。
+                // 任务物品已被上面的 QuestItem flag 拦截，不会误捡。
+                case ItemType.Nothing:
+                    return userItem.Info.Price > 0;
 
                 default:
                     // 其余（矿石、书、卷轴、花、宠物食粮…）价值低或用不上，
@@ -1344,6 +1468,9 @@ namespace Server.Bots
         /// <summary>「哪些地图上有药店」。懒加载一次（按地图 Index 排序，保证结果稳定）。</summary>
         private static List<MapInfo> _pharmacyMaps;
 
+        /// <summary>「地图 → 补给能力评分」。懒加载一次（D9，见 <see cref="GetMapSupplyLevel"/>）。</summary>
+        private static Dictionary<MapInfo, int> _supplyLevelMaps;
+
         /// <summary>
         /// 全服范围内，哪些地图上有**药店**（补给目的地的候选集）。
         /// <para>
@@ -1391,6 +1518,50 @@ namespace Server.Bots
             if (map == null) return false;
 
             return PharmacyMaps().Contains(map);
+        }
+
+        /// <summary>
+        /// 地图补给能力评分（D9，2026-11-16）：选图排序用，优先补给齐全的图/主城周边，
+        /// 减少「练级图没补给 → 回城 → 再跨图」的来回。
+        /// <para>
+        /// 评分口径：药店（红蓝药）2 分 + 杂货商（回城卷/弹药）2 分 + 修理铺 1 分，满分 5。
+        /// 药店与杂货商是核心补给（没药打不了、没卷回不来），修理铺次要，故权重低。
+        /// </para>
+        /// <para>
+        /// 只读 NPC 数据（<see cref="SEnvir.NPCInfoList"/>）里的 <c>Region.Map</c>，
+        /// **不加载地图**，与 <see cref="PharmacyMaps"/> 同模式，懒加载一次后终身有效。
+        /// </para>
+        /// </summary>
+        public static int GetMapSupplyLevel(MapInfo map)
+        {
+            if (map == null) return 0;
+
+            if (_supplyLevelMaps == null)
+            {
+                Dictionary<MapInfo, int> index = new Dictionary<MapInfo, int>();
+
+                foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
+                {
+                    MapInfo npcMap = npc?.Region?.Map;
+
+                    if (npcMap == null) continue;
+
+                    if (!index.TryGetValue(npcMap, out int level)) level = 0;
+
+                    if (IsPharmacy(npc)) level += 2;       // 药店：红蓝药
+                    if (IsScrollShop(npc)) level += 2;     // 杂货商：回城卷/弹药
+                    if (HasRepairPage(npc)) level += 1;    // 修理铺：耐久
+
+                    index[npcMap] = level;
+                }
+
+                // 空表说明数据还没加载完，别缓存（同 PharmacyMaps）。
+                if (index.Count == 0) return 0;
+
+                _supplyLevelMaps = index;
+            }
+
+            return _supplyLevelMaps.TryGetValue(map, out int cachedLevel) ? cachedLevel : 0;
         }
 
         /// <summary>
@@ -1553,6 +1724,68 @@ namespace Server.Bots
             }
 
             return -1;
+        }
+
+        /// <summary>
+        /// 负载负权重（D5，2026-11-16）：候选刷怪点的负载分 —— 该点/该区域当前假人越多分越高，
+        /// 选点排序时按<b>升序</b>排（负载轻的优先），后来者自动避开人满的点和区域，避免群体挤同一点。
+        /// <para>
+        /// 点级 + 区域级双层：
+        /// ① 点级：候选点周围 <paramref name="pointRadius"/> 格内的假人数；
+        /// ② 区域级：候选点所属刷怪区（<paramref name="regionBox"/>）内的假人数，
+        /// 点级已计入的不重复计，避免同一假人被算两次。
+        /// </para>
+        /// <para>
+        /// 纯函数：不碰引擎状态，只按传入的假人位置列表计算，便于单测钉死。
+        /// </para>
+        /// </summary>
+        /// <param name="candidate">候选刷怪点。</param>
+        /// <param name="botLocations">本图其他假人的位置（不含自己）；null/空 → 负载 0。</param>
+        /// <param name="pointRadius">点级统计半径（格）。</param>
+        /// <param name="regionBox">候选点所属刷怪区的包围盒；null → 不做区域级统计。</param>
+        public static int HuntLoadWeight(Point candidate, List<Point> botLocations, int pointRadius, HuntRegionBox? regionBox)
+        {
+            if (botLocations == null || botLocations.Count == 0) return 0;
+
+            int weight = 0;
+
+            foreach (Point bot in botLocations)
+            {
+                // 点级：候选点周围半径内的假人直接计入。
+                if (BotNavigator.Distance(candidate, bot) <= pointRadius)
+                {
+                    weight++;
+                    continue;
+                }
+
+                // 区域级：候选点所属刷怪区内的假人（点级已计的跳过）。
+                if (regionBox == null) continue;
+
+                HuntRegionBox box = regionBox.Value;
+
+                if (bot.X >= box.MinX && bot.X <= box.MaxX
+                    && bot.Y >= box.MinY && bot.Y <= box.MaxY)
+                    weight++;
+            }
+
+            return weight;
+        }
+
+        /// <summary>刷怪区包围盒（区域级负载统计用，避免依赖 System.Drawing.Rect）。</summary>
+        public readonly struct HuntRegionBox
+        {
+            public int MinX { get; }
+            public int MaxX { get; }
+            public int MinY { get; }
+            public int MaxY { get; }
+
+            public HuntRegionBox(int minX, int maxX, int minY, int maxY)
+            {
+                MinX = minX;
+                MaxX = maxX;
+                MinY = minY;
+                MaxY = maxY;
+            }
         }
 
         #endregion

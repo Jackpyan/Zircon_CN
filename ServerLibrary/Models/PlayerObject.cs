@@ -26,6 +26,35 @@ namespace Server.Models
         public CharacterInfo Character;
         public SConnection Connection;
 
+        /// <summary>上次发送「拾取被拒」提示的时间（2026-11-15）。</summary>
+        /// <para>
+        /// 拾取是逐格扫描的，一次 <see cref="PickUp"/> 可能命中多件归属他人的物品。
+        /// 若不节流，每件都发一条系统提示会刷屏，所以同一玩家 1 秒内只发一条。
+        /// </para>
+        private DateTime _lastPickUpDeniedTime;
+
+        /// <summary>
+        /// 拾取被拒（物品归属他人）时给客户端发系统提示（2026-11-15）。
+        /// <para>
+        /// 原来 <see cref="ItemObject.PickUpItem"/> 在归属校验失败时静默返回 false，
+        /// 客户端没有任何反馈 —— 玩家点拾取毫无反应，不知道是「不属于你」还是别的原因。
+        /// </para>
+        /// <para>
+        /// 假人（<c>Connection.IsBot</c>）与无连接的直接跳过：假人是伪连接，
+        /// 发包路径被 <c>Enqueue</c> 的 IsBot 短路，发出去也是空操作，无需空发。
+        /// </para>
+        /// </summary>
+        public void NotifyPickUpDenied()
+        {
+            if (Connection == null || Connection.IsBot) return;
+
+            if ((SEnvir.Now - _lastPickUpDeniedTime).TotalMilliseconds < 1000) return;
+
+            _lastPickUpDeniedTime = SEnvir.Now;
+
+            Connection.ReceiveChat(Connection.Language?.CannotPickUpItem, MessageType.System);
+        }
+
         /// <summary>
         /// AI 假人的大脑。真人恒为 null，<see cref="Process"/> 里那一行就是零开销。
         /// 只在假人进图成功后由 BotRoster 挂上，下线前自动摘掉。

@@ -24,6 +24,8 @@ namespace Server.Envir
         public abstract string ObserverCount { get; set; }
         public abstract string CannotFindPlayer { get; set; }
         public abstract string AlreadyBlocked { get; set; }
+        /// <summary>拾取被拒（物品归属他人）时的系统提示（2026-11-15）。</summary>
+        public abstract string CannotPickUpItem { get; set; }
         public abstract string BlockingWhisper { get; set; }
         public abstract string PlayerBlockingWhisper { get; set; }
         public abstract string GlobalDelay { get; set; }

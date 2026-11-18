@@ -22,6 +22,7 @@ namespace Server.Envir.Translations
         public override string ObserverCount { get; set; } = "You currently have {0} observers.";
         public override string CannotFindPlayer { get; set; } = "Unable to find the player: {0}";
         public override string AlreadyBlocked { get; set; } = "{0} is already on your block list.";
+        public override string CannotPickUpItem { get; set; } = "This item does not belong to you, you cannot pick it up.";
         public override string BlockingWhisper { get; set; } = "You are blocking Whispers.";
         public override string PlayerBlockingWhisper { get; set; } = "Player: {0} is blocking Whispers.";
         public override string GlobalDelay { get; set; } = "You cannot global for another {0} seconds.";

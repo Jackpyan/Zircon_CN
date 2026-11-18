@@ -1,0 +1,10 @@
+<Project>
+  <!-- AtlasBuilder 专用（2026-11-14）：把 NuGet 还原文件（project.assets.json 等）也输出到
+       解决方案外的部署目录，保持源码目录干净。
+       MSBuildProjectExtensionsPath 必须在 Microsoft.Common.props 导入前设置，
+       放在 csproj 里会报 MSB3540，所以用这个目录级的 Directory.Build.props
+       （只作用于 AtlasBuilder 目录，不影响解决方案里的其它项目）。 -->
+  <PropertyGroup>
+    <MSBuildProjectExtensionsPath>F:/DSH/Debug/AtlasBuilder/obj/</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

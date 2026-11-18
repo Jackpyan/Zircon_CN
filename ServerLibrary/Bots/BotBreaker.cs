@@ -24,9 +24,10 @@ namespace Server.Bots
     /// 重启后还原不回来 —— 那是事故，不是熔断。
     /// </para>
     /// <para>
-    /// <b>判据是「假人段占主循环的百分比」，不是毫秒。</b>
-    /// 主循环是自旋的（空闲时 5000+ 帧/秒），每帧毫秒数会被帧数稀释到接近 0 ——
-    /// 真实占用再高也看不出来。占比与帧率无关，直接回答「把假人拿掉服务器会不会好」。
+    /// <b>判据是「假人段占单核 CPU 的百分比」（绝对量口径），不是毫秒。</b>
+    /// 2026-11-14 改动点 5：原口径「占主循环百分比」会被自旋帧率稀释（帧率一变，
+    /// 同一真实开销算出的占比就变，阈值失真）；现口径 <c>BotMsPerSecond / 10.0</c>，
+    /// 1000ms/秒 = 100% = 占满一个核，与帧率无关，直接回答「假人段吃掉了几个核」。
     /// </para>
     /// <para>
     /// 默认关闭，先在后台「假人性能」卡片看几天真实基线再打开。
@@ -178,7 +179,7 @@ namespace Server.Bots
             _openedAt = Library.Time.LocalNow;
 
             BotLog.SystemWarn(string.Format(
-                "全局熔断触发：假人段占主循环 {0:0.#}% ≥ {1}%（连续 {2} 秒，累计 {3:0} ms/秒），水位上限临时压到 {4}（只停止新增，不踢在线；占比回落到 {5}% 以下并持续 {6} 秒后自动解除）",
+                "全局熔断触发：假人段占单核 {0:0.#}% ≥ {1}%（连续 {2} 秒，累计 {3:0} ms/秒），水位上限临时压到 {4}（只停止新增，不踢在线；占比回落到 {5}% 以下并持续 {6} 秒后自动解除）",
                 share, Config.BotBreakerSharePercent, Config.BotBreakerTripSeconds,
                 ServerPerf.BotMsPerSecond, ceiling,
                 Config.BotBreakerSharePercent / 2.0, Config.BotBreakerRecoverSeconds));

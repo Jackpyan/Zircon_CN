@@ -77,6 +77,13 @@ namespace Server.Bots
     /// </summary>
     public sealed class BotDetail
     {
+        /// <summary>技能标签里的一行：技能名（已翻中文）+ 当前等级。</summary>
+        public sealed class BotDetailMagic
+        {
+            public string Name { get; init; } = string.Empty;
+            public int Level { get; init; }
+        }
+
         public int Seq { get; init; }
         public bool Online { get; init; }
 
@@ -117,6 +124,9 @@ namespace Server.Bots
 
         /// <summary>属性 tab 的行（只放有中文名的条目，顺序按 <see cref="Stat"/> 枚举）。</summary>
         public IReadOnlyList<BotDetailLine> Attributes { get; init; } = Array.Empty<BotDetailLine>();
+
+        /// <summary>技能 tab 的行（角色已学技能 + 等级；过滤口径同 <see cref="BotSkills.KnownCount"/>）。</summary>
+        public IReadOnlyList<BotDetailMagic> Magics { get; init; } = Array.Empty<BotDetailMagic>();
 
         /// <summary>取详情时的本地时间（页面显示「更新 hh:mm:ss」）。</summary>
         public DateTime SnapshotAt { get; init; }
@@ -227,6 +237,7 @@ namespace Server.Bots
                 Detail = snapshot?.Detail ?? string.Empty,
                 Slots = slots,
                 Attributes = BuildAttributes(player),
+                Magics = BuildMagics(player),
                 SnapshotAt = Time.LocalNow,
             };
         }
@@ -306,6 +317,36 @@ namespace Server.Bots
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// 角色技能 tab：把 <c>CharacterInfo.Magics</c>（持久化在库，下线也在）里已学的技能列出来。
+        /// <para>过滤口径与 <see cref="BotSkills.KnownCount"/> 一致：<c>Info != null</c> 且
+        /// <c>School != MagicSchool.None</c>；技能名走 <see cref="BotText.Magic"/> 翻中文。</para>
+        /// </summary>
+        private static List<BotDetailMagic> BuildMagics(PlayerObject player)
+        {
+            List<BotDetailMagic> list = new List<BotDetailMagic>();
+
+            CharacterInfo character = player.Character;
+
+            if (character?.Magics == null) return list;
+
+            foreach (UserMagic magic in character.Magics)
+            {
+                if (magic?.Info == null || magic.Info.School == MagicSchool.None) continue;
+
+                list.Add(new BotDetailMagic
+                {
+                    Name = BotText.Magic(magic.Info.Magic),
+                    Level = magic.Level,
+                });
+            }
+
+            // 等级高的在前，同级按技能名，运营扫一眼就知道核心技能练到什么程度。
+            list.Sort((a, b) => b.Level != a.Level ? b.Level.CompareTo(a.Level) : string.CompareOrdinal(a.Name, b.Name));
+
+            return list;
         }
 
         /// <summary>

@@ -207,6 +207,13 @@ namespace Server.Bots
         private static DateTime _nextSnapshotTime = DateTime.MinValue;
         private static bool _started;
 
+        /// <summary>配置快照（每秒最多重建一次）。见 <see cref="Options"/>。</summary>
+        private static BotOptions _options;
+        private static DateTime _nextOptionsTime = DateTime.MinValue;
+
+        /// <summary>是否有会话正在推进（上线中 / 在线 / 下线中）。每秒刷新一次，用于空闲短路。</summary>
+        private static bool _anySessionBusy;
+
         public static bool Started => _started;
         public static int SessionCount => Sessions.Count;
         public static int OnlineCount => Sessions.Count(x => x.IsOnline);
@@ -293,6 +300,7 @@ namespace Server.Bots
 
             _nextEvaluateTime = SEnvir.Now;
             _nextSnapshotTime = SEnvir.Now;
+            _options = null;
             _warmup = true;
 
             BotLog.System(string.Format("调度器已启动：容量 {0} 个，BotEnabled={1}，目标在线 {2}，冷启动间隔 {3} 秒",
@@ -336,12 +344,60 @@ namespace Server.Bots
             BotLog.System(string.Format("调度器已停止，下线 {0} 个假人", count));
         }
 
-        /// <summary>主循环每帧调用。</summary>
+        /// <summary>
+        /// 配置快照，每秒最多重建一次。
+        /// <para>
+        /// <b>为什么不能每帧现建</b>：<see cref="Process"/> 是主循环每帧调一次，而主循环是自旋的
+        /// （生产实测 7 万帧/秒）。<see cref="BotOptions.FromConfig"/> 每次都要 new 一个 50 多字段的对象、
+        /// new 一个 HashSet、再把 <c>BotHuntMaps</c> 字符串 Split 成上百个子串 —— 乘 7 万就是每秒几百 MB 的分配。
+        /// 2026-11-13 生产实测：假人一个都没上线（<c>BotEnabled=False</c>、在线 0），
+        /// 后台「假人段开销」却报 68.8% / 685 ms/秒 —— 主循环有 2/3 的 CPU 花在「读自己的配置」上。
+        /// </para>
+        /// <para>后台改配置走 <see cref="InvalidateOptions"/> 立刻生效，不用等这一秒。</para>
+        /// </summary>
+        private static BotOptions Options
+        {
+            get
+            {
+                if (_options == null || SEnvir.Now >= _nextOptionsTime)
+                {
+                    _options = BotOptions.FromConfig();
+                    _nextOptionsTime = SEnvir.Now.AddSeconds(1);
+                }
+
+                return _options;
+            }
+        }
+
+        /// <summary>
+        /// 后台改过 Bots 配置后调用：下一帧立刻用新值（不调的话最多滞后 1 秒）。
+        /// <para>只清缓存，不重建 —— 重建要在游戏线程里做，后台线程只负责把标志打掉。</para>
+        /// </summary>
+        public static void InvalidateOptions()
+        {
+            _options = null;
+        }
+
+        /// <summary>
+        /// 主循环每帧调用。
+        /// </summary>
         public static void Process()
         {
             if (!_started) return;
 
-            BotOptions options = BotOptions.FromConfig();
+            // 空闲短路：总开关关着、又没有会话在推进（上线中/在线/下线中）时，
+            // 每帧该做的其实只有「每秒那一套维护」。
+            // 不短路的话，光是「重建配置快照 + 遍历 30 个 Session」就够把主循环吃掉一大截
+            // （2026-11-13 生产实测：在线 0 个、假人段开销 68.8% / 685 ms/秒）。
+            // 判据直接读 Config.BotEnabled（一个 bool），连快照都不建 —— 顺带还没有 1 秒延迟。
+            if (!_anySessionBusy && !Config.BotEnabled)
+            {
+                if (SEnvir.Now >= _nextSnapshotTime) ProcessSecondTick();
+
+                return;
+            }
+
+            BotOptions options = Options;
 
             foreach (BotSession session in Sessions)
                 session.Process(options);
@@ -353,30 +409,68 @@ namespace Server.Bots
             {
                 int changed = Evaluate(options);
 
-                // 暖机阶段每放一个等 StartupRampSeconds（默认 45 秒），错开出生点抢怪；
-                // 铺满之后立刻转回稳态间隔，掉线补水不用再等 45 秒。
-                bool ramping = changed > 0 && _warmup;
+                _nextEvaluateTime = SEnvir.Now.AddSeconds(EvaluateIntervalSeconds(options, changed));
 
-                _nextEvaluateTime = SEnvir.Now.AddSeconds(ramping ? options.StartupRampSeconds : options.RosterIntervalSeconds);
+                // 刚拉起/撤下过 → 下一帧就得让 Session 步进，不能等这一秒的快照刷新。
+                if (changed != 0) _anySessionBusy = true;
             }
 
-            if (SEnvir.Now >= _nextSnapshotTime)
-            {
-                _nextSnapshotTime = SEnvir.Now.AddSeconds(1);
+            if (SEnvir.Now >= _nextSnapshotTime) ProcessSecondTick();
+        }
 
-                // 认领表回收：清掉死了 / 消失了 / 过期的条目。
-                // 字典的 key 是怪物对象本身，不清会一直攥着已经 despawn 的对象。
-                // 每秒一次就够 —— 里面只是一次字典遍历（几十条）。
-                BotClaims.Prune();
+        /// <summary>
+        /// 下一轮水位评估隔多久。
+        /// <para>
+        /// <b>冷启动（暖机）：<see cref="BotOptions.StartupRampSeconds"/> 是「整批铺开的总时长」，不是「每个人之间的间隔」。</b>
+        /// 原来直接把它当间隔用 —— 配 45 秒、目标 30，就变成「每轮只拉 1 个 + 等满 45 秒」，
+        /// 铺满要 **22.5 分钟**。2026-11-14 生产实测日志逐轮都是 45.0 秒一个，
+        /// 看着像「按水位拉人坏了」，其实每个假人个体只要 2.5 秒就上线。
+        /// </para>
+        /// <para>
+        /// 现在按剩余人数均摊（30 个 → 1 秒一个），并且<b>不慢于稳态间隔</b>
+        /// （剩最后 1~2 个时不会又退回 45 秒）。真正要避免的只是「同一帧 30 个一起登录」，
+        /// 1 秒一个足够错开 —— 每个 Session 内部本来还有 300~1200ms 的随机步进延迟。
+        /// </para>
+        /// </summary>
+        private static int EvaluateIntervalSeconds(BotOptions options, int changed)
+        {
+            if (changed <= 0 || !_warmup) return options.RosterIntervalSeconds;
 
-                // 全局熔断（P4-5）：每秒看一次假人段耗时，超阈值就压住水位上限。
-                // 放在 RebuildSnapshot 之前 —— 同一秒里快照读到的上限就是压过之后的，
-                // 否则页面会先显示「目标 30」再跳到「目标 12」，看着像抖了一下。
-                BotBreaker.Evaluate(OnlineCount);
+            int remaining = Math.Max(1, EffectiveTarget - OnlineCount);
+            int ramp = Math.Max(1, options.StartupRampSeconds) / remaining;
 
-                RebuildSnapshot();
-            }
+            // 下限 1 秒（别在同一帧灌一堆），上限 = 稳态间隔（别比铺满之后还慢）。
+            return Math.Clamp(ramp, 1, Math.Max(1, options.RosterIntervalSeconds));
+        }
 
+        /// <summary>
+        /// 每秒那一套维护：认领表回收 + 熔断评估 + 页面快照。
+        /// <para>抽出来是因为空闲短路那条路也要跑它 —— 页面上的「假人段开销」不能停在旧值上。</para>
+        /// </summary>
+        private static void ProcessSecondTick()
+        {
+            _nextSnapshotTime = SEnvir.Now.AddSeconds(1);
+
+            // 下一次短路判断的依据（顺带就把它算出来了，不用额外遍历一遍）。
+            _anySessionBusy = Sessions.Any(x => x.IsBusy);
+
+            // 认领表回收：清掉死了 / 消失了 / 过期的条目。
+            // 字典的 key 是怪物对象本身，不清会一直攥着已经 despawn 的对象。
+            // 每秒一次就够 —— 里面只是一次字典遍历（几十条）。
+            BotClaims.Prune();
+
+            // 选图认领表回收（现象 1）：清掉过期条目，避免下线/异常假人长期占住目标图。
+            BotMapClaims.Prune();
+
+            // 跨假人不可达点黑名单回收（D6）：清掉过期标记，避免没人查询的过期条目一直攥在表里。
+            BotBadHuntPoints.Prune();
+
+            // 全局熔断（P4-5）：每秒看一次假人段耗时，超阈值就压住水位上限。
+            // 放在 RebuildSnapshot 之前 —— 同一秒里快照读到的上限就是压过之后的，
+            // 否则页面会先显示「目标 30」再跳到「目标 12」，看着像抖了一下。
+            BotBreaker.Evaluate(OnlineCount);
+
+            RebuildSnapshot();
         }
 
         /// <summary>
@@ -509,6 +603,11 @@ namespace Server.Bots
                 spawned++;
             }
 
+            // 拉起成功 → 下一帧就得让 Session 步进。
+            // 不置这一位的话，`Process()` 的空闲短路会一直成立到下一秒的维护拍
+            // （后台「立即上线 N 个」会看着像没反应）。
+            if (spawned > 0) _anySessionBusy = true;
+
             return spawned;
         }
 
@@ -526,6 +625,10 @@ namespace Server.Bots
                 session.RequestStop();
                 stopped++;
             }
+
+            // 撤下也要继续步进（Stopping → Disconnect → StopGame 是一步步走的），
+            // 否则空闲短路会让「撤下」停在半路。
+            if (stopped > 0) _anySessionBusy = true;
 
             return stopped;
         }
@@ -822,23 +925,31 @@ namespace Server.Bots
         #region 自检（D4 技能补齐的验收手段）
 
         /// <summary>
-        /// 调试用：把在线假人直接加到指定等级，跑一次 <see cref="BotSkills.Sync"/>，回报前后差异。
+        /// 调试用：把在线假人直接加到<b>指定</b>等级，跑一次 <see cref="BotSkills.Sync"/>，回报前后差异。
         /// <para>
         /// 为什么要作弊加经验：真实练到 7 级（法师火球）/13 级（道士火符）要几十分钟，
         /// 而「升级时是否补到技能、补到的技能能不能放出来」必须当轮验证，不能靠等。
-        /// 只对假人生效，且不写库外的任何东西；D5 验收后可以连按钮一起删。
+        /// 只对假人生效，且不写库外的任何东西。
+        /// </para>
+        /// <para>
+        /// 目标等级由调用方传入（页面弹窗输入，2026-11-14 改）。**非法值直接拒绝、不夹不猜** ——
+        /// 原来「传 0 就默认夹到满级」正是「一点就满级」的根源，现在 0 会明确报错。
         /// </para>
         /// </summary>
-        public static BotSkillCheckResult SkillCheck(int seq, int targetLevel = 0)
+        public static BotSkillCheckResult SkillCheck(int seq, int targetLevel)
         {
             BotSession session = Find(seq);
             PlayerObject player = session?.Connection?.Player;
 
             if (player == null) return new BotSkillCheckResult(false, 0, 0, 0, 0, 0, "假人不在线");
 
-            // 服务器等级上限（Config.MaxLevel，2026-11-13 起 = 100）之外不可能升级，目标等级要夹住。
-            // 这个值本身在 Config 里已被夹到 Globals.MaxExperienceLevel，这里只防「调用方传 999」。
-            if (targetLevel <= 0 || targetLevel > Config.MaxLevel) targetLevel = Config.MaxLevel;
+            // 目标等级必须落在 1 ~ Config.MaxLevel（2026-11-13 起 = 100）之间。
+            // 不夹值：非法输入直接失败，避免运营误填把假人拉满。
+            if (targetLevel < 1 || targetLevel > Config.MaxLevel)
+            {
+                return new BotSkillCheckResult(false, player.Level, player.Level, 0, 0, 0,
+                    string.Format("目标等级 {0} 非法，必须在 1 ~ {1} 之间", targetLevel, Config.MaxLevel));
+            }
 
             int levelBefore = player.Level;
             int magicBefore = BotSkills.KnownCount(player);
@@ -863,8 +974,8 @@ namespace Server.Bots
 
             bool hasKey = player.Class != MirClass.Warrior && player.GetMagic(key, out MagicObject _);
 
-            string detail = string.Format("等级 {0}→{1}，技能 {2}→{3}，{4} {5}",
-                levelBefore, player.Level, magicBefore, magicAfter, key, hasKey ? "已学" : "未学");
+            string detail = string.Format("目标 Lv{0}，等级 {1}→{2}，技能 {3}→{4}，{5} {6}",
+                targetLevel, levelBefore, player.Level, magicBefore, magicAfter, key, hasKey ? "已学" : "未学");
 
             BotLog.Info(seq, "技能自检：" + detail);
 

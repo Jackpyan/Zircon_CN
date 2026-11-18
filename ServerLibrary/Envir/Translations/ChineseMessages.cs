@@ -24,6 +24,7 @@ namespace Server.Envir.Translations
         public override string ObserverCount { get; set; } = "现在有{0}个观察者正在观看你的视角";
         public override string CannotFindPlayer { get; set; } = "无法找到角色:{0}";
         public override string AlreadyBlocked { get; set; } = "{0}已经在你的黑名单上";
+        public override string CannotPickUpItem { get; set; } = "此物品不属于你，无法拾取。";
         public override string BlockingWhisper { get; set; } = "你当前拒绝他人跟你私聊";
         public override string PlayerBlockingWhisper { get; set; } = "玩家:{0}当前拒绝私聊";
         public override string GlobalDelay { get; set; } = "你需要在{0}秒之后才能下一次全服喊话";

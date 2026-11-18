@@ -13,7 +13,9 @@ namespace Server.Bots
     /// <summary>
     /// 假人的技能本。三件事：
     /// 1. <b>补技能</b>：法师/道士按引擎等级门槛直接建 <see cref="UserMagic"/>，不走「打书 → 用书」；
-    /// 2. <b>选技能</b>：只挑<b>攻击型</b>（伤害）与<b>治疗型</b>，召唤/盾/隐身这些 P0 不放，补了也没用；
+    /// 2. <b>选技能</b>：只挑<b>攻击型</b>（伤害）与<b>治疗型</b>；盾/隐身这些 P0 不放，
+    ///    召唤不进伤害候选（无直接伤害，选出来会空放），但进学习清单并在战斗前/宠物死亡后补召
+    ///    （见 <see cref="TrySummonPet"/>）；
     ///    选攻击技能时按<b>目标元素抗性</b>打分（免疫的绝不选，见 <see cref="ChooseBest"/>）；
     /// 3. <b>施法</b>：走真人同一条 <see cref="PlayerObject.Magic"/>（校验距离、蓝量、冷却），不做特权。
     /// <para>
@@ -38,13 +40,13 @@ namespace Server.Bots
             MagicType.Asteroid, MagicType.IceRain, MagicType.FrostBite, MagicType.LightningStrike,
         };
 
-        /// <summary>道士：攻击 + 治疗（召唤兽 P0 不放，缺了召唤道士偏弱但观感正常）。</summary>
+        /// <summary>道士：攻击 + 治疗（召唤兽走 <see cref="TrySummonPet"/> 补召，不进伤害表）。</summary>
         /// <para>
         /// <b>施毒术（PoisonDust）不在这个表里</b>（2026-11-13 用户实测报的）：
         /// 它是<b>纯 debuff</b> —— <c>PoisonDust.MagicCast</c> 只 <c>ApplyPoison</c>，一点直接伤害都没有。
         /// 放进攻击表就会被 <see cref="PickBest"/> 当成「伤害技能」选出来，
         /// 假人站在 10 格外一直放毒、永远不贴脸砍，怪掉血极慢甚至不掉血。
-        /// 现在它只在 <see cref="TryOpenWithPoison"/> 里**开场放一次**。
+        /// 现在它只在 <see cref="TryApplyPoison"/> 里**战斗中循环补毒**（见 2026-11-14 道士施毒术逻辑）。
         /// </para>
         private static readonly MagicType[] TaoistAttack =
         {
@@ -72,6 +74,11 @@ namespace Server.Bots
             [MagicType.GreaterEvilSlayer] = (EquipmentSlot.Amulet, 1),
             [MagicType.CelestialLight] = (EquipmentSlot.Amulet, 20),
             [MagicType.LifeSteal] = (EquipmentSlot.Amulet, 2),
+            // 召唤技能也耗护身符（2026-11-17 补）：召唤骷髅 1 个、召唤神兽 5 个。
+            // 不登记的话 HasAmmo 返回 false 挡不住空放——引擎 UseAmulet 失败时 Cast=false
+            // 但蓝照扣（MagicConsume 在 cast 判断前调用），假人会在没符时反复空放烧蓝。
+            [MagicType.SummonSkeleton] = (EquipmentSlot.Amulet, 1),
+            [MagicType.SummonShinsu] = (EquipmentSlot.Amulet, 5),
         };
 
         /// <summary>
@@ -99,6 +106,13 @@ namespace Server.Bots
                     return WizardAttack;
                 case MirClass.Taoist:
                     return TaoistAttack;
+                case MirClass.Warrior:
+                    return WarriorAttack;
+                case MirClass.Assassin:
+                    // 只返回 MagicCast 型（AssassinMagic）—— 这些能走 player.Magic() 施放，
+                    // 供 PickAttack → TryCastAttack 的魔法射程分支选技能。
+                    // AttackCast 型（AssassinAttack）不能走 Magic()，在 BotBrain 贴脸分支单独处理。
+                    return AssassinMagic;
                 default:
                     return Array.Empty<MagicType>();
             }
@@ -148,6 +162,36 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 是否**快断弹**了（步骤 3-3，2026-11-16）：任一**已学会**技能所需的弹药
+        /// （护身符 / 毒药粉）低于 <paramref name="threshold"/> 就返回 true。
+        /// <para>
+        /// 供补给触发判据用（每帧调用，内部不建对象、不拆字符串）。
+        /// 只数已学技能 —— 没学的用不上弹药，不必为它跑一趟补给。
+        /// 与 <see cref="HasAmmo"/> 同构（槽位 / ItemType 校验一致），
+        /// 区别是阈值可自定义（<see cref="HasAmmo"/> 用「够放一次」的门槛）。
+        /// </para>
+        /// </summary>
+        public static bool HasAmmoBelow(PlayerObject player, int threshold)
+        {
+            if (player?.Character == null) return false;
+
+            foreach (KeyValuePair<MagicType, (EquipmentSlot Slot, int Count)> pair in AmmoCost)
+            {
+                if (!player.GetMagic(pair.Key, out MagicObject _)) continue;
+
+                UserItem item = player.Equipment?[(int)pair.Value.Slot];
+
+                ItemType expect = pair.Value.Slot == EquipmentSlot.Poison ? ItemType.Poison : ItemType.Amulet;
+
+                if (item?.Info == null || item.Info.ItemType != expect) continue;
+
+                if (item.Count < threshold) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 法师的**群攻**技能 —— 一次能打多个目标。
         /// <para>
         /// 判定依据是引擎实现，不是猜的：这些魔法的 <c>MagicCast</c> 里都在调
@@ -193,14 +237,136 @@ namespace Server.Bots
 
         /// <summary>
         /// 道士的 debuff（学，但不进「伤害技能」候选）。
-        /// 目前只有施毒术：<see cref="TryOpenWithPoison"/> 会开场放一次。
+        /// 目前只有施毒术：<see cref="TryApplyPoison"/> 会在战斗中循环补毒。
         /// </summary>
         private static readonly MagicType[] TaoistDebuff =
         {
             MagicType.PoisonDust,
         };
 
-        /// <summary>该职业要补的全部技能（攻击 + 治疗 + debuff）。战士返回空 —— 平砍就是输出。</summary>
+        /// <summary>
+        /// 道士的召唤技能（3-4，2026-11-17 反转实施）：召唤骷髅 / 召唤神兽。
+        /// <para>
+        /// <b>进 <see cref="Wanted"/> 学习清单，不进攻击表/群攻表</b> —— 召唤是辅助不是伤害，
+        /// 被 <see cref="PickBest"/> 当伤害技能选出来会空放（<c>MagicCast</c> 只召唤宠物，无直接伤害）。
+        /// 战斗前/宠物死亡后的补召走 <see cref="TrySummonPet"/>，不经过伤害技能选择。
+        /// </para>
+        /// <para>
+        /// 数据事实（2026-11-16 用 tools/magicq 查本服 System.db，2026-11-17 复核）：
+        /// 召唤骷髅 <c>SummonSkeleton</c> Lv17，蓝耗 10/15，消耗护身符 1 个；
+        /// 召唤神兽 <c>SummonShinsu</c> Lv30，蓝耗 15/15，消耗护身符 5 个。两者 Delay=0（无冷却）。
+        /// 引擎实现核对（<c>ServerLibrary/Models/Magics/Taoist/**</c>）：
+        /// <c>MagicCast</c> 只 <c>UseAmulet</c> + 延迟 500ms 在目标格召唤宠物，
+        /// 对目标**零直接伤害**，放进伤害表只会空放白扣蓝耗符。
+        /// </para>
+        /// <para>
+        /// 更高阶召唤（金甲骷髅 Lv33、魔兽 Lv50、亡灵 Lv95）本阶段不纳入，只补骷髅+神兽。
+        /// </para>
+        /// </summary>
+        private static readonly MagicType[] TaoistSummon =
+        {
+            MagicType.SummonSkeleton,
+            MagicType.SummonShinsu,
+        };
+
+        /// <summary>
+        /// 战士的攻击技能（均为 Toggle 型，与法师/道士的施法型不同）。
+        /// <para>
+        /// <b>Toggle 型技能的触发方式</b>：必须先 <c>magic.Toggle(true)</c> 开启
+        /// （设 <c>Character.CanXxx = true</c> 并通知客户端），再显式
+        /// <c>player.Attack(dir, MagicType.Xxx)</c> —— 传 <see cref="MagicType.None"/>
+        /// 是纯平砍，<c>AttackCast</c> 检查 <c>attackType != Type</c> 直接返回 Cast=false，
+        /// 技能不会触发（这是假人战士此前只平砍不用技能的根因）。
+        /// </para>
+        /// <para>数据事实（2026-11-16 用 tools/magicq 查本服 System.db）：</para>
+        /// <list type="bullet">
+        /// <item>刺杀剑术 Thrusting = 103，19 级，2 格正前方直线（隔位刺杀）；</item>
+        /// <item>半月弯刀 HalfMoon = 104，24 级，左前/正前/右前三向群攻；</item>
+        /// <item>十方斩 DestructiveSurge = 109，40 级，正前方 1~7 格直线群攻。</item>
+        /// </list>
+        /// </summary>
+        private static readonly MagicType[] WarriorAttack =
+        {
+            MagicType.Thrusting,
+            MagicType.HalfMoon,
+            MagicType.DestructiveSurge,
+        };
+
+        /// <summary>
+        /// 战士的群攻技能：半月弯刀（三向近身）与十方斩（正前方 1~7 格直线）。
+        /// 周围怪 ≥2 只时优先使用（与法师/道士的 preferGroup 逻辑同构）。
+        /// </summary>
+        private static readonly MagicType[] WarriorGroup =
+        {
+            MagicType.HalfMoon,
+            MagicType.DestructiveSurge,
+        };
+
+        /// <summary>
+        /// 刺客的 AttackCast 型攻击技能（贴脸显式触发，走 <c>player.Attack(dir, type)</c>）。
+        /// <para>
+        /// <b>为什么是这几个、而血之花/致命一击/满月劫等不放</b>（2026-11-16 逐个读
+        /// <c>ServerLibrary/Models/Magics/Assassin/**</c> 确认）：
+        /// <list type="bullet">
+        /// <item><b>可显式触发</b>：<c>AttackCast</c> 在条件满足时设 <c>Cast=true</c>，
+        /// 假人 <c>Attack(dir, type)</c> 能真正打出技能。</item>
+        /// <item><b>排除被动挂载型</b>：血之花(426)/致命一击(442)/修身(403)/藤蔓舞(402)/
+        /// 双武器精通(448) 的 <c>AttackCast</c> 只 <c>Magics.Add(Type)</c> 不设 <c>Cast=true</c>，
+        /// 伤害经被动 <c>ModifyPowerAdditionner</c>/<c>GetPassiveStats</c> 挂到平砍 ——
+        /// 显式 <c>Attack(dir, type)</c> 会打引擎错误日志且不触发技能，放进来只会空放。</item>
+        /// <item><b>排除依赖隐身的</b>：满月劫(408)/残月(418)/因果报应(416)/裂伤(413)/龙血(441)
+        /// 的 <c>AttackCast</c>/<c>MagicCast</c> 要求 <c>BuffType.Cloak</c>（隐身）或内部
+        /// <c>CanAttack</c> 状态，假人不学隐身（P0 不放），条件恒不满足，放进去同样是空放+错误日志。</item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// <b>烈焰飞溅(425)是 Toggle 型</b>（检查 <c>Character.CanFlameSplash</c>），
+        /// 与战士刺杀剑术同构：<see cref="Sync"/> 里 <see cref="EnableAssassinToggles"/> 显式开启。
+        /// </para>
+        /// </summary>
+        private static readonly MagicType[] AssassinAttack =
+        {
+            MagicType.FullBloom,      // 花开富贵：AttackCast 检查 attackType/冷却/蓝耗，Cast=true
+            MagicType.WhiteLotus,     // 白莲：同上
+            MagicType.RedLotus,       // 红莲：同上
+            MagicType.SweetBrier,     // 刺蔷薇：同上
+            MagicType.FlameSplash,    // 烈焰飞溅：Toggle 型，检查 CanFlameSplash + 蓝耗
+        };
+
+        /// <summary>
+        /// 刺客的 MagicCast 型攻击技能（走 <c>player.Magic()</c> 触发，与法师/道士同路径）。
+        /// <para>
+        /// 这些技能的 <c>MagicCast</c> 校验 <c>CanAttackTarget</c> 后经 <c>DelayMagic</c> →
+        /// <c>MagicComplete</c> → <c>Player.MagicAttack</c> 直接对目标/区域伤害，引擎不检查直线路径
+        /// （与法师/道士同结论，D13 遮挡判断前提不成立，无需改动）。
+        /// </para>
+        /// <para>
+        /// <b>排除纯 buff/控制/召唤</b>：狂风(437)/新生(427) 是纯 buff，深渊(433)/锁链(446)/
+        /// 怨灵束缚(409) 是纯 debuff（只 ApplyPoison 无直接伤害），毒云(404)/地狱烈焰(452) 是
+        /// 地面持续伤害区域（类似火墙，命中逻辑不同先不放），燕舞(428) 会瞬移玩家位置（复杂先不放），
+        /// 龙之震击(430) CheckCost 自定义扣血扣蓝（假人血量可能不够，先不放）。
+        /// </para>
+        /// </summary>
+        private static readonly MagicType[] AssassinMagic =
+        {
+            MagicType.Hemorrhage,      // 出血：MagicCast → MagicAttack 直接伤害
+            MagicType.FlamingDaggers,  // 烈焰飞刀：同上
+            MagicType.Shredding,       // 撕裂：同上
+            MagicType.HellFire,        // 地狱火：MagicAttack + 地狱火毒
+            MagicType.FlashOfLight,    // 闪光术：前方 2 格 MagicAttack
+        };
+
+        /// <summary>
+        /// 刺客的群攻技能（一次打多个目标，MagicCast 型，走 <c>player.Magic()</c>）。
+        /// <para>判定依据：<c>MagicCast</c> 里 <c>GetCells(location, 0, 半径)</c> 遍历一片格子。</para>
+        /// </summary>
+        private static readonly MagicType[] AssassinGroup =
+        {
+            MagicType.FourWheels,      // GetCells(当前位置, 0, 2)
+            MagicType.CrescentMoon,    // GetCells(当前位置, 0, 3)
+        };
+
+        /// <summary>该职业要补的全部技能（攻击 + 治疗 + debuff）。战士返回攻击技能（Toggle 型，学完需开启）。</summary>
         public static IEnumerable<MagicType> Wanted(MirClass cls)
         {
             switch (cls)
@@ -208,7 +374,13 @@ namespace Server.Bots
                 case MirClass.Wizard:
                     return WizardAttack;
                 case MirClass.Taoist:
-                    return TaoistAttack.Concat(TaoistHeal).Concat(TaoistDebuff);
+                    // 攻击 + 治疗 + debuff + 召唤：召唤只学不用（见 TaoistSummon 注释）。
+                    return TaoistAttack.Concat(TaoistHeal).Concat(TaoistDebuff).Concat(TaoistSummon);
+                case MirClass.Warrior:
+                    return WarriorAttack;
+                case MirClass.Assassin:
+                    // AttackCast 型 + MagicCast 型 + 群攻，全部要补（Sync 按等级门槛自动学）。
+                    return AssassinAttack.Concat(AssassinMagic).Concat(AssassinGroup);
                 default:
                     return Array.Empty<MagicType>();
             }
@@ -223,6 +395,10 @@ namespace Server.Bots
                     return WizardGroup;
                 case MirClass.Taoist:
                     return TaoistGroup;
+                case MirClass.Warrior:
+                    return WarriorGroup;
+                case MirClass.Assassin:
+                    return AssassinGroup;
                 default:
                     return Array.Empty<MagicType>();
             }
@@ -264,7 +440,94 @@ namespace Server.Bots
                 BotLog.Info(player.Bot?.Profile?.Seq ?? 0,
                     string.Format("补齐技能 {0} 个（{1} 级，{2}）", added, player.Level, player.Class));
 
+            // 战士的 Toggle 型技能（刺杀剑术/半月弯刀/十方斩）：学完必须显式开启，
+            // 否则 CanXxx 默认 false，AttackCast 检查不过，Attack(dir, MagicType.Xxx) 不会触发技能。
+            if (player.Class == MirClass.Warrior)
+                EnableWarriorToggles(player);
+
+            // 刺客的 Toggle 型技能（烈焰飞溅）：同上，AttackCast 检查 CanFlameSplash，不开启不触发。
+            if (player.Class == MirClass.Assassin)
+                EnableAssassinToggles(player);
+
             return added;
+        }
+
+        /// <summary>
+        /// 开启刺客的 Toggle 型攻击技能（烈焰飞溅）。
+        /// <para>
+        /// 烈焰飞溅是开关型：<c>AttackCast</c> 检查 <c>attackType != Type || !CanFlameSplash</c>，
+        /// 不开启（CanFlameSplash=false）时即使显式 <c>Attack(dir, MagicType.FlameSplash)</c> 也返回 Cast=false，
+        /// 技能不会触发。学完（Sync）后必须调 <c>Toggle(true)</c> 开启，并通知客户端。
+        /// </para>
+        /// <para>幂等：已开启的跳过，避免每次 Sync 重复发包。</para>
+        /// </summary>
+        private static void EnableAssassinToggles(PlayerObject player)
+        {
+            if (player?.Character == null) return;
+
+            foreach (MagicType type in AssassinAttack)
+            {
+                if (!player.GetMagic(type, out MagicObject magic)) continue;
+
+                bool alreadyOn = type switch
+                {
+                    MagicType.FlameSplash => player.Character.CanFlameSplash,
+                    _ => true,
+                };
+
+                if (alreadyOn) continue;
+
+                magic.Toggle(true);
+            }
+        }
+
+        /// <summary>
+        /// 从刺客的 AttackCast 型技能里挑一个当前能放的（贴脸平砍触发用）。
+        /// <para>
+        /// 与 <see cref="PickAttack"/> 同构：已学 / 蓝够（<see cref="MagicObject.CheckCost"/>）/
+        /// 冷却 / 弹药 / 按目标抗性打分（免疫的不选），但候选是 <see cref="AssassinAttack"/>
+        /// （AttackCast 型，走 <c>player.Attack(dir, type)</c>，不是 <c>player.Magic()</c>）。
+        /// </para>
+        /// <para>
+        /// 返回 <see cref="MagicType.None"/> 表示没有可用技能，调用方退回平砍。
+        /// Toggle 型技能（烈焰飞溅）的开启状态由 <see cref="TryAssassinSkillAttack"/> 最终把关，
+        /// 这里只按蓝耗/冷却/抗性粗选。
+        /// </para>
+        /// </summary>
+        public static MagicType PickAssassinMeleeAttack(PlayerObject player, MonsterObject target)
+        {
+            return PickBest(player, AssassinAttack, target, null);
+        }
+
+        /// <summary>
+        /// 开启战士的 Toggle 型攻击技能（刺杀剑术/半月弯刀/十方斩）。
+        /// <para>
+        /// 这些技能是开关型：<c>AttackCast</c> 检查 <c>attackType != Type || !CanXxx</c>，
+        /// 不开启（CanXxx=false）时即使显式 <c>Attack(dir, MagicType.Xxx)</c> 也返回 Cast=false，
+        /// 技能不会触发。学完（Sync）后必须调 <c>Toggle(true)</c> 开启，并通知客户端。
+        /// </para>
+        /// <para>幂等：已开启的跳过，避免每次 Sync 重复发包。</para>
+        /// </summary>
+        private static void EnableWarriorToggles(PlayerObject player)
+        {
+            if (player?.Character == null) return;
+
+            foreach (MagicType type in WarriorAttack)
+            {
+                if (!player.GetMagic(type, out MagicObject magic)) continue;
+
+                bool alreadyOn = type switch
+                {
+                    MagicType.Thrusting => player.Character.CanThrusting,
+                    MagicType.HalfMoon => player.Character.CanHalfMoon,
+                    MagicType.DestructiveSurge => player.Character.CanDestructiveSurge,
+                    _ => true,
+                };
+
+                if (alreadyOn) continue;
+
+                magic.Toggle(true);
+            }
         }
 
         /// <summary>按 MagicType + 职业找定义。同名技能在库里只有一条，这里多带一个职业判断防脏数据。</summary>
@@ -486,18 +749,22 @@ namespace Server.Bots
         }
 
         /// <summary>
-        /// 开场给目标上一次毒（<b>只在没中毒时放一次</b>），成功返回 true。
+        /// 给目标补毒：只要绿毒 / 红毒缺一种就放一次施毒术，返回本次是否施放。
         /// <para>
-        /// 施毒术是纯 debuff：绿毒持续掉血、红毒让目标多受 20% 伤害。
-        /// 真人道士也是「先上毒再打」，而不是站在远处一直放毒。
-        /// 所以它不进 <see cref="TaoistAttack"/>，只在这里当一次性开场。
+        /// <b>为什么每次只放一次、要调用方每帧调</b>：引擎实现里
+        /// <c>PoisonDust.MagicCast → Player.UsePoison(1, out shape)</c>，
+        /// <c>shape == 0 ? PoisonType.Green : PoisonType.Red</c> ——
+        /// <b>一次施毒随机只给一种毒</b>。「上 2 种毒」必须连续多次施毒直到绿红都齐。
+        /// 而 <c>MagicCast</c> 会立刻写 <c>magic.Magic.Cooldown</c>，
+        /// 同一帧内连放第二次必然被冷却挡住，所以「连续施毒」天然只能跨帧进行 ——
+        /// 本方法每次调用放一次，<see cref="ProcessFight"/> 每帧调用，直到两种都齐。
         /// </para>
         /// <para>
         /// 三道门缺一不可：<b>有毒药粉</b>（否则 <c>UsePoison</c> 失败 = 空放）、
-        /// <b>目标还没中毒</b>（重复放纯浪费）、<b>冷却/蓝够</b>。
+        /// <b>目标还缺毒</b>（两种都齐了就不浪费）、<b>冷却/蓝够</b>。
         /// </para>
         /// </summary>
-        public static bool TryOpenWithPoison(PlayerObject player, MonsterObject monster)
+        public static bool TryApplyPoison(PlayerObject player, MonsterObject monster)
         {
             if (player?.Character == null || monster == null) return false;
 
@@ -512,7 +779,8 @@ namespace Server.Bots
 
             if (!HasAmmo(player, MagicType.PoisonDust)) return false;
 
-            if (IsPoisoned(monster)) return false;
+            // 两种毒都齐了，不用补。
+            if (HasBothPoisons(monster)) return false;
 
             int distance = BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation);
 
@@ -530,17 +798,116 @@ namespace Server.Bots
             return true;
         }
 
-        /// <summary>目标身上是否已经有绿毒 / 红毒（其他毒不算，那些不是施毒术给的）。</summary>
-        private static bool IsPoisoned(MonsterObject monster)
+        /// <summary>
+        /// 道士补召宠物（3-4，2026-11-17 反转实施）：宠物缺位就施放召唤技能，返回本次是否施放。
+        /// <para>
+        /// <b>两个触发场景</b>（都在 <c>ProcessFight</c> 里节流调用）：
+        /// <list type="bullet">
+        /// <item><b>战斗前补召</b>：进入战斗时宠物位空着，开打前先召一只；</item>
+        /// <item><b>死亡补召</b>：宠物战死（<c>Die()</c> 自动从 <c>Player.Pets</c> 移除）后补召。</item>
+        /// </list>
+        /// 两个场景共用本方法，判据都是「宠物位没满」——宠物活着占位就不会重复施放。
+        /// </para>
+        /// <para>
+        /// <b>四道门缺一不可</b>：
+        /// <list type="bullet">
+        /// <item><b>守卫区不召</b>：安全区（<see cref="BotPerception.InSafeZone"/>，即守卫所在的城市区域）
+        /// 里不召唤——城里没有战斗需求，召了只是浪费蓝和护身符，且宠物在城里可能卡位。</item>
+        /// <item><b>宠物位未满</b>：引擎上限 2 只（<c>Player.Pets.Count &gt;= 2</c> 时
+        /// <c>MagicComplete</c> 直接放弃），满了不召。</item>
+        /// <item><b>蓝耗门</b>：召唤骷髅 10 蓝 / 召唤神兽 15 蓝（Lv1 口径），
+        /// 走引擎 <see cref="MagicObject.CheckCost"/>（含超级模式豁免）。</item>
+        /// <item><b>弹药门</b>：召唤骷髅耗符 1 个 / 神兽 5 个，走 <see cref="HasAmmo"/>。
+        /// 引擎 <c>UseAmulet</c> 失败时 <c>Cast=false</c> 但<b>蓝照扣</b>
+        /// （<c>MagicConsume</c> 在 cast 判断前调用），没符时不施放就是白扣蓝，必须先查弹药。</item>
+        /// </list>
+        /// 另过 <see cref="MagicObject.CanUseMagic"/>（等级门槛）与 <c>magic.Magic.Cooldown</c>（冷却，
+        /// 本服召唤 Delay=0，但写法与其它技能一致，将来调冷却不用改这里）。
+        /// </para>
+        /// <para>
+        /// <b>技能选择</b>：已学且可用的前提下，优先召唤神兽（Lv30，更强），没学/没蓝/没符退召唤骷髅（Lv17）。
+        /// 施放走真人同一条 <c>player.Magic()</c>，方向取玩家当前朝向（引擎在朝向前方一格召唤）。
+        /// </para>
+        /// <para>
+        /// <b>节流由调用方控制</b>：引擎召唤有 500ms 延迟（<c>DelayedAction</c>），
+        /// 且施放失败不写冷却，不节流会每帧重试空放烧蓝——<c>ProcessFight</c> 里 1 秒调一次。
+        /// </para>
+        /// <returns>本次施放的技能（<see cref="MagicType.None"/> 表示没施放）。</returns>
+        /// </summary>
+        public static MagicType TrySummonPet(PlayerObject player)
         {
-            if (monster.PoisonList == null) return false;
+            if (player?.Character == null) return MagicType.None;
+            if (player.Class != MirClass.Taoist) return MagicType.None;
+            if (player.Dead) return MagicType.None;
+
+            // 守卫区不召：安全区（城市/守卫区域）没有战斗需求，不浪费蓝和护身符。
+            if (BotPerception.InSafeZone(player)) return MagicType.None;
+
+            // 宠物位未满：引擎上限 2 只，满了不召（宠物活着占位 = 不需要补召）。
+            if (player.Pets != null && player.Pets.Count >= 2) return MagicType.None;
+
+            // 技能选择：优先神兽，不可用退骷髅。
+            MagicType type = MagicType.None;
+
+            if (player.GetMagic(MagicType.SummonShinsu, out MagicObject shinsu) && SummonReady(player, shinsu))
+                type = MagicType.SummonShinsu;
+            else if (player.GetMagic(MagicType.SummonSkeleton, out MagicObject skeleton) && SummonReady(player, skeleton))
+                type = MagicType.SummonSkeleton;
+
+            if (type == MagicType.None) return MagicType.None;
+
+            if (!player.CanCast) return MagicType.None;
+
+            player.Magic(new C.Magic
+            {
+                Type = type,
+                Target = 0,
+                Location = player.CurrentLocation,
+                Direction = player.Direction,
+            });
+
+            return type;
+        }
+
+        /// <summary>召唤技能的三重校验：已学门槛 + 蓝耗 + 弹药（护身符），与攻击技能同构。</summary>
+        private static bool SummonReady(PlayerObject player, MagicObject magic)
+        {
+            if (!magic.CanUseMagic()) return false;
+            if (!magic.CheckCost()) return false;
+            if (SEnvir.Now < magic.Magic.Cooldown) return false;
+            return HasAmmo(player, magic.Type);
+        }
+
+        /// <summary>目标身上是否已经有绿毒。</summary>
+        public static bool HasGreenPoison(MonsterObject monster)
+        {
+            if (monster?.PoisonList == null) return false;
 
             foreach (Poison poison in monster.PoisonList)
             {
-                if (poison.Type == PoisonType.Green || poison.Type == PoisonType.Red) return true;
+                if (poison.Type == PoisonType.Green) return true;
             }
 
             return false;
+        }
+
+        /// <summary>目标身上是否已经有红毒。</summary>
+        public static bool HasRedPoison(MonsterObject monster)
+        {
+            if (monster?.PoisonList == null) return false;
+
+            foreach (Poison poison in monster.PoisonList)
+            {
+                if (poison.Type == PoisonType.Red) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>目标身上绿毒 + 红毒是否都齐了（施毒术的目标状态）。</summary>
+        public static bool HasBothPoisons(MonsterObject monster)
+        {
+            return HasGreenPoison(monster) && HasRedPoison(monster);
         }
 
         /// <summary>道士给自己治疗（血低于 60% 才用）。战士/法师没有治疗技能，直接返回 false。</summary>

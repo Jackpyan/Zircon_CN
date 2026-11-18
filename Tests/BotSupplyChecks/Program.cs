@@ -121,6 +121,11 @@ Check(BotItemRules.RepairPotionFlags(UserItemFlags.Locked | UserItemFlags.NonRef
 Check(BotItemRules.NeedsManaPotions(MirClass.Warrior) == false, "战士不带蓝药（一辈子喝不掉，又卖不掉）");
 Check(BotItemRules.NeedsManaPotions(MirClass.Wizard), "法师要蓝药");
 Check(BotItemRules.NeedsManaPotions(MirClass.Taoist), "道士要蓝药");
+// D1（2026-11-16）：战士 24 级起补蓝，等级维度判据
+Check(BotItemRules.NeedsManaPotions(MirClass.Warrior, 23) == false, "战士 23 级不带蓝药（24 级起才补蓝）");
+Check(BotItemRules.NeedsManaPotions(MirClass.Warrior, 24), "战士 24 级起带蓝药");
+Check(BotItemRules.NeedsManaPotions(MirClass.Warrior, 30), "战士 30 级带蓝药");
+Check(BotItemRules.WarriorManaPotionLevel == 24, "战士蓝药起始等级常量 = 24");
 
 Console.WriteLine();
 Console.WriteLine("—— 装备耐久（BotItemRules）——");

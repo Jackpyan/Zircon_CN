@@ -7,6 +7,11 @@
     <Nullable>enable</Nullable>
     <AssemblyName>AtlasBuilder</AssemblyName>
     <RootNamespace>AtlasBuilder</RootNamespace>
+    <!-- 产物与中间文件输出到解决方案外的部署目录，保持源码目录干净（2026-11-14）。
+         构建后产物直接落在 F:\DSH\Debug\AtlasBuilder\（下按 配置\框架 分层），无需手工拷贝。
+         MSBuildProjectExtensionsPath 由同目录 Directory.Build.props 设置（csproj 里设会报 MSB3540）。 -->
+    <BaseOutputPath>F:/DSH/Debug/AtlasBuilder/</BaseOutputPath>
+    <BaseIntermediateOutputPath>F:/DSH/Debug/AtlasBuilder/obj/</BaseIntermediateOutputPath>
   </PropertyGroup>
 
   <!-- 跨平台（net10.0，不带 WinForms）：图集要在 Linux 部署机上直接生成，

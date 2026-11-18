@@ -371,6 +371,9 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
         Config.BotEnabled = enabled;
         ConfigReader.Save(typeof(Config).Assembly);
 
+        // 配置快照是每秒缓存的，不通知的话「点启用」最多要等 1 秒才真的开始拉人。
+        BotRoster.InvalidateOptions();
+
         if (!enabled)
         {
             audit.Record(
@@ -501,15 +504,16 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
     }
 
     /// <summary>
-    /// D4 验收用：把某个在线假人直接加到 14 级，跑一次技能补齐，回报「学没学到、学到几个」。
+    /// 调试用：把某个在线假人直接加到<b>指定</b>等级，跑一次技能补齐，回报「学没学到、学到几个」。
     /// 会给假人加经验（等于作弊），所以只对 <c>CanOwner</c>（主密码）开放。
+    /// 目标等级由页面弹窗输入传入，非法值由 <see cref="BotRoster.SkillCheck"/> 拒绝，不夹不猜。
     /// </summary>
-    public async Task<BotCommandResult> SkillCheckAsync(int seq, ClaimsPrincipal? user)
+    public async Task<BotCommandResult> SkillCheckAsync(int seq, int targetLevel, ClaimsPrincipal? user)
     {
         BotCommandResult? denied = RequireOwner(user);
         if (denied != null) return denied;
 
-        BotCommandResult result = await InvokeAsync(() => BotRoster.SkillCheck(seq),
+        BotCommandResult result = await InvokeAsync(() => BotRoster.SkillCheck(seq, targetLevel),
             r => r.Ok ? "技能自检：" + r.Detail : "技能自检失败：" + r.Detail);
 
         Record(user, "假人-技能自检", $"BOT#{seq:00}：{result.Message}");
@@ -734,6 +738,7 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
             int despawned = await SEnvir.InvokeOnGameThreadAsync(() =>
             {
                 Config.BotEnabled = false;
+                BotRoster.InvalidateOptions();
 
                 return BotRoster.ForceDespawn(int.MaxValue);
             });
@@ -753,6 +758,7 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
                 await SEnvir.InvokeOnGameThreadAsync(() =>
                 {
                     Config.BotEnabled = true;
+                    BotRoster.InvalidateOptions();
 
                     return true;
                 });

@@ -49,8 +49,10 @@ namespace Server.Bots
         };
 
         /// <summary>
-        /// 职业轮转。**暂不放刺客**：刺客的绑定安全区（刺客藏身处）是独立小图，
-        /// 0 级号从那里走不到比奇省的练级区，而跨图寻路 P0 不支持，会一直卡在城里。
+        /// 默认职业轮转（名单未显式指定职业时使用）。刺客不进默认轮转，
+        /// 但名单里显式指定「刺客」时会照建——BotFactory 把假人 BindPoint 强制设为主城
+        /// 安全区（比奇城/潘夜村/失乐园），引擎对已设 BindPoint 直接用、不按职业过滤，
+        /// 不存在「出生在刺客藏身处走不出去」的问题（步骤 2-5 调研已证伪原顾虑）。
         /// </summary>
         private static readonly MirClass[] ClassRotation =
         {
@@ -75,10 +77,8 @@ namespace Server.Bots
 
                 baseName = entry.Name;
 
-                // 刺客不参与轮转：它的绑定安全区（刺客藏身处）是独立小图，0 级号走不出去。
+                // 名单显式指定的职业直接采用（含刺客）。
                 cls = entry.Class ?? ClassRotation[index % ClassRotation.Length];
-
-                if (cls == MirClass.Assassin) cls = ClassRotation[index % ClassRotation.Length];
 
                 gender = entry.Gender ?? (seq % 2 == 0 ? MirGender.Female : MirGender.Male);
             }
@@ -118,8 +118,8 @@ namespace Server.Bots
                 Gender = gender,
                 HairType = 0,
                 HairColour = Color.FromArgb(0),
-                // 与真人建号一致：Warrior/Wizard/Taoist 要求 ArmourColour.A == 255。
-                // 刺客（暂不生成）要求 argb == 0，由 BotFactory 兜底处理。
+                // 与真人建号一致：Warrior/Wizard/Taoist 要求 ArmourColour.A == 255；
+                // 刺客要求 argb == 0，由 BotFactory 兜底处理（名单显式指定刺客时照建）。
                 ArmourColour = Color.FromArgb(255, 255, 255, 255),
                 HomeMapIndex = 0,
             };
