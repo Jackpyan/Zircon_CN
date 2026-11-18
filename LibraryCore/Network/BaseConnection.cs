@@ -256,8 +256,15 @@ namespace Library.Network
                 }
                 catch (Exception ex)
                 {
+                    // 加固（2026-11-14 生产崩溃）：收包处理里的任何异常只断开该连接，不再重抛。
+                    // 原逻辑 `throw;` 会把异常炸穿到调用方：服务端主循环里 connection.Process()
+                    // 一抛，整个游戏主循环崩溃 → 全服进程退出。而异常的触发源往往只是一个
+                    // 错误/旧版客户端发的包（如 StartGame 触发服务端 NRE），
+                    // 单个客户端的错误不应该能拖垮整个服务端。
+                    // 异常已通过 OnException 记入日志（连接级）与 Errors.txt，排查不受影响；
+                    // 断开该连接同时把有问题的客户端挡在门外，避免反复触发。
                     OnException(this, ex);
-                    throw;
+                    Disconnecting = true;
                 }
             }
 

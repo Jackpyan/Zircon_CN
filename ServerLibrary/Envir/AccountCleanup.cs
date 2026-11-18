@@ -78,6 +78,13 @@ public static class AccountCleanup
             // 角色级货币（Currencies）不是 Aggregate，不会随角色级联删除，要单独删。
             foreach (UserCurrency currency in character.Currencies.ToList()) currency.Delete();
 
+            // 先摘排行榜节点，再删角色（2026-11-14 生产崩溃的根因修复）。
+            // 角色挂在 SEnvir.Rankings 链表上，直接 Delete 后节点残留、Account 引用置空，
+            // 之后任何人登录进游戏触发 UpdateLead()，遍历到残留节点访问 .Account.Activated
+            // → NullReferenceException → 反射重抛炸穿主循环 → 全服进程退出。
+            if (SEnvir.Rankings != null && character.RankingNode != null)
+                SEnvir.Rankings.Remove(character.RankingNode);
+
             character.Delete();
         }
 

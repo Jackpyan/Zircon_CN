@@ -123,7 +123,7 @@
                 @Perf.BotSharePercent.ToString("0.#")%
                 <small style="font-weight:400;opacity:.6;">· @Perf.BotMsPerSecond.ToString("0") ms/秒</small>
             </strong>
-            <span class="field-note">占主循环 · 阈值 @Perf.BreakerSharePercent% · 单帧 @Perf.BotFrameMs.ToString("0.00") ms（峰值 @Perf.BotFrameMaxMs.ToString("0.0")）</span>
+            <span class="field-note">占单核（100% = 占满一个核） · 阈值 @Perf.BreakerSharePercent% · 单帧 @Perf.BotFrameMs.ToString("0.00") ms（峰值 @Perf.BotFrameMaxMs.ToString("0.0")）</span>
         </div>
         <div class="config-field">
             <span>整帧耗时 <em>主循环</em></span>
@@ -131,7 +131,9 @@
                 @Perf.LoopFrameMs.ToString("0.00") ms
                 <small style="font-weight:400;opacity:.6;">· 峰值 @Perf.LoopFrameMaxMs.ToString("0.0")</small>
             </strong>
-            <span class="field-note">@Perf.FramesPerSecond 帧/秒</span>
+            @* 帧率是「设计值」不是「越高越好」：主循环每帧 1ms 预算，走完就睡掉剩下的
+               → 稳态 ~1000 帧/秒。以前不自旋让出时能到 7 万帧/秒，那是空烧一个核，不是性能好。 *@
+            <span class="field-note">@Perf.FramesPerSecond 帧/秒（1ms 预算，稳态 ~1000）</span>
         </div>
         <div class="config-field">
             <span>存库 / 连接 <em>Save / Con</em></span>
@@ -295,7 +297,7 @@
                                             @if (_canOwner && row.ClassName != "Warrior")
                                             {
                                                 <RadzenButton Text="技能自检" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
-                                                              Click="@(() => SkillCheck(row.Seq))" />
+                                                              Click="@(() => OpenSkillCheck(row.Seq, row.Level))" />
                                             }
                                         </div>
                                     }
@@ -427,7 +429,7 @@
             <div class="config-field">
                 <span>阈值 <em>BotBreakerSharePercent</em></span>
                 <input type="number" min="1" max="100" @bind="_breakerSharePercent" />
-                <span class="field-note">假人段占主循环的百分比上限；当前实测 @Perf.BotSharePercent.ToString("0.#")%</span>
+                <span class="field-note">假人段占单核的百分比上限（100% = 占满一个核）；当前实测 @Perf.BotSharePercent.ToString("0.#")%</span>
             </div>
             <div class="config-field">
                 <span>触发窗口 <em>BotBreakerTripSeconds</em></span>
@@ -949,6 +951,7 @@
             <div class="bot-modal-tabs">
                 <button class="@(_detailTab == 0 ? "active" : "")" @onclick="() => _detailTab = 0">角色</button>
                 <button class="@(_detailTab == 1 ? "active" : "")" @onclick="() => _detailTab = 1">属性</button>
+                <button class="@(_detailTab == 2 ? "active" : "")" @onclick="() => _detailTab = 2">技能</button>
             </div>
 
             @if (_detail == null)
@@ -1083,7 +1086,7 @@
                     </aside>
                 </div>
             }
-            else
+            else if (_detailTab == 1)
             {
                 @* ---------- 属性 tab ---------- *@
                 <div class="bot-detail-body">
@@ -1111,10 +1114,76 @@
                     }
                 </div>
             }
+            else
+            {
+                @* ---------- 技能 tab ---------- *@
+                <div class="bot-detail-body">
+                    <div class="detail-summary">
+                        <div><span>已学技能</span><b>@_detail.Magics.Count 个</b></div>
+                    </div>
+
+                    @if (_detail.Magics.Count == 0)
+                    {
+                        <p style="opacity:.7;padding:8px 4px;">这个角色当前没有已学技能（或等级还低，没到学技能的门槛）。</p>
+                    }
+                    else
+                    {
+                        <div class="detail-attrs">
+                            @foreach (BotDetail.BotDetailMagic magic in _detail.Magics)
+                            {
+                                <div><span>@magic.Name</span><b>Lv @magic.Level</b></div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
 
             <div class="bot-modal-foot">
                 <span>@(_detail == null ? "" : $"更新 {_detail.SnapshotAt:HH:mm:ss} · 每 5 秒自动刷新")</span>
                 <span>@(_detail == null ? "" : _detail.Detail)</span>
+            </div>
+        </div>
+    </div>
+}
+
+@* ============================ 技能自检输入弹窗 ============================ *@
+@if (_skillCheckOpen)
+{
+    @* tabindex + FocusAsync 是必须的：焦点不在这个容器上时 @onkeydown 收不到 Esc（见任务清单 §8.7 坑 3）。 *@
+    <div class="bot-modal-mask" tabindex="0" @ref="_skillCheckRoot"
+         @onkeydown="OnSkillCheckKeyDown" @onclick="CloseSkillCheck">
+        <div class="bot-modal" @onclick:stopPropagation="true" style="max-width:420px;">
+
+            <div class="bot-modal-head">
+                <div class="bot-modal-title">
+                    <b>技能自检 BOT#@(_skillCheckSeq.ToString("00"))</b>
+                </div>
+                <button class="bot-modal-close" @onclick="CloseSkillCheck">关闭 (Esc)</button>
+            </div>
+
+            <div style="padding:14px 16px;">
+                <p style="opacity:.75;font-size:12.5px;margin:0 0 12px;">
+                    把假人直接升级到指定等级，再跑一次技能补齐（<code>BotSkills.Sync</code>），
+                    用于验证「升级时技能补到、能不能放出来」。会给假人加经验，请谨慎操作。
+                </p>
+
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <label for="skillCheckLevelInput" style="font-size:13px;">目标等级</label>
+                    <input id="skillCheckLevelInput" type="number" min="1" max="@Config.MaxLevel"
+                           autofocus="true"
+                           @bind="_skillCheckLevelText"
+                           placeholder="1 ~ @Config.MaxLevel"
+                           style="width:140px;padding:5px 8px;" />
+                    <span style="opacity:.6;font-size:12px;">范围 1 ~ @Config.MaxLevel</span>
+                </div>
+            </div>
+
+            <div class="bot-modal-foot">
+                <span style="flex:1;"></span>
+                <RadzenButton Text="取消" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                              Click="CloseSkillCheck" />
+                <RadzenButton Text="开始自检" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Danger"
+                              Click="ConfirmSkillCheck" />
             </div>
         </div>
     </div>
@@ -1314,7 +1383,7 @@
 
     private BotDetail? _detail;
 
-    /// <summary>0 = 角色 tab，1 = 属性 tab。</summary>
+    /// <summary>0 = 角色 tab，1 = 属性 tab，2 = 技能 tab。</summary>
     private int _detailTab;
 
     /// <summary>当前选中的槽位（null = 还没点）。</summary>
@@ -1330,7 +1399,7 @@
     [SupplyParameterFromQuery(Name = "detail")]
     private int? DetailSeq { get; set; }
 
-    /// <summary>深链直接落到某个 tab：<c>/bots?detail=5&amp;tab=1</c> 打开「属性」。</summary>
+    /// <summary>深链直接落到某个 tab：<c>/bots?detail=5&amp;tab=1</c> 打开「属性」，<c>tab=2</c> 打开「技能」。</summary>
     [SupplyParameterFromQuery(Name = "tab")]
     private int? DetailTabQuery { get; set; }
 
@@ -1528,7 +1597,7 @@
         {
             _detailOpen = true;
             _detailSeq = DetailSeq.Value;
-            _detailTab = DetailTabQuery == 1 ? 1 : 0;
+            _detailTab = DetailTabQuery switch { 1 => 1, 2 => 2, _ => 0 };
             _detailFocusPending = true;
 
             await LoadDetailAsync();
@@ -1541,6 +1610,22 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         // 弹窗是 tabindex 容器，必须真的拿到焦点，@onkeydown 才收得到 Esc。
+        if (_skillCheckFocusPending)
+        {
+            _skillCheckFocusPending = false;
+
+            try
+            {
+                await _skillCheckRoot.FocusAsync();
+            }
+            catch
+            {
+                // 弹窗在这一次渲染里已经被关掉时 FocusAsync 会抛，忽略即可。
+            }
+
+            return;
+        }
+
         if (!_detailFocusPending) return;
 
         _detailFocusPending = false;
@@ -1554,6 +1639,67 @@
             // 弹窗在这一次渲染里已经被关掉时 FocusAsync 会抛，忽略即可。
         }
     }
+
+    #region 技能自检输入弹窗
+
+    /// <summary>技能自检弹窗是否打开（点「技能自检」按钮后弹出，输入目标等级再执行）。</summary>
+    private bool _skillCheckOpen;
+
+    /// <summary>正在自检的假人序号（0 = 没开）。</summary>
+    private int _skillCheckSeq;
+
+    /// <summary>输入的目标等级（原始文本，提交时校验）。</summary>
+    private string _skillCheckLevelText = string.Empty;
+
+    private ElementReference _skillCheckRoot;
+
+    /// <summary>弹窗刚打开，等下一帧渲染完再把焦点抢过来，否则 Esc 收不到。</summary>
+    private bool _skillCheckFocusPending;
+
+    /// <summary>点「技能自检」：打开输入弹窗，默认值预填当前等级（只往上调、不必重填）。</summary>
+    private void OpenSkillCheck(int seq, int currentLevel)
+    {
+        _skillCheckSeq = seq;
+        _skillCheckLevelText = currentLevel.ToString();
+        _skillCheckOpen = true;
+        _skillCheckFocusPending = true;
+    }
+
+    private void CloseSkillCheck()
+    {
+        _skillCheckOpen = false;
+        _skillCheckSeq = 0;
+    }
+
+    private void OnSkillCheckKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape") CloseSkillCheck();
+    }
+
+    private async Task ConfirmSkillCheck()
+    {
+        if (!int.TryParse(_skillCheckLevelText, out int targetLevel))
+        {
+            _message = "目标等级要填一个数字。";
+            _messageOk = false;
+            return;
+        }
+
+        if (targetLevel < 1 || targetLevel > Config.MaxLevel)
+        {
+            _message = $"目标等级要在 1 ~ {Config.MaxLevel} 之间（当前填了 {targetLevel}）。";
+            _messageOk = false;
+            return;
+        }
+
+        int seq = _skillCheckSeq;
+
+        CloseSkillCheck();
+
+        Report(await Admin.SkillCheckAsync(seq, targetLevel, _user));
+    }
+
+    #endregion
 
     private void Refresh()
     {
@@ -2041,7 +2187,7 @@
 
     private async Task ResetOne(int seq) => Report(await Admin.ResetOneAsync(seq, _user));
 
-    private async Task SkillCheck(int seq) => Report(await Admin.SkillCheckAsync(seq, _user));
+    private async Task SkillCheck(int seq, int targetLevel) => Report(await Admin.SkillCheckAsync(seq, targetLevel, _user));
 
     private async Task ToggleOne(BotSnapshot row) => Report(await Admin.SetEnabledAsync(row.Seq, !row.Enabled, _user));
 

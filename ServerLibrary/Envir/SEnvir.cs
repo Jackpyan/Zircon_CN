@@ -852,7 +852,9 @@ namespace Server.Envir
                 // 与 A 端一致：只排除已删除 / 未激活 / 被封禁的账号。
                 // 以前这里排除全部 Admin，导致管理员角色永远进不了 TopRankings，
                 // 非 GM 模式下头顶拿不到「尊」（Ranking）特效，和普通玩家表现不一致。
-                if (cInfo.Deleted || !cInfo.Account.Activated || cInfo.Account.Banned) continue;
+                // Account 为 null 的防御（2026-11-14 生产崩溃）：删除角色时若没有同时从
+                // Rankings 摘除节点，残留节点的 Account 会随删除置空，访问 .Activated 直接 NRE。
+                if (cInfo.Deleted || cInfo.Account == null || !cInfo.Account.Activated || cInfo.Account.Banned) continue;
 
                 switch (cInfo.Class)
                 {
@@ -1541,6 +1543,25 @@ namespace Server.Envir
             EnvirThread = null;
         }
 
+        /// <summary>
+        /// 帧尾是否把没用完的 1ms 预算睡掉（见 <see cref="EnvirLoop"/> 末尾）。
+        /// <para>
+        /// 默认：Linux / 其它 Unix 开启，Windows 关闭 —— Windows 的 <c>Sleep</c> 粒度是系统节拍
+        /// （本机实测 <c>Sleep(1)</c> = 15.2ms），开了会让本机调试帧率掉到 64。
+        /// 可用环境变量 <c>ZIRCON_FRAME_YIELD=1|0</c> 强制开关，便于在 Windows 上 A/B 验证。
+        /// </para>
+        /// </summary>
+        private static readonly bool YieldIdleFrame = ResolveYieldIdleFrame();
+
+        private static bool ResolveYieldIdleFrame()
+        {
+            string text = Environment.GetEnvironmentVariable("ZIRCON_FRAME_YIELD");
+
+            if (bool.TryParse(text, out bool forced)) return forced;
+
+            return !OperatingSystem.IsWindows();
+        }
+
         private static void EnvirLoop()
         {
             Now = Time.Now;
@@ -1811,6 +1832,20 @@ namespace Server.Envir
 
                     // 一帧结束（P4-5 埋点）。放在 try 最后一行：整帧 = 从 while 开头到这里。
                     ServerPerf.EndFrame();
+
+                    // 帧尾让出（2026-11-13）：内层 while 只要把 ActiveObjects 走完就 break ——
+                    // 活动对象少的时候 14µs 就出来了，剩下近 1ms 的预算没人用，主循环直接空转。
+                    // 生产实测 74,000 帧/秒、整机 CPU 13.8% 里 13.4% 全是这一个自旋（游戏服进程自己）。
+                    // 把没用完的预算睡掉：帧率回到 ~1000，最坏只多 1ms 的收包/走路延迟。
+                    // 开关见 <see cref="YieldIdleFrame"/>（Windows 默认不开，Sleep 粒度 15.2ms）。
+                    if (YieldIdleFrame)
+                    {
+                        TimeSpan idle = loopTime - Time.Now;
+
+                        // 必须自己判断再传整数毫秒：Thread.Sleep(TimeSpan) 内部是**截断**到毫秒的，
+                        // 0.98ms 会变成 Sleep(0) 直接返回 —— 等于没让出，而且不报错。
+                        if (idle.TotalMilliseconds >= 0.5) Thread.Sleep(1);
+                    }
                 }
                 catch (Exception ex)
                 {

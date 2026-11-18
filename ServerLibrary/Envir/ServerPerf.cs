@@ -70,11 +70,18 @@ namespace Server.Envir
         public static int FramesPerSecond { get; private set; }
 
         /// <summary>
-        /// 假人段占主循环的百分比。<b>熔断判据用这个</b> —— 与帧率无关，
-        /// 直接回答「主循环烧掉的 CPU 里有多少是假人造成的」，也就直接对应
-        /// 「把假人拿掉服务器会不会好」。
+        /// 假人段占用百分比（2026-11-14 改动点 5：**绝对量口径**）。
+        /// <para>
+        /// 原口径是「占主循环的百分比」（<c>BotMs * 100 / LoopMs</c>），但主循环是自旋的
+        /// （空闲时 5000+ 帧/秒），每帧平均值会被帧数稀释 —— 帧率一变，同一个真实开销
+        /// 算出来的占比就变，熔断阈值跟着失真（改动点 1~4 优化帧率后尤其明显）。
+        /// </para>
+        /// <para>
+        /// 现口径：<c>BotMsPerSecond / 10.0</c> —— 1000ms/秒 = 100%，即**占满一个核**。
+        /// 与帧率无关，直接回答「假人段吃掉了几个核的 CPU」，熔断判据用这个。
+        /// </para>
         /// </summary>
-        public static double BotSharePercent => LoopMs > 0 ? BotMs * 100.0 / LoopMs : 0;
+        public static double BotSharePercent => BotMsPerSecond / 10.0;
 
         #endregion
 

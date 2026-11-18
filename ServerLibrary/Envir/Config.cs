@@ -292,7 +292,8 @@ namespace Server.Envir
         public static int BotMaxFailures { get; set; } = 3;
 
         /// <summary>
-        /// 假人全局熔断（P4-5）：假人段占主循环的百分比连续超阈值，就把水位上限<b>临时</b>压到当前在线数。
+        /// 假人全局熔断（P4-5）：假人段占单核 CPU 的百分比（绝对量口径，2026-11-14 改动点 5）
+        /// 连续超阈值，就把水位上限<b>临时</b>压到当前在线数。
         /// <para>
         /// 默认<b>关闭</b>。原因：阈值定多少要先看真实基线，猜一个数字上去万一误触发，
         /// 现象是「假人再也不涨了」—— 比卡顿更难发现。先在后台「假人性能」卡片观察几天
@@ -302,11 +303,11 @@ namespace Server.Envir
         public static bool BotBreakerEnabled { get; set; } = false;
 
         /// <summary>
-        /// 熔断阈值：假人段占主循环的百分比（默认 25%）。
+        /// 熔断阈值：假人段占单核 CPU 的百分比（默认 25%，即 250 ms/秒）。
         /// <para>
-        /// 为什么用占比而不是毫秒：主循环是自旋的，空闲时 5000+ 帧/秒，
-        /// 「每帧几毫秒」会被帧数稀释到接近 0，真实占用再高也看不出来。
-        /// 占比与帧率无关，直接回答「主循环烧的 CPU 里有多少是假人造成的」。
+        /// 2026-11-14 改动点 5：原口径「占主循环百分比」会被自旋帧率稀释（帧率一变，
+        /// 同一真实开销算出的占比就变，阈值失真）。现口径 <c>BotMsPerSecond / 10.0</c>，
+        /// 1000ms/秒 = 100% = 占满一个核，与帧率无关，直接回答「假人段吃掉了几个核的 CPU」。
         /// </para>
         /// </summary>
         public static int BotBreakerSharePercent { get; set; } = 25;
@@ -363,6 +364,14 @@ namespace Server.Envir
         /// 打架 / 掉血 / 目标贴脸时会自动打断。
         /// </summary>
         public static bool BotWalkPauseEnabled { get; set; } = true;
+
+        /// <summary>
+        /// 假人跑动（P2-7）：直线连续无阻挡时按「跑」移动（distance=2，600ms 走 2 格），
+        /// 转弯 / 最后一步 / 被挡时退回「走」（distance=1）。复刻真人「直线跑、转弯走」的观感，
+        /// 同时把移动效率从 1 格/600ms 提升到 2 格/600ms（跑速是走的 2 倍）。
+        /// 关闭则永远走（与改造前一致）。
+        /// </summary>
+        public static bool BotRunEnabled { get; set; } = true;
 
         /// <summary>城里闲逛（P2-3）：补给/卖货办完后按概率在主城多待 1~3 分钟，让城里有人。</summary>
         public static bool BotTownStrollEnabled { get; set; } = true;
