@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Text;
 using C = Library.Network.ClientPackets;
 
 namespace Server.Bots
@@ -55,6 +56,22 @@ namespace Server.Bots
         private const int ActionIntervalMs = 250;
         private const int HuntRadius = 12;
         private const int LootRadius = 8;
+
+        /// <summary>
+        /// 金币的额外捡取半径（2026-11-18 用户现场：地上有金币没捡）。
+        /// <para>
+        /// 金币不占格、不占重，捡一件的代价远小于漏掉的损失，所以允许比普通掉落多跑 6 格；
+        /// 普通掉落仍按 <see cref="LootRadius"/>，否则假人会为了捡垃圾满图跑。
+        /// </para>
+        /// </summary>
+        private const int CurrencyLootBonus = 6;
+
+        /// <summary>等刷新时换点的概率（%）。同图还有别的刷怪区就别死守一处（2026-11-18）。</summary>
+        private const int IdleRelocateChance = 55;
+
+        /// <summary>两次「等刷新换点」的最小间隔（秒），避免刚换完又换、一直在路上。</summary>
+        private const int IdleRelocateCooldownSeconds = 20;
+
         private const int AttackRange = 1;
 
         /// <summary>
@@ -403,6 +420,32 @@ namespace Server.Bots
         /// <summary>绕圈日志节流（30 秒最多一条），否则一个卡住的假人能把 Logs.txt 刷满。</summary>
         private DateTime _nextStuckLogTime;
 
+        /// <summary>下次允许「等刷新时换点」的时间（2026-11-18，见 <see cref="IdleRelocateChance"/>）。</summary>
+        private DateTime _nextIdleRelocateTime;
+
+        /// <summary>「卖不掉的货」明细日志节流（60 秒一条，避免每轮补给都刷一遍）。</summary>
+        private DateTime _nextUnsoldLogTime;
+
+        /// <summary>战斗中从背包补装弹药的节流（2 秒，2026-11-18）。</summary>
+        private DateTime _nextAmmoEquipTime;
+
+        /// <summary>分批买弹药时中间批次的日志节流（2 秒，2026-11-18）。</summary>
+        private DateTime _nextAmmoLogTime;
+
+        /// <summary>
+        /// 卖货/修理期间因挨打切战斗的次数与统计起点（60 秒窗口，2026-11-18）。
+        /// 用来熔断「Trade → 挨打切 Fight → 没目标又接续回 Trade」的死循环。
+        /// </summary>
+        private int _tradeInterruptCount;
+        private DateTime _tradeInterruptSince;
+
+        /// <summary>
+        /// 最近一次「被怪打」的时间（2026-11-18）。
+        /// 用于「被打但找不到可见目标」时脱身：食人花这类会藏到地下的怪，
+        /// 打你的时候 <c>Visible=false</c> 打不着，站着不动只能挨打。
+        /// </summary>
+        private DateTime _lastHurtTime;
+
         /// <summary>
         /// 上次「赶路有进展」的时间（D7，30 秒无进展判据）。
         /// <para>
@@ -580,6 +623,28 @@ namespace Server.Bots
         private int _supplyDestSourceMap = -1;
 
         /// <summary>
+        /// 补给/卖货收尾后，下一次进 <see cref="BotState.GoHunt"/> 时打一行背包快照。
+        /// <para>
+        /// 2026-11-18 用户要求：在「卖完身上的物品 → 去刷怪点」这一跳看背包里到底还剩什么，
+        /// 才能从日志判断货是不是卖干净了（只该剩回城卷 + 红蓝药，道士多符和毒药）。
+        /// 只在收尾后第一跳打，不会每帧刷。
+        /// </para>
+        /// </summary>
+        private bool _logBagOnNextHunt;
+
+        /// <summary>本轮补给「怎么回城的（用卷 / 跑路 / 就地）」只记一次。</summary>
+        private bool _restockTravelLogged;
+
+        /// <summary>
+        /// 卖货收尾时背包还有可卖物品 → 下次冷却结束再换一家收购商接着卖（2026-11-18）。
+        /// 避免「卖完肉就出城，装备/材料跟着练级」。
+        /// </summary>
+        private bool _sellPending;
+
+        /// <summary>「换一家继续卖」连续尝试次数，超过 3 次放弃本轮（防无限跑）。</summary>
+        private int _sellPendingAttempts;
+
+        /// <summary>
         /// 回城中转的退避冷却。
         /// 没有它会出现「回城 → 主城石头传不了 → 跑远 → 又回城」的烧卷空转。
         /// </summary>
@@ -729,6 +794,22 @@ namespace Server.Bots
         /// <summary>当前要挖的尸体。</summary>
         private MonsterObject _harvestTarget;
 
+        /// <summary>
+        /// 「走不到」的尸体（2026-11-18）：60 秒内不再选它。
+        /// 没有这个排除，假人会每 0.3 秒重试同一具走不到的尸体 —— 实测 40 分钟 7791 次，
+        /// 表现就是站在尸体旁发呆 / 来回蹭。
+        /// </summary>
+        private MonsterObject _harvestExclude;
+
+        /// <summary><see cref="_harvestExclude"/> 的过期时间。</summary>
+        private DateTime _harvestExcludeExpire;
+
+        /// <summary>本具尸体开始「走不到」的时刻（时间判据，替代按帧计数）。</summary>
+        private DateTime _harvestBlockedSince;
+
+        /// <summary>「走不到尸体」日志节流（10 秒一条）。</summary>
+        private DateTime _nextHarvestBlockedLogTime;
+
         /// <summary>下次挖取的最早时间（引擎的 Harvest 有冷却动作）。</summary>
         private DateTime _nextHarvestTime;
 
@@ -744,6 +825,9 @@ namespace Server.Bots
             // 上线先修一次存量：买来的药带 Locked、启动资源发的药带 Bound|Worthless，
             // 两种标记引擎/假人自己都不肯卖，会把负重永久占死。
             RepairPotionFlags(log: true);
+
+            // 新手装（Bound|Worthless 的 StartItem）同样永远卖不掉，上线顺手清标记（2026-11-18）。
+            RepairStarterJunkFlags(log: true);
 
             EnterState(BotState.Idle, "刚上线，先站一会儿", TimeSpan.FromSeconds(SEnvir.Random.Next(2, 6)));
         }
@@ -794,6 +878,49 @@ namespace Server.Bots
 
             if (log && repaired > 0)
                 BotLog.Info(Profile.Seq, string.Format("修复 {0} 堆药的卖不掉标记（原 Locked/Bound/Worthless，卖不掉也丢不掉）", repaired));
+        }
+
+        /// <summary>
+        /// 清掉「开局绑定新手装」的卖不掉标记（2026-11-18，用户问「能否中键解绑后卖掉」）。
+        ///
+        /// <para><b>实测结论：解绑也卖不掉。</b>木剑 / 布衣 / 练功服 / 练习长刀 / 蜡烛 这些
+        /// <c>StartItem</c> 是 <c>PlayerObject.NewCharacter()</c> 发的
+        /// <c>Bound | Worthless</c>（<c>PlayerObject.cs:1569</c>），**没有 Locked** ——
+        /// 真人客户端的鼠标中键只解 <c>Locked</c>（<c>C.ItemLock</c>），对它们无效；
+        /// 而 <c>NPCSell</c> 见到 <c>Worthless</c> 直接 return（价格 0），所以永远卖不掉。</para>
+        ///
+        /// <para>假人不做玩家交易，这层保护对它们只剩副作用：每个假人白占 3 格（2 装备 + 1 蜡烛）
+        /// 外加几十点负重。这里按「药水」的同一套口径把标记清掉（<see cref="RepairPotionFlags"/>），
+        /// 清完卖货链路下一趟就会把它们卖掉，格子腾出来。</para>
+        /// </summary>
+        private void RepairStarterJunkFlags(bool log)
+        {
+            if (_player?.Inventory == null) return;
+
+            int repaired = 0;
+
+            for (int i = 0; i < _player.Inventory.Length; i++)
+            {
+                UserItem item = _player.Inventory[i];
+
+                if (item?.Info == null) continue;
+
+                // 只动「商店本来愿意收」的东西：CanSell=false 的清了也没用。
+                if (!item.Info.CanSell) continue;
+                if ((item.Flags & UserItemFlags.Worthless) != UserItemFlags.Worthless) continue;
+
+                // 药和回城卷归 RepairPotionFlags / IsKeepItem 管，别在这里插手。
+                if (BotActions.IsTownScroll(item)) continue;
+                if (BotItemRules.IsPotion(item.Info.ItemType, item.Info.Stats[Stat.Health], item.Info.Stats[Stat.Mana])) continue;
+
+                item.Flags &= ~(UserItemFlags.Bound | UserItemFlags.Worthless);
+
+                repaired++;
+            }
+
+            if (log && repaired > 0)
+                BotLog.Info(Profile.Seq, string.Format(
+                    "清理 {0} 件绑定零价物品的标记（新手装残留，原 Bound|Worthless 永远卖不掉）", repaired));
         }
 
         /// <summary>
@@ -1155,6 +1282,10 @@ namespace Server.Bots
                 if (nearbyLoot == null)
                     nearbyLoot = BotPerception.FindNearestLoot(_player, _lastKillLocation, LootRadius + Config.DropDistance);
 
+                // 金币单独再看一圈（2026-11-18）：不占格不占重，稍微远一点也值得跑。
+                if (nearbyLoot == null)
+                    nearbyLoot = BotPerception.FindNearestCurrency(_player, LootRadius + CurrencyLootBonus);
+
                 if (nearbyLoot != null)
                 {
                     _target = null;
@@ -1166,7 +1297,7 @@ namespace Server.Bots
 
                 // P1：鸡 / 猪 / 牛的掉落不落地，留在尸体里 —— 必须走过去挖。
                 // 没有这一步，假人的背包永远是空的（实测 27 次击杀 0 拾取）。
-                MonsterObject corpse = BotPerception.FindHarvestableCorpse(_player, LootRadius);
+                MonsterObject corpse = FindHarvestableCorpse();
 
                 if (corpse != null)
                 {
@@ -1200,14 +1331,15 @@ namespace Server.Bots
             {
                 // 附近没怪了，先看有没有东西可捡，再原地等一会儿 —— 刷怪有间隔，
                 // 立刻换点会导致「到达 → 没怪 → 再到达」的来回空转。
-                if (BotPerception.FindNearestLoot(_player, LootRadius) != null)
+                if (BotPerception.FindNearestLoot(_player, LootRadius) != null
+                    || BotPerception.FindNearestCurrency(_player, LootRadius + CurrencyLootBonus) != null)
                 {
                     EnterState(BotState.Loot, "附近没怪，先捡东西", TimeSpan.FromSeconds(30));
                     return;
                 }
 
                 // P1：附近还有可挖的尸体（鸡 / 猪 / 牛的掉落不落地）→ 去挖。
-                MonsterObject corpse = BotPerception.FindHarvestableCorpse(_player, LootRadius);
+                MonsterObject corpse = FindHarvestableCorpse();
 
                 if (corpse != null)
                 {
@@ -1218,8 +1350,40 @@ namespace Server.Bots
                     return;
                 }
 
-                // 连续一段时间都打不到怪，说明这张图确实没货（或被别人清光了）→ 换个图。
-                //
+                // 刚被打、但找不到可见目标（食人花这类会藏到地下的怪）→ 先挪开，别站着挨打。
+                // 现场（2026-11-18 BOT#02 毒经生）：被食人花围住，攻击者一隐身就打不着，
+                // 而 AutoPath 又被活物挡住，结果原地站桩十几秒。
+                if (_lastHurtTime != default
+                    && (SEnvir.Now - _lastHurtTime).TotalSeconds <= 3)
+                {
+                    _lastHurtTime = default;
+
+                    TryShuffleStep();
+
+                    EnterState(BotState.GoHunt, "被打却看不到目标，先挪开", TimeSpan.FromSeconds(2));
+
+                    return;
+                }
+
+                // 等刷新时也随机换点（2026-11-18 用户要求）：
+                // 同图往往还有别的刷怪区没人去，没必要几十个假人全围在同一处等 8~16 秒。
+                // TryPickHuntPoint 自带「排除脚边 8 格 + 按负载打分」，所以换到的必然是另一个点。
+                if (SEnvir.Now >= _nextIdleRelocateTime
+                    && BotPerception.HasHuntValue(_player.CurrentMap?.Info, _player.Level)
+                    && SEnvir.Random.Next(100) < IdleRelocateChance
+                    && TryPickHuntPoint())
+                {
+                    _nextIdleRelocateTime = SEnvir.Now.AddSeconds(IdleRelocateCooldownSeconds);
+                    _lastHuntSuccessTime = SEnvir.Now;   // 新点给缓冲期，别刚落地就判跨图
+
+                    EnterState(BotState.GoHunt,
+                        string.Format("换个刷怪点看看 {0},{1}", _huntPoint.X, _huntPoint.Y),
+                        TimeSpan.FromSeconds(HuntTimeoutSeconds));
+
+                    return;
+                }
+
+                // 连续一段时间都打不到怪，说明这张图确实没货（或被别人清光了）→ 换个图。                //
                 // 改动点 3：主判据从「累计 N 次空手」改成「连续 N 秒打不到怪」。
                 // 原判据下每次找怪失败后原地等 8~16 秒刷怪，间隙就被攒成一次「空手」，
                 // 刷怪间隙的合理等待被算成空手，实测跨图 720 次/时（约每 5 秒一次）。
@@ -1259,6 +1423,21 @@ namespace Server.Bots
             }
 
             int distance = BotNavigator.Distance(_player.CurrentLocation, monster.CurrentLocation);
+
+            // 战斗中从背包补装弹药（2026-11-18）：
+            // 装备槽受 StackSize 限制，10000 份里大部分躺在背包；槽空了不补装，
+            // 明明「库存 9000 份」也会断弹（技能有动画、扣蓝、零伤害）。
+            if (_player.Class == MirClass.Taoist && SEnvir.Now >= _nextAmmoEquipTime)
+            {
+                _nextAmmoEquipTime = SEnvir.Now.AddSeconds(2);
+
+                foreach ((EquipmentSlot slot, MagicType _) in BotSkills.AmmoSkills(_player))
+                {
+                    if (BotSkills.CountEquip(_player, slot) >= 100) continue;
+
+                    BotActions.TryEquipAmmo(_player, slot);
+                }
+            }
 
             // 道士补召宠物（3-4，2026-11-17）：战斗前补召 + 宠物死亡补召，共用一个检查点。
             // 宠物战死时引擎 Die() 自动从 Player.Pets 移除，所以「宠物位没满」这一个判据
@@ -1361,11 +1540,17 @@ namespace Server.Bots
                 {
                     if (!_player.CanCast)
                     {
-                        LastDetail = string.Format("等 {0} 冷却（蓝 {1}/{2}）", BotText.Magic(attack), _player.CurrentMP, _player.Stats[Stat.Mana]);
-                        return;
+                        // 没蓝、而且**身上一瓶蓝药都没有**：远程彻底打不了。
+                        // 这时候不能原地站着（2026-11-18 用户现场：「没蓝也不反击」），
+                        // 落到下面的走位/平砍分支贴脸砍 —— 道士平砍是能打死怪的。
+                        // 有蓝药还留在原地等，是因为下一拍就会喝药，不用白跑一趟。
+                        if (BotActions.CountPotion(_player, Stat.Mana) > 0)
+                        {
+                            LastDetail = string.Format("等 {0} 冷却（蓝 {1}/{2}）", BotText.Magic(attack), _player.CurrentMP, _player.Stats[Stat.Mana]);
+                            return;
+                        }
                     }
-
-                    if (BotSkills.TryCastAttack(_player, monster, preferGroup))
+                    else if (BotSkills.TryCastAttack(_player, monster, preferGroup))
                     {
                         LastMagic = BotText.Magic(attack);
                         _lastAttackTime = SEnvir.Now;
@@ -1627,9 +1812,15 @@ namespace Server.Bots
         {
             foreach (MagicType type in BotSkills.AttackSkillsOf(player.Class))
             {
-                if (!player.GetMagic(type, out MagicObject _)) continue;
+                if (!player.GetMagic(type, out MagicObject magic)) continue;
 
                 if (!BotSkills.HasAmmo(player, type)) continue;
+
+                // 蓝不够也放不出来（2026-11-18 用户现场：道士没蓝还一直放风筝，
+                // 在怪面前来回跑、既不输出也不回城）。
+                // 原来这里只查弹药，于是「蓝 0 但兜里有符」也判成「远程可用」，
+                // 退到 7~8 格后 TryCastAttack 因蓝不足失败，下一帧又退 —— 无限风筝。
+                if (!magic.CheckCost()) continue;
 
                 return true;
             }
@@ -1845,11 +2036,16 @@ namespace Server.Bots
                 ? BotPerception.FindNearestLootExcluding(_player, LootRadius, _lootExclude)
                 : BotPerception.FindNearestLoot(_player, LootRadius);
 
+            // 普通掉落半径内没有 → 再看远一点有没有金币（2026-11-18 用户现场：地上有金币没捡）。
+            // 金币不占格不占重，多跑几格也值；普通掉落不会因此扩大范围。
+            if (item == null)
+                item = BotPerception.FindNearestCurrency(_player, LootRadius + CurrencyLootBonus);
+
             if (item == null)
             {
                 // 地上没东西可捡，但附近还有可挖的尸体（鸡/猪/牛掉落不落地）→ 去挖。
                 // 用户 2026-11-15 观察：原来直接进 Idle，可挖尸体被留在现场。
-                MonsterObject corpse = BotPerception.FindHarvestableCorpse(_player, LootRadius);
+                MonsterObject corpse = FindHarvestableCorpse();
 
                 if (corpse != null)
                 {
@@ -1898,6 +2094,27 @@ namespace Server.Bots
                 {
                     // 引擎没捡走（背包满、负重超了、或者被别人先捡了）。
                     // 连续失败就别死磕这一件，换个目标或直接回去。
+                    // 2026-11-18：失败即排除 30 秒 —— 引擎拒绝的件重试也不会成功，
+                    // 原地连按只会卡在「这个捡不到」的循环里，把别的掉落物一起耽误。
+                    _lootExclude = item;
+                    _lootExcludeExpire = SEnvir.Now.AddSeconds(30);
+
+                    // 2026-11-18：把「为什么捡不到」一次说清（只在失败路径触发，噪音可控）。
+                    // 现场见 BOT#69 每 10 秒进一次 Loot 又立刻失败 3 次 —— 靠这行定位是
+                    // 归属 / 装不下 / 负重 / 堆叠哪一道把引擎拦住了。
+                    if (item.Item != null)
+                    {
+                        UserItem ui = item.Item;
+                        ItemCheck diagCheck = new ItemCheck(ui, ui.Count, ui.Flags, ui.ExpireTime);
+
+                        BotLog.Debug(Profile.Seq, string.Format(
+                            "捡取失败：{0} dist={1} 归属={2} 可装={3} 空格={4} 负重={5}/{6} 堆叠={7}/{8}",
+                            ui.Info?.ItemName ?? "?", distance, item.CanPickUpItem(_player),
+                            _player.CanGainItems(false, diagCheck),
+                            BotPerception.FreeInventorySlots(_player), _player.BagWeight,
+                            _player.Stats[Stat.BagWeight], ui.Count, ui.Info?.StackSize ?? 0));
+                    }
+
                     _lootFailCount++;
 
                     if (_lootFailCount >= 3)
@@ -1984,6 +2201,13 @@ namespace Server.Bots
             if (BotActions.TryTownRevive(_player))
                 BotLog.Info(Profile.Seq, "已回城复活");
 
+            // 复活没成功（金币不够/引擎拒绝）：别往下走，否则会在「死人」状态里去补给。
+            if (_player.Dead)
+            {
+                EnterState(BotState.Dead, "复活失败，3 秒后重试", TimeSpan.FromSeconds(3));
+                return;
+            }
+
             // 复活会把人挪回绑定主城，死前那条路线的起点已经作废。
             // 不清掉的话，`if (_player.AutoPath != null) return;` 这类守卫会拦住
             // 复活后所有的重新规划，假人就一直站在原地。
@@ -1993,7 +2217,16 @@ namespace Server.Bots
             // 复活即回主城，中转的意义已经由「人回到主城」实现了 —— 清位，重新选图。
             _teleportViaHome = false;
 
-            EnterState(BotState.Idle, "复活后待机", TimeSpan.FromSeconds(SEnvir.Random.Next(3, 8)));
+            // 复活后**第一件事是补给**（2026-11-18 用户要求）。
+            //
+            // 原因：死亡按引擎规则掉背包物品，药和回城卷都可能掉光。原来复活后直接
+            // 回练级点，于是出现「没药硬扛 + 没卷只能跑路」的死亡循环（用户现场观察）。
+            // 复活点本来就在城里，就地补一趟只要十几秒，比再死一次划算得多。
+            // 补给完成（FinishRestock）会清掉 stage/baseline，不影响后续正常补给。
+            _restockStage = RestockStage.Potion;
+            _restockBaselinePotions = -1;
+
+            EnterState(BotState.Restock, "复活后先补给（死亡可能掉了药和回城卷）", TimeSpan.FromMinutes(5));
         }
 
         #endregion
@@ -2798,14 +3031,20 @@ namespace Server.Bots
 
                 if (attacker != null)
                 {
+                    _lastHurtTime = SEnvir.Now;
                     // Restock 优先回城（2026-11-17 用户决策，修 Fight/Restock 震荡）：
                     // 补给回城途中被怪攻击，只要还在往目的地移动（AutoPath 推进中、位置在变），
                     // 就继续回城不还击 —— 怪跟着跑会跟丢/被守卫清掉/进安全区脱战，
                     // 硬切 Fight 只会在「回城 ↔ 还击」间反复横跳、红药越耗越多。
                     // 被围走不动（位置连续多步没变）或没路可走（AutoPath 为空），才切 Fight 还击，
                     // 同时记下被打断的补货待办，战斗结束由 EnterState 统一接续回 Restock。
-                    if (State == BotState.Restock)
+                    // 2026-11-18：Trade 与 Restock 同属「出城办事」——`needClear = HasSellableItems()`
+                    // 之后补给前必先进 Trade 卖货，野外被怪咬就切 Fight、打完又回 Trade，
+                    // 实测 BOT#10 250ms 级 Trade↔Fight 横跳 612 次/6 分钟。故两者共用同一套豁免。
+                    if (State == BotState.Restock || State == BotState.Trade)
                     {
+                        string errand = State == BotState.Trade ? "卖货" : "补给";
+
                         // 安全区豁免（2026-11-17 修复城内买药震荡）：
                         // 城内买药时站在商人旁，AutoPath 本就为空，原判据把「没路」一律当
                         // 「被围」切 Fight；而安全区怪打不到，战斗结束回 Restock 后威胁仍在
@@ -2813,7 +3052,7 @@ namespace Server.Bots
                         // 安全区内遇袭不还击，直接继续补给。
                         if (BotPerception.InSafeZone(_player))
                         {
-                            LastDetail = string.Format("补给中遇袭 {0}，在安全区继续补给", MonsterName(attacker));
+                            LastDetail = string.Format("{0}中遇袭 {1}，在安全区继续{0}", errand, MonsterName(attacker));
                             return false;
                         }
 
@@ -2843,7 +3082,7 @@ namespace Server.Bots
 
                             if (!surrounded)
                             {
-                                LastDetail = string.Format("补给中持续遇袭 {0}，冷却期继续逃离", MonsterName(attacker));
+                                LastDetail = string.Format("{0}中持续遇袭 {1}，冷却期继续逃离", errand, MonsterName(attacker));
                                 return false;
                             }
 
@@ -2868,12 +3107,44 @@ namespace Server.Bots
 
                             if (onMove)
                             {
-                                LastDetail = string.Format("补给途中遇袭 {0}，继续回城", MonsterName(attacker));
+                                LastDetail = string.Format("{0}途中遇袭 {1}，继续赶路", errand, MonsterName(attacker));
                                 return false;
                             }
                         }
 
-                        _interruptedState = BotState.Restock;
+                        _interruptedState = State;
+                    }
+
+                    // 卖货/修理被反复打断的熔断（2026-11-18 现场：BOT#02 毒经生 被食人花围住，
+                    // 每 10 秒一轮「Trade → 被打切 Fight → 没目标又接续回 Trade」，站着挨打不还手）。
+                    //
+                    // 判据：同一个假人 60 秒内因为挨打而切战斗 ≥4 次 → 认为「这趟事办不成」，
+                    // 直接收尾（FinishTrade），并给卖货/修理 30 秒冷却，让它先把身边的怪清掉或走开。
+                    if (State == BotState.Trade)
+                    {
+                        if (_tradeInterruptSince == default
+                            || (SEnvir.Now - _tradeInterruptSince).TotalSeconds > 60)
+                        {
+                            _tradeInterruptSince = SEnvir.Now;
+                            _tradeInterruptCount = 0;
+                        }
+
+                        _tradeInterruptCount++;
+
+                        if (_tradeInterruptCount >= 4)
+                        {
+                            _tradeInterruptCount = 0;
+                            _tradeInterruptSince = default;
+
+                            BotLog.Warn(Profile.Seq, string.Format(
+                                "卖货/修理被反复打断（60 秒内 4 次，最后是 {0}），先收尾脱身", MonsterName(attacker)));
+
+                            FinishTrade("被围反复打断，先脱身", false);
+
+                            // 30 秒内别再往 Trade 跑（否则下一拍又进去挨打）。
+                            _sellCooldown = SEnvir.Now.AddSeconds(30);
+                            _repairCooldown = SEnvir.Now.AddSeconds(30);
+                        }
                     }
 
                     EnterState(BotState.Fight, string.Format("被 {0} 攻击，还击", MonsterName(attacker)), TimeSpan.FromSeconds(60));
@@ -2980,13 +3251,23 @@ namespace Server.Bots
 
             int red = tryRestock ? BotActions.CountPotion(_player, Stat.Health) : int.MaxValue;
 
+            // 蓝药低位（2026-11-18 用户现场）：原来补给只看**红药**和弹药，
+            // 道士「红药 27 瓶、蓝药 0 瓶」时根本不触发补给 → 放不出技能、
+            // 只能贴脸平砍，还会被判成「远程可用」去放风筝，在怪面前来回跑。
+            // 判据与喝蓝同口径（NeedsManaPotion：法师/道士始终要，战士 24 级起要）。
+            int blue = tryRestock && NeedsManaPotion()
+                ? BotActions.CountPotion(_player, Stat.Mana)
+                : int.MaxValue;
+
+            bool blueLow = tryRestock && NeedsManaPotion() && blue <= options.RestockPotionLow;
+
             // 弹药低位（步骤 3-3，2026-11-16）：断弹 = 道士技能全空放（有动画、扣蓝、零伤害），
             // 比红药见底更致命 —— 红药还够时弹药见底也要回城，不能等红药触发才顺带补。
             bool ammoLow = tryRestock && _player.Class == MirClass.Taoist
-                           && BotSkills.HasAmmoBelow(_player, AmmoRestockLow)
+                           && BotSkills.HasAmmoStockBelow(_player, AmmoRestockLow)
                            && GoldAmount() >= AmmoRestockGoldFloor;
 
-            if (tryRestock && (red <= options.RestockPotionLow || ammoLow))
+            if (tryRestock && (red <= options.RestockPotionLow || blueLow || ammoLow))
             {
                 // 钱包连一瓶最便宜的药都买不起时，去药店也是空手而归。
                 //
@@ -2998,7 +3279,7 @@ namespace Server.Bots
                 // 资金门槛按触发原因分开算：红药触发要够买最便宜药，弹药触发要够买弹药
                 // （护身符/毒粉几十金一份）。只触发一个维度时，另一个维度不拦 ——
                 // 否则「红药够、弹药见底、钱够买弹药但不够买药」会被红药价误挡。
-                bool potionGoldOk = red <= options.RestockPotionLow
+                bool potionGoldOk = red <= options.RestockPotionLow || blueLow
                     ? floorPrice <= 0 || GoldAmount() >= floorPrice
                     : true;
                 bool ammoGoldOk = ammoLow ? GoldAmount() >= AmmoRestockGoldFloor : true;
@@ -3014,12 +3295,12 @@ namespace Server.Bots
                     //   · 11 倍爆率下负重几乎一直是满的（实测 66/66、110/84、117/84），
                     //     等它自己降到 90% 以下基本等不到。
                     // 阈值取 70%：留 30% 余量，够买一轮药（20 瓶 × 2 重量 = 40，上限 66 时约 60%）。
-                    long capacity = _player.Stats[Stat.BagWeight];
-                    int freeSlots = BotPerception.FreeInventorySlots(_player);
+                    // 只要背包里有可卖物品（肉、装备、材料等杂物），补给前就先卖货腾地方。
+                    // 不再要求「负重≥70%」——实测药见底回城时负重常没到 70%，旧逻辑只买药不卖货，
+                    // 背包里的肉/装备一直堆着（用户 2026-11-18 反馈：回刷怪点时背包还有一堆没卖掉的装备）。
+                    bool needClear = HasSellableItems();
 
-                    bool needClear = capacity > 0 && (_player.BagWeight >= capacity * 7 / 10 || freeSlots < 10);
-
-                    if (needClear && HasSellableItems())
+                    if (needClear)
                     {
                         _tradeIsRepair = false;
 
@@ -3027,7 +3308,7 @@ namespace Server.Bots
                         // 实测那样会形成热循环（进门 → 卖不掉 → 收尾冷却 → 下一帧又进门），
                         // 30 个假人 30 分钟刷出 66,635 次空交易、18 个被判定 stuck。
                         // 冷却只有 20 秒，等得起。
-                        if (SEnvir.Now >= _sellCooldown && SetTradeTarget(SellableItemType()))
+                        if (SEnvir.Now >= _sellCooldown && TrySetTradeTargetForAnySellable(out _))
                         {
                             // 5 分钟：这一趟可能要跑好几类商人才卖得干净（装备/矿石/材料各一个 NPC）。
                             EnterState(BotState.Trade, "补给前先清背包（只留药和卷）", TimeSpan.FromMinutes(5));
@@ -3036,20 +3317,34 @@ namespace Server.Bots
                         }
 
                         LastDetail = "等卖货冷却，之后先清背包再补给";
+
+                        // ⚠ 不能在这里「等」下去（2026-11-18 实测死锁）：
+                        // 背包里剩一件「可卖但全图没人收」的东西（BOT#93 是 [部件]×1），
+                        // HasSellableItems() 恒为 true、SetTradeTarget 恒失败 →
+                        // 每 20 秒「补给前先清背包 → 卖不掉 → 再清背包」，
+                        // 红药永远停在 4 瓶、回城卷永远 0，**补给一次都进不去**。
+                        // 现在改为：卖不掉就先去补给，剩下的货以后再卖。
+                        // 同时把「卖不掉的是哪些东西」打进日志（用户要按名字决定怎么改）。
+                        if (SEnvir.Now >= _nextUnsoldLogTime)
+                        {
+                            _nextUnsoldLogTime = SEnvir.Now.AddSeconds(60);
+
+                            BotLog.Info(Profile.Seq, "卖不掉的货（全图没有收购商，先补给）：" + DescribeUnsoldItems());
+                        }
                     }
-                    else
-                    {
-                        // 5 分钟而不是 3 分钟：一次补给要「AutoPath 跨图回城 → 走到药店买药 →
-                        // 再走到杂货商买卷」三段，城外 60 格、两个 NPC 各 20~40 格。
-                        // 3 分钟实测经常卡在最后一段（2026-11-12：6 次失败里 4 次是「补给超时」）。
-                        string reason = ammoLow && red > options.RestockPotionLow
-                            ? "弹药见底，回城补给"
+
+                    // 5 分钟而不是 3 分钟：一次补给要「AutoPath 跨图回城 → 走到药店买药 →
+                    // 再走到杂货商买卷」三段，城外 60 格、两个 NPC 各 20~40 格。
+                    // 3 分钟实测经常卡在最后一段（2026-11-12：6 次失败里 4 次是「补给超时」）。
+                    string reason = ammoLow && red > options.RestockPotionLow && !blueLow
+                        ? "弹药见底，回城补给"
+                        : blueLow && red > options.RestockPotionLow
+                            ? string.Format("蓝药只剩 {0} 瓶，回城补给", blue)
                             : string.Format("红药只剩 {0} 瓶，回城补给", red);
 
-                        EnterState(BotState.Restock, reason, TimeSpan.FromMinutes(5));
+                    EnterState(BotState.Restock, reason, TimeSpan.FromMinutes(5));
 
-                        return true;
-                    }
+                    return true;
                 }
             }
 
@@ -3442,7 +3737,37 @@ namespace Server.Bots
             if (_player.CurrentMap?.Info != home)
             {
                 // ① 目的地正好是绑定点 → 回城卷 1 秒直达，最省。
-                if (home == bind && TryReturnHomeByScroll(home)) return;
+                if (home == bind && TryReturnHomeByScroll(home))
+                {
+                    LogRestockTravelOnce(string.Format("用回城卷回绑定点 {0}", home.Description));
+                    return;
+                }
+
+                // ①-b 目的地不是绑定点，但**绑定点本身能补给** → 也别跑路（2026-11-18 用户要求：
+                //     「补货优先用回城卷」）。回城卷永远回绑定点，所以先 1 秒回去、就地补给，
+                //     比 AutoPath 跨图 3~5 分钟强得多（路上不练级、还挨打）。
+                //     只有绑定点连药店都没有时，才继续按「补给最全的城」走过去。
+                if (home != bind && BotPerception.HasPharmacy(bind))
+                {
+                    if (TryReturnHomeByScroll(bind))
+                    {
+                        _supplyDest = bind;
+                        _supplyDestSourceMap = _player.CurrentMap?.Info?.Index ?? -1;
+
+                        LogRestockTravelOnce(string.Format(
+                            "用回城卷回绑定点 {0}（原计划去 {1}，省一趟跑路）",
+                            bind.Description, home.Description));
+
+                        return;
+                    }
+
+                    // 没卷 / 本图不能用卷 → 下面的 AutoPath 兜底，并留痕说明原因。
+                    BotLog.Debug(Profile.Seq, string.Format(
+                        "回城卷不可用（{0} 张，本图{1}），只能走回 {2} 补给",
+                        BotActions.CountTownScroll(_player),
+                        BotActions.CanUseTownScrollHere(_player) ? "允许用卷" : "禁止用卷",
+                        home.Description));
+                }
 
                 if (_player.AutoPath != null)
                 {
@@ -3474,10 +3799,16 @@ namespace Server.Bots
                 }
 
                 LastDetail = string.Format("走回 {0} 补给", home.Description);
+
+                LogRestockTravelOnce(string.Format("跑路走回 {0}（原因：{1}）",
+                    home.Description, RestockWalkReason(home, bind)));
+
                 return;
             }
 
             // 在目的地：找当前阶段对应的 NPC
+            LogRestockTravelOnce("就地补给（本图就是补给目的地，没走也没烧卷）");
+
             NPCObject npc = IsGrocerStage
                 ? BotPerception.FindScrollShop(_player.CurrentMap)
                 : BotPerception.FindPharmacy(_player.CurrentMap);
@@ -3626,6 +3957,221 @@ namespace Server.Bots
             return true;
         }
 
+        /// <summary>
+        /// 背包快照（2026-11-18 用户要求）。
+        /// <para>
+        /// 在「卖完身上的物品 → 去刷怪点」这一跳打一行，用来看货是不是卖干净了：
+        /// 正常只该剩 回城卷 + 红药 + 蓝药（道士多符和毒药），
+        /// 有「装备 / 材料」残留就说明还有收购商没跑到，或者判据把可卖品当成了必需品。
+        /// </para>
+        /// <para>
+        /// 分类口径：红/蓝按 <c>Consumable</c> + 对应属性恢复量；回城卷走
+        /// <see cref="BotActions.IsTownScroll(UserItem)"/>；符 = <c>Amulet</c>、毒药 = <c>Poison</c>；
+        /// 装备按 <c>ItemType</c> 白名单；其余一律算「材料」并列出前几件名字。
+        /// </para>
+        /// </summary>
+        private string DescribeBag()
+        {
+            UserItem[] bag = _player?.Inventory;
+
+            if (bag == null) return "背包不可用";
+
+            int red = 0, blue = 0, scrolls = 0, amulet = 0, poison = 0, equip = 0, other = 0, free = 0;
+            int equipSellable = 0, otherSellable = 0, equipUnsellable = 0, otherUnsellable = 0;
+            StringBuilder leftovers = new StringBuilder();
+            StringBuilder blockedSample = new StringBuilder();
+
+            foreach (UserItem item in bag)
+            {
+                if (item?.Info == null)
+                {
+                    free++;
+                    continue;
+                }
+
+                int count = (int)Math.Max(1, item.Count);
+
+                if (BotActions.IsTownScroll(item))
+                {
+                    scrolls += count;
+                    continue;
+                }
+
+                switch (item.Info.ItemType)
+                {
+                    case ItemType.Consumable:
+                        if (item.Info.Stats[Stat.Health] > 0) { red += count; continue; }
+                        if (item.Info.Stats[Stat.Mana] > 0) { blue += count; continue; }
+                        break;
+
+                    case ItemType.Amulet:
+                        amulet += count;
+                        continue;
+
+                    case ItemType.Poison:
+                        poison += count;
+                        continue;
+                }
+
+                // 卖不掉的三种原因分开记，日志里才能直接看出「是没去卖，还是根本卖不掉」：
+                //   CanSell=false（商店不收） / Bound|Locked|Worthless（绑定/锁定/零价）。
+                bool sellable = item.Info.CanSell && !BotItemRules.IsSellBlocked(item.Flags);
+
+                bool isEquip = item.Info.ItemType == ItemType.Weapon
+                    || item.Info.ItemType == ItemType.Armour
+                    || item.Info.ItemType == ItemType.Helmet
+                    || item.Info.ItemType == ItemType.Necklace
+                    || item.Info.ItemType == ItemType.Bracelet
+                    || item.Info.ItemType == ItemType.Ring
+                    || item.Info.ItemType == ItemType.Shoes
+                    || item.Info.ItemType == ItemType.Shield
+                    || item.Info.ItemType == ItemType.Costume
+                    || item.Info.ItemType == ItemType.Emblem
+                    || item.Info.ItemType == ItemType.SocketGem;
+
+                if (isEquip)
+                {
+                    equip += count;
+
+                    if (sellable) equipSellable += count;
+                    else equipUnsellable += count;
+                }
+                else
+                {
+                    other += count;
+
+                    if (sellable) otherSellable += count;
+                    else otherUnsellable += count;
+                }
+
+                if (leftovers.Length < 60)
+                {
+                    if (leftovers.Length > 0) leftovers.Append('、');
+                    leftovers.Append(item.Info.ItemName).Append('×').Append(count);
+                }
+
+                if (!sellable && blockedSample.Length < 40)
+                {
+                    if (blockedSample.Length > 0) blockedSample.Append('、');
+                    blockedSample.Append(item.Info.ItemName).Append('(')
+                        .Append(item.Info.CanSell ? FlagText(item.Flags) : "商店不收")
+                        .Append(')');
+                }
+            }
+
+            return string.Format(
+                "红 {0} 蓝 {1} 卷 {2} 符 {3} 毒 {4} | 装备 {5}(可卖{6}/卖不掉{7}) 材料 {8}(可卖{9}/卖不掉{10}) " +
+                "| 空格 {11}/{12} 负重 {13}/{14}{15}{16}",
+                red, blue, scrolls,
+                // 弹药实际装在**装备槽**里（UseAmulet 读的是 Equipment），背包里通常是 0，
+                // 所以按「装备槽 + 背包」合计，否则快照永远显示 符0/毒0（2026-11-18）。
+                amulet + BotSkills.CountEquip(_player, EquipmentSlot.Amulet),
+                poison + BotSkills.CountEquip(_player, EquipmentSlot.Poison),
+                equip, equipSellable, equipUnsellable,
+                other, otherSellable, otherUnsellable,
+                free, bag.Length, _player.BagWeight, _player.Stats[Stat.BagWeight],
+                other + equip > 0 ? " | 残留: " + leftovers : "",
+                blockedSample.Length > 0 ? " | 卖不掉: " + blockedSample : "");
+        }
+
+        /// <summary>
+        /// 本轮补给「怎么回城的」只记一次（2026-11-18 用户要求）。
+        /// <para>
+        /// 从日志一眼能看出这趟是 <b>用回城卷</b> / <b>跑路</b> / <b>就地补给</b>，
+        /// 跑路时带上原因（没卷 / 本图禁用 / 绑定点没药店 / 卷在冷却），
+        /// 不用再猜「为什么它没烧卷」。
+        /// </para>
+        /// </summary>
+        private void LogRestockTravelOnce(string how)
+        {
+            if (_restockTravelLogged) return;
+
+            _restockTravelLogged = true;
+
+            BotLog.Info(Profile.Seq, string.Format("补给出行：{0}（背包卷 {1} 张，当前 {2}）",
+                how, BotActions.CountTownScroll(_player),
+                _player?.CurrentMap?.Info?.Description ?? "?"));
+        }
+
+        /// <summary>
+        /// 列出「可卖但这次没卖掉」的物品明细（2026-11-18 用户要求：
+        /// 要按物品名决定这些卖不掉的部件怎么处理）。
+        /// <para>口径与 <see cref="HasSellableItems"/> 一致：
+        /// <c>Info.CanSell</c> 且非 Bound/Locked/Worthless/Marriage、且不是要留的药和卷。</para>
+        /// </summary>
+        private string DescribeUnsoldItems()
+        {
+            BotPotionBudget budget = NewPotionBudget();
+
+            StringBuilder text = new StringBuilder();
+            int total = 0, listed = 0;
+
+            foreach (UserItem item in _player.Inventory)
+            {
+                if (item?.Info == null) continue;
+                if (!item.Info.CanSell) continue;
+                if (BotItemRules.IsSellBlocked(item.Flags)) continue;
+                if (IsKeepItem(item, budget)) continue;
+
+                total++;
+
+                if (listed >= 8) continue;
+
+                if (text.Length > 0) text.Append('、');
+
+                text.Append(item.Info.ItemName)
+                    .Append('×').Append(Math.Max(1, item.Count))
+                    .Append('[').Append(BotText.Item(item.Info.ItemType)).Append(']');
+
+                listed++;
+            }
+
+            if (total == 0) return "无";
+
+            return total > listed
+                ? text + string.Format(" …共 {0} 格", total)
+                : text.ToString();
+        }
+
+        /// <summary>标记位的中文描述（诊断日志用，2026-11-18）。</summary>
+        private static string FlagText(UserItemFlags flags)
+        {
+            StringBuilder text = new StringBuilder();
+
+            if ((flags & UserItemFlags.Bound) == UserItemFlags.Bound) text.Append("绑定");
+            if ((flags & UserItemFlags.Locked) == UserItemFlags.Locked)
+            {
+                if (text.Length > 0) text.Append('+');
+                text.Append("锁定");
+            }
+            if ((flags & UserItemFlags.Worthless) == UserItemFlags.Worthless)
+            {
+                if (text.Length > 0) text.Append('+');
+                text.Append("零价");
+            }
+            if ((flags & UserItemFlags.Marriage) == UserItemFlags.Marriage)
+            {
+                if (text.Length > 0) text.Append('+');
+                text.Append("婚戒");
+            }
+
+            return text.Length == 0 ? "无标记" : text.ToString();
+        }
+
+        /// <summary>跑路回城的原因（给「补给出行」日志用，2026-11-18）。</summary>
+        private string RestockWalkReason(MapInfo home, MapInfo bind)
+        {
+            if (BotActions.CountTownScroll(_player) <= 0) return "背包没有回城卷";
+
+            if (!BotActions.CanUseTownScrollHere(_player)) return "本图禁止使用回城卷";
+
+            if (home != bind && !BotPerception.HasPharmacy(bind))
+                return string.Format("绑定点 {0} 没有药店，只能去 {1}",
+                    bind?.Description ?? "?", home.Description);
+
+            return "回城卷正在冷却或使用失败";
+        }
+
         private bool TryReturnHomeByScroll(MapInfo home)
         {
             if (BotActions.CountTownScroll(_player) <= 0) return false;
@@ -3753,23 +4299,26 @@ namespace Server.Bots
         /// <summary>
         /// 一次买多少弹药（护身符 / 毒药粉都按这个数）。
         /// <para>
-        /// 2026-11-14 从 10 提到 15：施毒术从「开场放一次」改成「每只怪循环补 2 种毒」后，
-        /// 毒药粉消耗从约 1 次/怪变成 2~3 次/怪，10 份撑不到两次回城就见底，
-        /// 断弹 = 技能空放（有动画、扣蓝、零伤害）。15 份在「够打一轮补给间隔」与「不压过多负重」之间取平衡。
+        /// 2026-11-14 从 10 提到 15；<b>2026-11-18 按用户要求提到 10000</b>：
+        /// 符/毒药是可堆叠、便宜、几乎不占重量的消耗品，一次技能就吃一份，
+        /// 15 份打几只怪就见底 → 一天要回城补十几次。囤满 10000 份基本等于「永不断弹」。
+        /// </para>
+        /// <para>
+        /// 实际能买多少仍受三道上限约束：金币 / 负重 / 单次下单不能超过堆叠上限
+        /// （见 <see cref="BuyAmmo"/> 的分批下单）。
         /// </para>
         /// </summary>
-        private const int AmmoTarget = 15;
+        private const int AmmoTarget = 10000;
 
         /// <summary>
         /// 弹药低位触发补给的阈值（步骤 3-3，2026-11-16）：任一**已学会**弹药技能的
-        /// 弹药（护身符 / 毒药粉）低于这个数就触发回城补给。
+        /// 弹药**总库存**（装备槽 + 背包）低于这个数就触发回城补给。
         /// <para>
-        /// 取 3：一轮补给间隔消耗约 10 份弹药（<see cref="AmmoTarget"/>=15），剩 3 份时回城，
-        /// 路上 + 补给耗时内不会完全断弹。断弹 = 技能全空放（有动画、扣蓝、零伤害），
-        /// 比红药见底更致命，不能等红药触发才顺带补。
+        /// 2026-11-18 随 <see cref="AmmoTarget"/> 一起放大到 1000（目标的 10%）：
+        /// 目标 10000 时还按 3 触发，等于永远不触发，断弹后才发现。
         /// </para>
         /// </summary>
-        private const int AmmoRestockLow = 3;
+        private const int AmmoRestockLow = 1000;
 
         /// <summary>
         /// 弹药补给的资金门槛（与 <see cref="ShouldBuyAmmo"/> 一致，50 金）：
@@ -3799,7 +4348,9 @@ namespace Server.Bots
 
             foreach ((EquipmentSlot slot, MagicType _) in BotSkills.AmmoSkills(_player))
             {
-                int have = BotSkills.CountEquip(_player, slot);
+                // 按**总库存**（装备槽 + 背包）算，不是只看槽：
+                // 槽受 StackSize 限制装不下 10000，剩下的在背包里（2026-11-18）。
+                int have = BotSkills.CountAmmoStock(_player, slot);
 
                 if (have >= AmmoTarget) continue;
 
@@ -3855,7 +4406,9 @@ namespace Server.Bots
                 // 否则会重复买，越攒越多纯压负重。
                 BotActions.TryEquipAmmo(_player, slot);
 
-                int have = BotSkills.CountEquip(_player, slot);
+                // 按**总库存**算缺口（2026-11-18）：装备槽受 StackSize 限制装不下 10000，
+                // 只看槽会永远「缺」，每轮都再买一批。
+                int have = BotSkills.CountAmmoStock(_player, slot);
                 int need = Math.Max(0, AmmoTarget - have);
 
                 if (need <= 0) continue;
@@ -3864,35 +4417,52 @@ namespace Server.Bots
 
                 if (good == null) continue;
 
-                // 三个上限取最小：还缺多少 / 买得起几份 / 负重装得下几份。
-                // 漏了负重这条会「金币够、引擎静默拒绝」，日志里就是买了 0 份。
-                int per = Math.Max(1, good.Item.Weight);
-                int freeWeight = Math.Max(0, _player.Stats[Stat.BagWeight] - _player.BagWeight);
-                int byWeight = freeWeight / per;
-
-                int affordable = (int)Math.Min(need, Math.Min(gold / Math.Max(1, good.Cost), byWeight));
+                // 重量：可堆叠弹药常常 Weight=0，不能按 1 算 —— 否则「零重量」也会被负重卡死
+                // （原来 `Math.Max(1, Weight)` 就是这个坑）。
+                int per = Math.Max(0, good.Item.Weight);
+                long freeWeight = Math.Max(0, _player.Stats[Stat.BagWeight] - _player.BagWeight);
+                int byWeight = per <= 0 ? int.MaxValue : (int)Math.Min(int.MaxValue, freeWeight / per);
 
                 // 单次下单量不能超过堆叠上限 —— NPCBuy 里
                 // `if (amountToBuy > good.Item.StackSize) return;` 会**静默拒绝整个请求**。
-                // 假人没有客户端、收不到拒绝提示，表现就是「金币够、负重够，但一份都没买到」
-                // （2026-11-13 本地实测原话：金币 498200 一分没少、护身符 0）。
-                if (good.Item != null && good.Item.StackSize > 0)
-                    affordable = Math.Min(affordable, good.Item.StackSize);
+                // 所以 10000 份必须按 StackSize 切块下单（2026-11-18）。
+                int stack = good.Item.StackSize > 0 ? good.Item.StackSize : 1;
 
-                if (affordable <= 0) continue;
+                int got = 0;
 
-                BotActions.TryBuy(_player, good.Index, affordable);
+                // 每帧最多切 40 块，剩下的下一帧继续（BuyAmmo 在补给态每帧都会进来）。
+                for (int chunk = 0; chunk < 40 && got < need; chunk++)
+                {
+                    int want = Math.Min(need - got, stack);
+                    want = Math.Min(want, byWeight - got);
 
-                // 买回来的东西在**背包**里，必须装到装备槽才生效（UseAmulet 读的是 Equipment）。
-                BotActions.TryEquipAmmo(_player, slot);
+                    if (want > 0)
+                    {
+                        long affordable = gold / Math.Max(1, good.Cost);
+                        want = (int)Math.Min(want, affordable);
+                    }
 
-                // 用**实际装上的数量**判定，不看金币差额 ——
-                // 背包满 / 负重超时引擎会静默拒绝，金币没扣、东西也没到。
-                int got = BotSkills.CountEquip(_player, slot) - have;
+                    if (want <= 0) break;
+
+                    BotActions.TryBuy(_player, good.Index, want);
+
+                    // 买回来的东西在**背包**里，必须装到装备槽才生效（UseAmulet 读的是 Equipment）。
+                    BotActions.TryEquipAmmo(_player, slot);
+
+                    // 用**实际到手数量**判定，不看金币差额 —— 背包满 / 负重超时引擎会静默拒绝。
+                    int after = BotSkills.CountAmmoStock(_player, slot);
+                    int gained = after - have - got;
+
+                    if (gained <= 0) break;
+
+                    got += gained;
+                    gold -= (long)gained * good.Cost;
+
+                    freeWeight = Math.Max(0, _player.Stats[Stat.BagWeight] - _player.BagWeight);
+                    byWeight = per <= 0 ? int.MaxValue : (int)Math.Min(int.MaxValue, freeWeight / per);
+                }
 
                 if (got <= 0) continue;
-
-                gold -= (long)got * good.Cost;
 
                 if (slot == EquipmentSlot.Poison) boughtPoison += got;
                 else boughtAmulet += got;
@@ -3904,8 +4474,33 @@ namespace Server.Bots
 
                 LastDetail = string.Format("买弹药：护身符 {0}、毒药粉 {1}（金币 {2}）", boughtAmulet, boughtPoison, gold);
 
-                BotLog.Info(Profile.Seq, string.Format("补给：买护身符 {0} 份、毒药粉 {1} 份，金币剩 {2}",
-                    boughtAmulet, boughtPoison, gold));
+                bool stillShort = AmmoStockShort();
+
+                string line = string.Format(
+                    "补给：买护身符 {0} 份、毒药粉 {1} 份，金币剩 {2}（现有 符{3}/毒{4}，负重 {5}/{6}）",
+                    boughtAmulet, boughtPoison, gold,
+                    BotSkills.CountAmmoStock(_player, EquipmentSlot.Amulet),
+                    BotSkills.CountAmmoStock(_player, EquipmentSlot.Poison),
+                    _player.BagWeight, _player.Stats[Stat.BagWeight]);
+
+                // 分批下单会连着跑几十帧，中间批次只按 2 秒节流记 Debug，最后一批才记 Info，
+                // 否则一条补给能刷出几十行（2026-11-18）。
+                if (stillShort)
+                {
+                    if (SEnvir.Now >= _nextAmmoLogTime)
+                    {
+                        _nextAmmoLogTime = SEnvir.Now.AddSeconds(2);
+                        BotLog.Debug(Profile.Seq, line);
+                    }
+
+                    LastDetail = string.Format("继续买弹药（现有 符{0}/毒{1}）",
+                        BotSkills.CountAmmoStock(_player, EquipmentSlot.Amulet),
+                        BotSkills.CountAmmoStock(_player, EquipmentSlot.Poison));
+
+                    return;
+                }
+
+                BotLog.Info(Profile.Seq, line);
             }
             else
             {
@@ -3932,6 +4527,19 @@ namespace Server.Bots
             FinishRestock(string.Format("补给结束：护身符 {0}、毒药粉 {1}，金币 {2}",
                 BotSkills.CountEquip(_player, EquipmentSlot.Amulet),
                 BotSkills.CountEquip(_player, EquipmentSlot.Poison), gold));
+        }
+
+        /// <summary>弹药库存是否还没到目标（分批下单用，2026-11-18）。</summary>
+        private bool AmmoStockShort()
+        {
+            if (_player.Class != MirClass.Taoist) return false;
+
+            foreach ((EquipmentSlot slot, MagicType _) in BotSkills.AmmoSkills(_player))
+            {
+                if (BotSkills.CountAmmoStock(_player, slot) < AmmoTarget) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -4326,6 +4934,9 @@ namespace Server.Bots
             if (success) BotLog.Info(Profile.Seq, restockLine);
             else BotLog.Warn(Profile.Seq, restockLine);
 
+            // 补给收尾 → 下一跳去刷怪点时打一行背包快照（2026-11-18 用户要求）。
+            _logBagOnNextHunt = true;
+
             // 办完事不一定要立刻出城：按概率在城里待一会儿（P2-3）。
             LeaveTownOrStroll(detail);
         }
@@ -4392,9 +5003,25 @@ namespace Server.Bots
 
                 _blockedCount++;
 
-                if (_blockedCount > 20)
+                if (_harvestBlockedSince == default) _harvestBlockedSince = SEnvir.Now;
+
+                // 时间判据（3 秒）而不是按帧计数：主循环 80 帧/秒，20 帧只有 0.25 秒，
+                // 人群里稍一拥挤就误判「走不到」，然后立刻重进、再误判（2026-11-18）。
+                if (SEnvir.Now - _harvestBlockedSince >= TimeSpan.FromSeconds(3))
                 {
-                    FinishHarvest(string.Format("走不到尸体（{0} 格）", distance));
+                    // 记入排除表：60 秒内不再选这具，去挖别的或直接打怪。
+                    _harvestExclude = corpse;
+                    _harvestExcludeExpire = SEnvir.Now.AddSeconds(60);
+                    _harvestBlockedSince = default;
+
+                    bool log = SEnvir.Now >= _nextHarvestBlockedLogTime;
+
+                    if (log) _nextHarvestBlockedLogTime = SEnvir.Now.AddSeconds(10);
+
+                    FinishHarvest(log
+                        ? string.Format("走不到尸体（{0} 格），60 秒内不再试这具", distance)
+                        : null);
+
                     return;
                 }
 
@@ -4441,21 +5068,22 @@ namespace Server.Bots
             // 引擎会在拿到东西后把条目从 Drops 里移除，下一轮开头就能判定出来。
         }
 
-        /// <summary>挖取收尾。</summary>
+        /// <summary>挖取收尾。<paramref name="detail"/> 为 null 时不写日志（高频路径节流用）。</summary>
         private void FinishHarvest(string detail)
         {
             _harvestTarget = null;
             _target = null;
+            _harvestBlockedSince = default;
 
             HarvestCount++;
             _player.Character.BotHarvests++;
 
-            BotLog.Debug(Profile.Seq, detail);
+            if (detail != null) BotLog.Debug(Profile.Seq, detail);
 
             // 用户 2026-11-15 观察：一具尸体挖完就进 Idle，附近其它可挖尸体（鸡/猪/牛）
             // 与遗留掉落被留在原地。清完怪应把可挖的全挖、可捡的全捡。
             // 顺序：先查附近其它可挖尸体（继续挖），再查遗留掉落（继续捡），都没有才走。
-            MonsterObject moreCorpse = BotPerception.FindHarvestableCorpse(_player, LootRadius);
+            MonsterObject moreCorpse = FindHarvestableCorpse();
 
             if (moreCorpse != null)
             {
@@ -4472,7 +5100,19 @@ namespace Server.Bots
                 return;
             }
 
-            EnterState(BotState.Idle, detail, TimeSpan.FromSeconds(2));
+            EnterState(BotState.Idle, detail ?? "尸体挖完了", TimeSpan.FromSeconds(2));
+        }
+
+        /// <summary>
+        /// 找一个可挖的尸体，跳过「近期走不到」的那具（2026-11-18）。
+        /// 排除项过期后自动失效，不会永久拉黑一具其实只是暂时被堵住的尸体。
+        /// </summary>
+        private MonsterObject FindHarvestableCorpse()
+        {
+            if (_harvestExclude != null && SEnvir.Now >= _harvestExcludeExpire)
+                _harvestExclude = null;
+
+            return BotPerception.FindHarvestableCorpse(_player, LootRadius, _harvestExclude);
         }
 
         /// <summary>
@@ -4749,11 +5389,50 @@ namespace Server.Bots
             // 夜行人 因为目的地图规划失败，每 0.5 秒刷一条「回 比奇城堡 的路线规划失败」。
             if (SEnvir.Now < _sellCooldown) return false;
 
+            // 2.5) 上一趟卖货没收干净（当前 NPC 不收剩下的类型）→ 换一家收购商继续卖。
+            //
+            // 2026-11-18 背包快照实测：卖完肉就收尾出城，背包里还躺着 8~10 件**可卖**装备
+            // 和几十个可卖材料 —— 而下面三条触发条件（空格≤8 / 没钱 / 负重满）都不成立，
+            // 于是这些货一直跟着假人练级，直到背包被塞满才想起卖。
+            // 用户要求「卖完身上的物品再去刷怪点」，所以这里补一条「收尾后继续卖」。
+            if (_sellPending && HasSellableItems())
+            {
+                _tradeIsRepair = false;
+
+                if (_sellPendingAttempts >= 3)
+                {
+                    // 连换三家都卖不掉（收购页对不上 / 走不到），先放着，别无限跑。
+                    _sellPending = false;
+                    _sellPendingAttempts = 0;
+                    _sellCooldown = SEnvir.Now.AddSeconds(60);
+
+                    BotLog.Debug(Profile.Seq, "剩下的可卖物品连续 3 趟没卖掉，先放着");
+                }
+                else if (TrySetTradeTargetForAnySellable(out _))
+                {
+                    _sellPending = false;      // 已消费，收尾时按当时背包重新置位
+                    _sellPendingAttempts++;
+
+                    EnterState(BotState.Trade, "还有货没卖完，换一家收购商", TimeSpan.FromMinutes(5));
+
+                    return true;
+                }
+                else
+                {
+                    // 全图没有收这些货的 NPC：放弃这一轮，20 秒内不再重试。
+                    _sellPending = false;
+                    _sellPendingAttempts = 0;
+                    _sellCooldown = SEnvir.Now.AddSeconds(20);
+
+                    BotLog.Debug(Profile.Seq, "剩下的可卖物品找不到收购商，先放着");
+                }
+            }
+
             if (free <= 8 && HasSellableItems())
             {
                 _tradeIsRepair = false;
 
-                if (SetTradeTarget(SellableItemType()))
+                if (TrySetTradeTargetForAnySellable(out _))
                 {
                     EnterState(BotState.Trade, "背包快满了，回城卖东西", TimeSpan.FromMinutes(3));
 
@@ -4773,7 +5452,7 @@ namespace Server.Bots
             {
                 _tradeIsRepair = false;
 
-                if (SetTradeTarget(SellableItemType()))
+                if (TrySetTradeTargetForAnySellable(out _))
                 {
                     EnterState(BotState.Trade, "没钱买药了，回城卖东西", TimeSpan.FromMinutes(3));
 
@@ -4795,7 +5474,7 @@ namespace Server.Bots
             {
                 _tradeIsRepair = false;
 
-                if (SetTradeTarget(SellableItemType()))
+                if (TrySetTradeTargetForAnySellable(out _))
                 {
                     EnterState(BotState.Trade, "负重快满了，回城卖东西", TimeSpan.FromMinutes(3));
 
@@ -4950,6 +5629,10 @@ namespace Server.Bots
             // 回城卷：回城的工具，绝不能卖。
             if (BotActions.IsTownScroll(item)) return true;
 
+            // 弹药（护身符 / 毒药粉）：道士的技能消耗品，卖了自己就断弹（2026-11-18）。
+            // 补货目标提到 10000 份后，大部分弹药存在背包里，不挡住就会被当杂货卖掉。
+            if (item.Info.ItemType == ItemType.Amulet || item.Info.ItemType == ItemType.Poison) return true;
+
             if (item.Info.ItemType != ItemType.Consumable) return false;
 
             bool heals = item.Info.Stats[Stat.Health] > 0;
@@ -5097,6 +5780,53 @@ namespace Server.Bots
         }
 
         /// <summary>设置本轮交易目标（类型 + 目的地地图）。返回 false = 没地方卖，别白跑。</summary>
+        /// <summary>
+        /// 依次试背包里**存在的**可卖类型，返回第一个「真的有人收」的类型（2026-11-18）。
+        /// <para>
+        /// 原来只挑一个类型（<see cref="SellableItemType"/>）就去 <c>SetTradeTarget</c>：
+        /// 那一类没人收（材料 <c>Nothing</c> 尤其明显，<see cref="ResolveTradeDestination"/>
+        /// 对它是直接返回绑定点、不校验有没有收购商）→ 整趟不卖，
+        /// 而背包里其实还有武器/护甲/肉类能卖。实测日志「卖不掉的货」里
+        /// 布衣、铁剑、食人花果实一起挂着，就是这个原因。
+        /// </para>
+        /// </summary>
+        private bool TrySetTradeTargetForAnySellable(out ItemType picked)
+        {
+            picked = ItemType.Nothing;
+
+            Dictionary<ItemType, SellableGroup> groups = SellableTypeCounts();
+
+            if (groups.Count == 0) return false;
+
+            ItemType first = SellableItemType();
+
+            List<ItemType> order = new List<ItemType>(groups.Count);
+
+            if (first != ItemType.Nothing && groups.ContainsKey(first)) order.Add(first);
+
+            foreach (ItemType type in groups.Keys)
+            {
+                if (type != first) order.Add(type);
+            }
+
+            foreach (ItemType type in order)
+            {
+                if (!SetTradeTarget(type)) continue;
+
+                // 目的地要有**真的收这种货**的 NPC，否则跑过去也是空手而归。
+                Map dest = _tradeDest == null ? null : SEnvir.GetMap(_tradeDest);
+
+                if (dest != null && BotPerception.FindTrader(dest, type) == null) continue;
+
+                picked = type;
+                return true;
+            }
+
+            _tradeDest = null;
+
+            return false;
+        }
+
         private bool SetTradeTarget(ItemType type)
         {
             _tradeItemType = type;
@@ -5488,11 +6218,10 @@ namespace Server.Bots
         /// </summary>
         private bool NeedsMoreSelling()
         {
-            long capacity = _player.Stats[Stat.BagWeight];
-
-            if (capacity > 0 && _player.BagWeight >= capacity * 9 / 10) return true;
-
-            return BotPerception.FreeInventorySlots(_player) <= 5;
+            // 只要背包还有可卖物品（肉/装备/材料），就继续卖下一类 —— 不再要求负重≥90%或空格≤5。
+            // 用户 2026-11-18 反馈：补给后回刷怪点背包还有一堆装备/肉没卖掉，就是旧判据太保守，
+            // 卖完一类（比如肉）就收尾，装备/材料留在背包里带回练级点。
+            return HasSellableItems();
         }
 
         /// <summary>
@@ -5578,6 +6307,17 @@ namespace Server.Bots
                 if (item.Info.ItemType != itemType) continue;
                 if (!item.Info.CanSell) continue;
                 if (item.Count <= 0) continue;
+
+                // 锁定 = 防手滑，真人中键就能解（2026-11-18）。
+                // 卖货前先解锁，否则这些货永远卖不掉 —— 引擎 NPCSell 直接拒收 Locked。
+                // 零价（Worthless）/ 婚戒 / 要留的药不解，交给下面的过滤挡掉。
+                if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked)
+                {
+                    bool worthUnlocking = (item.Flags & (UserItemFlags.Worthless | UserItemFlags.Marriage)) == UserItemFlags.None
+                        && !IsKeepItem(item, budget);
+
+                    if (!worthUnlocking || !BotActions.TryUnlockItem(_player, i)) continue;
+                }
 
                 if (BotItemRules.IsSellBlocked(item.Flags)) continue;
 
@@ -5807,7 +6547,20 @@ namespace Server.Bots
             // 修理要看「修完还有没有别的部位见底」：武器 / 首饰 / 防具分属三家店，
             // 一趟只能修一类。还有别的就只给 60 秒，让它接着跑下一家；都修好了才给 10 分钟。
             if (_tradeIsRepair) _repairCooldown = SEnvir.Now.AddSeconds(HasBrokenEquipment() ? 60 : 600);
-            else _sellCooldown = SEnvir.Now.AddSeconds(20);
+            // 还有可卖物品（这个 NPC 收不了、要换下一家）就只等 2 秒，尽快去下一个收购商；
+            // 全卖完了才按常规 20 秒冷却。否则「卖完肉收尾 → 20 秒后才去卖装备」太慢。
+            else _sellCooldown = SEnvir.Now.AddSeconds(HasSellableItems() ? 2 : 20);
+
+            // 收尾时还有可卖物品 → 冷却结束后换一家收购商继续卖（2026-11-18 用户要求：
+            // 「卖完身上的物品再去刷怪点」）。卖成功了就把失败计数清零。
+            if (ok) _sellPendingAttempts = 0;
+
+            _sellPending = HasSellableItems();
+
+            // 正常收尾也清掉「被反复打断」的计数（2026-11-18）。
+            _tradeInterruptCount = 0;
+            _tradeInterruptSince = default;
+
             _blockedCount = 0;
             _target = null;
             _tradeDest = null;
@@ -5819,6 +6572,9 @@ namespace Server.Bots
             // 但失败必须留痕 —— 「没有收 Meat 的商人」曾经一个字都没有，只能靠面板猜。
             if (ok) BotLog.Info(Profile.Seq, detail);
             else BotLog.Warn(Profile.Seq, detail);
+
+            // 卖货收尾 → 下一跳去刷怪点时打一行背包快照（2026-11-18 用户要求）。
+            _logBagOnNextHunt = true;
 
             // 卖完 / 修完同样按概率在城里待一会儿（P2-3）。
             LeaveTownOrStroll(detail);
@@ -6474,8 +7230,11 @@ namespace Server.Bots
                 // 补给回城途中被攻击切 Fight 还击，战斗结束后不管流转到哪个状态
                 // （击杀/脱离/超时/换点），都先回到 Restock 把补货做完（战利品稍后再捡），
                 // 避免「回城 ↔ 还击」反复横跳。接续后重置遇袭位置判据，重给补货时限。
-                if (_interruptedState == BotState.Restock && State == BotState.Fight)
+                if ((_interruptedState == BotState.Restock || _interruptedState == BotState.Trade)
+                    && State == BotState.Fight)
                 {
+                    BotState resume = _interruptedState;
+
                     _interruptedState = default;
                     _restockFleeCheckPos = _player?.CurrentLocation ?? default;
                     _restockFleeStuckCount = 0;
@@ -6485,8 +7244,8 @@ namespace Server.Bots
                     _restockResumeUntil = SEnvir.Now.AddSeconds(RestockResumeCooldownSeconds);
                     _restockStuckSince = SEnvir.Now;
 
-                    state = BotState.Restock;
-                    detail = "战斗结束，继续回城补给";
+                    state = resume;
+                    detail = resume == BotState.Trade ? "战斗结束，继续去卖货" : "战斗结束，继续回城补给";
                     duration = TimeSpan.FromMinutes(5);
                 }
 
@@ -6506,6 +7265,17 @@ namespace Server.Bots
             LastDetail = detail;
             StateSince = SEnvir.Now;
             _stateDeadline = SEnvir.Now + duration;
+
+            // 每轮补给重新记「怎么回城的」（2026-11-18）。
+            if (state == BotState.Restock) _restockTravelLogged = false;
+
+            // 背包快照钩子（2026-11-18 用户要求）：卖完货 / 补完给 → 去刷怪点这一跳，
+            // 打一行背包内容，用来判断货是不是卖干净了（只该剩药和卷）。
+            if (state == BotState.GoHunt && _logBagOnNextHunt)
+            {
+                _logBagOnNextHunt = false;
+                BotLog.Info(Profile.Seq, "补给后背包：" + DescribeBag());
+            }
         }
 
         private static string MonsterName(MonsterObject monster)

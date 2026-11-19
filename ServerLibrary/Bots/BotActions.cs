@@ -86,6 +86,42 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 解开背包里某件物品的「锁定」标记（等同真人客户端的中键解锁，2026-11-18）。
+        /// <para>
+        /// 引擎 <c>NPCSell</c> 会直接拒收 <c>Locked</c> 的物品（<c>PlayerObject.NPCSell</c> 里
+        /// <c>(item.Flags &amp; UserItemFlags.Locked) == UserItemFlags.Locked</c> 就 return），
+        /// 而 <c>NPCBuy</c> 给所有买来的东西都打了 <c>Locked</c> —— 不解锁这些货永远卖不掉。
+        /// </para>
+        /// <para>
+        /// 注意：这里只能解 <c>Locked</c>。<c>Bound</c> / <c>Worthless</c> 是发物品时打上的，
+        /// 客户端中键同样解不掉；<c>Worthless</c> 的物品引擎一律拒收（价格 0）。
+        /// </para>
+        /// </summary>
+        /// <returns>true = 这一格现在不再是 Locked（本来就没锁也算 true）。</returns>
+        public static bool TryUnlockItem(PlayerObject player, int slot)
+        {
+            if (player?.Inventory == null) return false;
+            if (slot < 0 || slot >= player.Inventory.Length) return false;
+
+            UserItem item = player.Inventory[slot];
+
+            if (item == null) return false;
+
+            if ((item.Flags & UserItemFlags.Locked) != UserItemFlags.Locked) return true;
+
+            player.ItemLock(new C.ItemLock
+            {
+                GridType = GridType.Inventory,
+                SlotIndex = slot,
+                Locked = false,
+            });
+
+            item = player.Inventory[slot];
+
+            return item != null && (item.Flags & UserItemFlags.Locked) != UserItemFlags.Locked;
+        }
+
+        /// <summary>
         /// 喝一瓶恢复指定属性的药（红药传 <see cref="Stat.Health"/>，蓝药传 <see cref="Stat.Mana"/>）。
         /// 走 <c>ItemUse</c> 的同一入口，冷却/负重与真人一致。
         /// </summary>

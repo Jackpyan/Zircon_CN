@@ -192,6 +192,54 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 弹药**总库存**（装备槽 + 背包）—— 补给判据用（2026-11-18）。
+        /// <para>
+        /// 为什么不能只看装备槽：装备槽是 <c>UserItem</c>，合并受 <c>Info.StackSize</c> 限制，
+        /// 槽里装不下 10000 份，剩下的只能躺在背包。只看槽会让补给判据永远认为「缺弹药」，
+        /// 每轮补给都再买一批，越买越多。
+        /// </para>
+        /// </summary>
+        public static int CountAmmoStock(PlayerObject player, EquipmentSlot slot)
+        {
+            ItemType expect = slot == EquipmentSlot.Poison ? ItemType.Poison : ItemType.Amulet;
+
+            int total = CountEquip(player, slot);
+
+            if (player?.Inventory == null) return total;
+
+            foreach (UserItem item in player.Inventory)
+            {
+                if (item?.Info == null) continue;
+                if (item.Info.ItemType != expect) continue;
+
+                total += (int)Math.Max(0, item.Count);
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// 弹药库存低于阈值（装备槽 + 背包，2026-11-18）。
+        /// 与 <see cref="HasAmmoBelow"/> 的区别：那个只看装备槽，适合「能不能立刻放技能」；
+        /// 这个看总库存，适合「该不该回城补弹药」。
+        /// </summary>
+        public static bool HasAmmoStockBelow(PlayerObject player, int threshold)
+        {
+            if (player?.Character == null) return false;
+
+            foreach (KeyValuePair<MagicType, (EquipmentSlot Slot, int Count)> pair in AmmoCost)
+            {
+                if (!player.GetMagic(pair.Key, out MagicObject _)) continue;
+
+                // 槽空不代表没库存（可能全在背包），所以这里不看槽里有没有东西，
+                // 直接比总库存 —— 否则「槽空 + 背包 9000 份」会被判成缺弹，反复回城。
+                if (CountAmmoStock(player, pair.Value.Slot) < threshold) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 法师的**群攻**技能 —— 一次能打多个目标。
         /// <para>
         /// 判定依据是引擎实现，不是猜的：这些魔法的 <c>MagicCast</c> 里都在调

@@ -63,6 +63,11 @@ namespace Server.Bots
                 // 实测砍两分钟等级还卡在 1 级 —— 永远不打。
                 if (monster is Guard) continue;
 
+                // 宠物（道士骷髅 / 法师宝宝）不打（2026-11-18 用户反馈）：
+                // 打宠物没有经验、没有掉落，还会跟宠物主人（假人/真人）结仇，
+                // 现场表现是「几个假人围着一只骷髅砍半天」。
+                if (monster.PetOwner != null) continue;
+
                 // BOSS 留给真人（P4-2）。
                 if (skipBoss && info.IsBoss) continue;
 
@@ -142,7 +147,11 @@ namespace Server.Bots
 
                 if (distance > radius || distance >= bestDistance) continue;
 
-                if (!IsWorthPickingUp(item)) continue;
+                // 归属校验（2026-11-18）：别人的掉落引擎会拦，选中它只会「捡不到」，
+                // 还会挡住自己更远的掉落物（100 假人同图时满地别人的东西）。
+                if (player != null && !item.CanPickUpItem(player)) continue;
+
+                if (!IsWorthPickingUp(item, player)) continue;
                 if (IsPotionSurplus(player, item.Item)) continue;
 
                 best = item;
@@ -177,7 +186,10 @@ namespace Server.Bots
 
                 if (distance > radius || distance >= bestDistance) continue;
 
-                if (!IsWorthPickingUp(item)) continue;
+                // 归属校验（2026-11-18）：同 FindNearestLootExcluding。
+                if (player != null && !item.CanPickUpItem(player)) continue;
+
+                if (!IsWorthPickingUp(item, player)) continue;
                 if (IsPotionSurplus(player, item.Item)) continue;
 
                 best = item;
@@ -200,6 +212,9 @@ namespace Server.Bots
             {
                 if (!(ob is MonsterObject monster)) continue;
                 if (monster.Dead || monster.Node == null) continue;
+
+                // 宠物不算怪（2026-11-18）。
+                if (monster.PetOwner != null) continue;
 
                 if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
 
@@ -229,6 +244,9 @@ namespace Server.Bots
                 if (!(ob is MonsterObject monster)) continue;
                 if (monster.Dead || monster.Node == null || !monster.Visible) continue;
 
+                // 宠物咬自己不算威胁（2026-11-18）：打回去只会跟宠物主人结仇，也没有收益。
+                if (monster.PetOwner != null) continue;
+
                 // 怪的目标必须正好是该玩家（正在被打）。
                 if (!ReferenceEquals(monster.Target, player)) continue;
 
@@ -257,6 +275,9 @@ namespace Server.Bots
             {
                 if (!(ob is MonsterObject monster)) continue;
                 if (monster.Dead || monster.Node == null) continue;
+
+                // 宠物不算「怪」（2026-11-18）：否则旁边有只骷髅就误判成群攻场景。
+                if (monster.PetOwner != null) continue;
 
                 if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
 
@@ -392,7 +413,39 @@ namespace Server.Bots
             return potionWeight >= capacity * 40 / 100;
         }
 
-        public static bool IsWorthPickingUp(ItemObject item)
+        /// <summary>
+        /// 分级拾取的等级阈值（用户 2026-11-16 现场观察）：
+        /// <para>
+        /// <b>1 ~ 阈值-1 级（前期积累金币）</b>：所有能卖钱的掉落都捡 —— 包括矿石、书、卷轴、
+        /// 花、宠物粮等低价值杂物，只要 <see cref="ItemInfo.Price"/> &gt; 0 就捡，最大化金币积累。
+        /// 前期背包格充足、负重低，杂物卖钱比留在地上强。
+        /// </para>
+        /// <para>
+        /// <b>阈值及以上（选择性捡）</b>：过滤掉低价值杂物（矿石/书/卷轴/花/宠物粮…），
+        /// 只捡装备类、药水、货币、以及有收购价的 Nothing 类型（宝石/圣物等高价值物），
+        /// 把有限的背包格留给高价值战利品，避免被杂物占满捡不到好装备。
+        /// </para>
+        /// </summary>
+        public const int LootSelectiveLevel = 30;
+
+        /// <summary>
+        /// 判断一个掉落物值不值得捡。
+        /// <para>
+        /// P1 修的硬伤：原先 <c>FindNearestLoot</c> 不做任何筛选，见什么捡什么 ——
+        /// 垃圾、任务物品、绑定物全都往 48 格背包里塞，塞满后假人就卡死在拾取态。
+        /// 这里的规则是「能卖钱 / 能用 / 是药」才捡，其余留在地上（真人也捡不了，掉了也不心疼）。
+        /// </para>
+        /// <para>
+        /// 货币（<see cref="ItemType.Currency"/>）必须捡：它不进背包、直接进
+        /// <c>UserCurrency</c>，是假人唯一的金币收入来源。
+        /// </para>
+        /// <para>
+        /// <b>分级拾取</b>（2026-11-16）：<paramref name="player"/> 为 null 或等级低于
+        /// <see cref="LootSelectiveLevel"/> 时，所有 Price&gt;0 的都捡（前期积累金币）；
+        /// 等级达到阈值后，低价值杂物不再捡（见 <see cref="LootSelectiveLevel"/>）。
+        /// </para>
+        /// </summary>
+        public static bool IsWorthPickingUp(ItemObject item, PlayerObject player = null)
         {
             if (item?.Item?.Info == null) return false;
 
@@ -404,18 +457,16 @@ namespace Server.Bots
             // 任务物品不捡。
             if ((userItem.Flags & UserItemFlags.QuestItem) == UserItemFlags.QuestItem) return false;
 
+            // 货币直接进角色货币表，不占背包格 —— 必须捡。
+            if (userItem.Info.ItemType == ItemType.Currency) return true;
+
+            // 药要捡：回城买药要钱、要时间，路上捡到的先用着。
+            if (userItem.Info.ItemType == ItemType.Consumable || userItem.Info.ItemType == ItemType.Meat)
+                return true;
+
+            // 装备要捡：P1-4 会自动换上更好的，穿不上的还能卖钱。
             switch (userItem.Info.ItemType)
             {
-                // 货币直接进角色货币表，不占背包格 —— 必须捡。
-                case ItemType.Currency:
-                    return true;
-
-                // 药要捡：回城买药要钱、要时间，路上捡到的先用着。
-                case ItemType.Consumable:
-                case ItemType.Meat:
-                    return true;
-
-                // 装备要捡：P1-4 会自动换上更好的，穿不上的还能卖钱。
                 case ItemType.Weapon:
                 case ItemType.Armour:
                 case ItemType.Helmet:
@@ -428,20 +479,20 @@ namespace Server.Bots
                 case ItemType.Emblem:
                 case ItemType.SocketGem:
                     return true;
-
-                // 无类型物品（潘夜宝石、暗黑潘夜宝石、圣物、各类材料…）：
-                // 库里有 104 个 Nothing 物品，既有值钱的（潘夜宝石 600、暗黑潘夜宝石 1400、
-                // 圣物 1800、结晶暗黑矿石 1800），也有 0 价格杂物（魔方/宝珠/饰物/钥匙/碎片…）。
-                // 只捡有收购价的：能卖钱或能用；0 价格的捡了只占背包格，不捡。
-                // 任务物品已被上面的 QuestItem flag 拦截，不会误捡。
-                case ItemType.Nothing:
-                    return userItem.Info.Price > 0;
-
-                default:
-                    // 其余（矿石、书、卷轴、花、宠物食粮…）价值低或用不上，
-                    // 捡了只占格子；假人不做炼矿、不做读书这类玩法。
-                    return false;
             }
+
+            // 低等级（前期积累金币）：只要 Price > 0 就捡，什么能卖钱就捡什么。
+            // Nothing 类型（潘夜宝石、圣物、材料…）和低价值类型（矿石/书/卷轴/花/宠物粮…）
+            // 前期都能卖钱，有收购价就捡，最大化金币积累。
+            if (player == null || player.Level < LootSelectiveLevel)
+                return userItem.Info.Price > 0;
+
+            // 高等级（选择性捡）：Nothing 类型有收购价就捡（宝石/圣物等高价值物）。
+            if (userItem.Info.ItemType == ItemType.Nothing)
+                return userItem.Info.Price > 0;
+
+            // 其余低价值类型（矿石/书/卷轴/花/宠物粮/黑暗石/精炼…）：不捡，占格且假人用不上。
+            return false;
         }
 
         /// <summary>血量百分比（0~100）。</summary>
@@ -1184,6 +1235,54 @@ namespace Server.Bots
         /// </para>
         /// </summary>
         public static MonsterObject FindHarvestableCorpse(PlayerObject player, int radius)
+            => FindHarvestableCorpse(player, radius, null);
+
+        /// <summary>
+        /// 找最近的**金币**掉落（2026-11-18 用户现场：地上有金币没捡）。
+        /// <para>
+        /// 单独一条通道的原因：金币不占格、不占重，值得比普通掉落多跑几格；
+        /// 而普通掉落仍按 <c>LootRadius</c> 筛，不能因为金币把垃圾也一起拉进捡取范围。
+        /// 归属校验与普通掉落一致（别人的金币引擎会拦）。
+        /// </para>
+        /// </summary>
+        public static ItemObject FindNearestCurrency(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            ItemObject best = null;
+            int bestDistance = int.MaxValue;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is ItemObject item)) continue;
+                if (item.Node == null) continue;
+                if (item.Item?.Info == null) continue;
+                if (item.Item.Info.ItemType != ItemType.Currency) continue;
+
+                int distance = BotNavigator.Distance(player.CurrentLocation, item.CurrentLocation);
+
+                if (distance > radius || distance >= bestDistance) continue;
+
+                if (!item.CanPickUpItem(player)) continue;
+
+                best = item;
+                bestDistance = distance;
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// 找一具可挖的尸体，跳过 <paramref name="exclude"/>（2026-11-18）。
+        /// <para>
+        /// 为什么要能排除：实测每 40 分钟出现 7791 次「走不到尸体（3~5 格）」——
+        /// 假人每 0.3 秒重进一次挖取态、试 20 帧走不到、收尾，下一帧又选中<b>同一具</b>，
+        /// 表现就是站在尸体旁发呆/来回蹭。排除 60 秒后它会去挖别的、或者干脆去打怪。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindHarvestableCorpse(PlayerObject player, int radius, MonsterObject exclude)
         {
             Map map = player?.CurrentMap;
 
@@ -1195,6 +1294,7 @@ namespace Server.Bots
             foreach (MapObject ob in map.Objects)
             {
                 if (!(ob is MonsterObject monster)) continue;
+                if (monster == exclude) continue;
 
                 // 必须是「需挖取」的怪，且身上还挂着属于这个账号的掉落。
                 if (!monster.NeedHarvest) continue;
