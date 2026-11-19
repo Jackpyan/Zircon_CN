@@ -187,6 +187,20 @@
     }
     else
     {
+        @* 假人列表过滤（2026-11-18 用户要求）：100 个假人里翻找太费劲，
+           支持按序号 / 角色 / 职业 / 地图 / 状态 / 最近动作 / 错误 任意关键字过滤。 *@
+        <div class="bot-filter-bar">
+            <input class="bot-filter-input" @bind="_botFilter" @bind:event="oninput"
+                   placeholder="过滤：序号 / 角色 / 职业 / 地图 / 状态 / 最近动作 / 错误…" />
+            <span class="text-muted" style="font-size:11px;white-space:nowrap;">
+                @FilteredRows.Count() / @Rows.Length 个
+            </span>
+            @if (!string.IsNullOrWhiteSpace(_botFilter))
+            {
+                <button class="bot-filter-clear" @onclick="() => _botFilter = string.Empty">清空</button>
+            }
+        </div>
+
         <div class="table-panel standalone">
             <div class="table-scroll">
                 <table class="admin-table bot-live-table">
@@ -213,7 +227,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (BotSnapshot row in Rows)
+                        @foreach (BotSnapshot row in FilteredRows)
                         {
                             BotSnapshot capturedRow = row;
 
@@ -882,6 +896,12 @@
                 <option value="ERROR">Error</option>
             </select>
         </div>
+        @* 日志内容过滤（2026-11-18 用户要求）：按关键字在整行里找，例如「补毒」「捡不到」。 *@
+        <div class="config-field" style="min-width:200px;flex:1;">
+            <span>内容</span>
+            <input type="text" @bind="_logTextFilter" @bind:event="oninput" @bind:after="RefreshLogs"
+                   placeholder="包含关键字，如 补给 / 补毒 / 捡不到…" />
+        </div>
         <RadzenButton Text="@(_logPaused ? "恢复滚动" : "暂停滚动")"
                       Icon="@(_logPaused ? "play_arrow" : "pause")"
                       ButtonStyle="@(_logPaused ? ButtonStyle.Success : ButtonStyle.Light)"
@@ -952,6 +972,7 @@
                 <button class="@(_detailTab == 0 ? "active" : "")" @onclick="() => _detailTab = 0">角色</button>
                 <button class="@(_detailTab == 1 ? "active" : "")" @onclick="() => _detailTab = 1">属性</button>
                 <button class="@(_detailTab == 2 ? "active" : "")" @onclick="() => _detailTab = 2">技能</button>
+                <button class="@(_detailTab == 3 ? "active" : "")" @onclick="() => _detailTab = 3">背包</button>
             </div>
 
             @if (_detail == null)
@@ -998,6 +1019,17 @@
                                         {
                                             <i class="doll-worn"></i>
                                         }
+                                        @* 弹药（护身符 / 毒药粉）装进槽位后背包里看不到，数量只能在槽位角上标（2026-11-18）。
+                                           样式写成内联：不依赖 app.css 是否被浏览器缓存，且字号压到 9px + 紧凑数字（1万），
+                                           否则 10000 这种五位数会撑满 44px 的格子、盖住图标。 *@
+                                        @if (slot.ShowCount)
+                                        {
+                                            <span class="doll-slot-count"
+                                                  style="position:absolute;right:1px;bottom:0;padding:0 2px;
+                                                         border-radius:2px;background:rgba(0,0,0,.72);
+                                                         color:#ffe6a8;font:600 9px/1.25 var(--mono,monospace);
+                                                         text-shadow:0 0 2px #000;pointer-events:none;">@CountText(slot.Count)</span>
+                                        }
                                     }
                                     else
                                     {
@@ -1036,7 +1068,7 @@
                                 @ItemIcon(_detailSlot.Image, _detailSlot.ItemName)
                                 <div>
                                     <b>@_detailSlot.ItemName</b>
-                                    <small>@SlotText(_detailSlot.SlotName) · @_detailSlot.TypeName</small>
+                                    <small>@SlotText(_detailSlot.SlotName)@(SlotText(_detailSlot.SlotName) == _detailSlot.TypeName ? "" : " · " + _detailSlot.TypeName)</small>
                                 </div>
                             </div>
 
@@ -1065,6 +1097,11 @@
 
                                 <div><span>重量</span><b>@_detailSlot.Weight</b></div>
                                 <div><span>价格</span><b>@_detailSlot.Price.ToString("N0")</b></div>
+
+                                @if (_detailSlot.ShowCount)
+                                {
+                                    <div><span>剩余数量</span><b>@_detailSlot.Count.ToString("N0")</b></div>
+                                }
 
                                 @if (!string.IsNullOrEmpty(_detailSlot.FlagsText))
                                 {
@@ -1114,7 +1151,7 @@
                     }
                 </div>
             }
-            else
+            else if (_detailTab == 2)
             {
                 @* ---------- 技能 tab ---------- *@
                 <div class="bot-detail-body">
@@ -1132,6 +1169,44 @@
                             @foreach (BotDetail.BotDetailMagic magic in _detail.Magics)
                             {
                                 <div><span>@magic.Name</span><b>Lv @magic.Level</b></div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            else if (_detailTab == 3)
+            {
+                @* ---------- 背包 tab（2026-11-16，用户现场观察）---------- *@
+                <div class="bot-detail-body">
+                    <div class="detail-summary">
+                        <div><span>背包物品</span><b>@_detail.BagItems.Count 件</b></div>
+                        <div><span>已用格子</span><b>@_detail.UsedSlots / @_detail.SlotCount</b></div>
+                        <div><span>负重</span><b>@_detail.BagWeight / @_detail.MaxBagWeight</b></div>
+                    </div>
+
+                    @if (_detail.BagItems.Count == 0)
+                    {
+                        <p style="opacity:.7;padding:8px 4px;">背包是空的。</p>
+                    }
+                    else
+                    {
+                        <div class="detail-attrs">
+                            @foreach (BotDetail.BotDetailBagItem bag in _detail.BagItems)
+                            {
+                                <div class="bag-row">
+                                    @ItemIcon(bag.Image, bag.ItemName)
+                                    <span class="bag-name">@bag.ItemName</span>
+                                    <span class="bag-type">@bag.TypeName</span>
+                                    @if (bag.Count > 1)
+                                    {
+                                        <span class="bag-count">×@bag.Count</span>
+                                    }
+                                    <span class="bag-meta">重@(bag.TotalWeight) · 价@(bag.TotalPrice)</span>
+                                    @if (!string.IsNullOrEmpty(bag.FlagsText))
+                                    {
+                                        <span class="bag-flags">@bag.FlagsText</span>
+                                    }
+                                </div>
                             }
                         </div>
                     }
@@ -1198,6 +1273,34 @@
     private int _tab = TabOverview;
 
     private BotSnapshot[] Rows { get; set; } = Array.Empty<BotSnapshot>();
+
+    /// <summary>假人列表的自定义过滤关键字（2026-11-18，空 = 不过滤）。</summary>
+    private string _botFilter = string.Empty;
+
+    /// <summary>
+    /// 过滤后的假人列表：序号 / 角色 / 职业 / 地图 / 状态 / 最近动作 / 最后错误，
+    /// 任意字段包含关键字即命中（忽略大小写）。
+    /// </summary>
+    private IEnumerable<BotSnapshot> FilteredRows
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_botFilter)) return Rows;
+
+            string q = _botFilter.Trim();
+
+            return Rows.Where(r =>
+                r.Seq.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.CharacterName ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || ClassText(r.ClassName ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.ClassName ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.MapName ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.State ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.Phase ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.Detail ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.LastError ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
     private BotOverview Overview { get; set; } = BotOverview.Empty;
 
     /// <summary>性能指标（P4-5）：帧耗时 / 熔断状态 / 跨图与发言计数。</summary>
@@ -1332,6 +1435,9 @@
 
     /// <summary>按级别过滤（空 = 全部）。取值是日志里的标签前缀：DEBUG / INFO / WARN / ERROR。</summary>
     private string _logLevelFilter = string.Empty;
+
+    /// <summary>按日志内容过滤（空 = 全部，2026-11-18）：整行包含关键字即命中。</summary>
+    private string _logTextFilter = string.Empty;
 
     /// <summary>
     /// 暂停滚动：排障时日志每秒都在动，滚到一半就被顶走。
@@ -1750,6 +1856,13 @@
             // 所以只匹配前缀 "[WARN" 而不是完整 "[WARN ]"。
             string tag = "[" + _logLevelFilter;
             query = query.Where(x => x.Contains(tag, StringComparison.Ordinal));
+        }
+
+        // 内容过滤（2026-11-18）：整行包含关键字即可，大小写不敏感。
+        if (!string.IsNullOrWhiteSpace(_logTextFilter))
+        {
+            string keyword = _logTextFilter.Trim();
+            query = query.Where(x => x.Contains(keyword, StringComparison.OrdinalIgnoreCase));
         }
 
         _logLines = query.TakeLast(300).ToArray();
@@ -2270,6 +2383,17 @@
         "Assassin" => "刺客",
         _ => className,
     };
+
+    /// <summary>
+    /// 槽位角标的数字写法（2026-11-18）：装备槽只有 44px，「10000」这种五位数会撑满格子盖住图标，
+    /// 所以按「万」压缩（10000 → 1万、12000 → 1.2万）；四位数以内照常显示。
+    /// </summary>
+    private static string CountText(int count)
+    {
+        if (count >= 10000) return (count / 10000d).ToString("0.#") + "万";
+
+        return count.ToString();
+    }
 
     private static string StateText(string state) => state switch
     {

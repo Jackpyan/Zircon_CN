@@ -545,7 +545,7 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .item-ic {
     display: inline-block; flex: 0 0 auto;
     width: 36px; height: 36px;
-    background-image: url("/icons/items/atlas.png");
+    background-image: url("/icons/items/atlas.png?v=20261118b");
     background-repeat: no-repeat;
     pointer-events: none;
 }
@@ -557,6 +557,37 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     background: var(--red); box-shadow: 0 0 5px var(--red);
 }
 .doll-hint { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* 弹药数量角标（2026-11-18）：护身符 / 毒药粉装进槽位后，背包里看不到剩余数量，
+   只能在槽位右下角标出来。深色底 + 白字，压在图标上也读得清。 */
+.doll-slot-count {
+    position: absolute; right: 1px; bottom: 0;
+    padding: 0 2px; border-radius: 2px;
+    background: rgba(0, 0, 0, .72); color: #ffe6a8;
+    font: 600 9px/1.25 var(--mono, monospace);
+    text-shadow: 0 0 2px #000; pointer-events: none;
+}
+
+/* 假人列表过滤条（2026-11-18）：100 个假人里翻找太费劲，加一条关键字过滤。 */
+.bot-filter-bar {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+}
+.bot-filter-input {
+    flex: 1 1 auto; min-width: 180px;
+    padding: 6px 9px;
+    border: 1px solid var(--line); border-radius: 5px;
+    background: #0c1214; color: inherit;
+    font: 12px/1.4 var(--sans);
+}
+.bot-filter-input:focus { outline: none; border-color: #4a6b74; }
+.bot-filter-clear {
+    padding: 4px 9px;
+    border: 1px solid var(--line); border-radius: 5px;
+    background: #101a1d; color: var(--muted);
+    font: 11px/1.3 var(--sans); cursor: pointer;
+}
+.bot-filter-clear:hover { color: inherit; border-color: #4a6b74; }
 
 /* ---------- 物品卡 ---------- */
 .item-card {
@@ -596,6 +627,23 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
 .detail-attrs > div { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-bottom: 1px dotted #1d272a; font-size: 12px; }
 .detail-attrs span { color: #8fa0a4; }
 .detail-attrs b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* 背包标签的行（2026-11-16）：图标 + 名称 + 类型 + 数量 + 重量价 + 标记 */
+.bag-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 2px;
+    border-bottom: 1px dotted #1d272a;
+    font-size: 12px;
+    flex-wrap: wrap;
+}
+.bag-row .item-ic { flex: 0 0 auto; }
+.bag-name { color: var(--text); font-weight: 500; }
+.bag-type { color: #8fa0a4; font-size: 11px; }
+.bag-count { color: var(--cyan); font-variant-numeric: tabular-nums; font-size: 11px; }
+.bag-meta { color: #8fa0a4; font-size: 11px; font-variant-numeric: tabular-nums; }
+.bag-flags { color: var(--amber, #b8860b); font-size: 11px; }
 
 @media (max-width: 900px) {
     .bot-detail-body { grid-template-columns: 1fr; }

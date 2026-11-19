@@ -68,6 +68,16 @@ namespace Server.Bots
         /// <summary>「绑定 / 不可交易」这类提示，空串表示没有。</summary>
         public string FlagsText { get; init; } = string.Empty;
 
+        /// <summary>堆叠数量（护身符 / 毒药粉这类弹药就是「还剩几次」，2026-11-18）。</summary>
+        public int Count { get; init; }
+
+        /// <summary>
+        /// 要不要在槽位角上显示数量。
+        /// 弹药（护身符 / 毒药粉）装到装备槽后，背包里看不到，只能在槽位标出来；
+        /// 普通装备 Count 恒为 1，不显示。
+        /// </summary>
+        public bool ShowCount { get; init; }
+
         /// <summary>基础属性（破坏力 3-7、自然魔力 0-1 …）。</summary>
         public IReadOnlyList<BotDetailLine> Stats { get; init; } = Array.Empty<BotDetailLine>();
     }
@@ -82,6 +92,56 @@ namespace Server.Bots
         {
             public string Name { get; init; } = string.Empty;
             public int Level { get; init; }
+        }
+
+        /// <summary>
+        /// 背包标签里的一件物品。
+        /// <para>
+        /// 2026-11-16 用户现场观察：后台详情弹窗只有角色/属性/技能三个标签，
+        /// 看不到假人背包里装了什么。这里补一个背包标签，把 <c>PlayerObject.Inventory</c>
+        /// 里的每件物品列出来（图标 + 名称 + 数量 + 重量 + 收购价 + 属性）。
+        /// </para>
+        /// </summary>
+        public sealed class BotDetailBagItem
+        {
+            /// <summary>图标序号（<c>ItemInfo.Image</c>，对应图集 / 单张 png）。</summary>
+            public int Image { get; init; }
+
+            public string ItemName { get; init; } = string.Empty;
+
+            /// <summary>物品类型的中文名（如「药水」「矿石」）。</summary>
+            public string TypeName { get; init; } = string.Empty;
+
+            /// <summary>堆叠数量（<c>UserItem.Count</c>）。</summary>
+            public int Count { get; init; }
+
+            /// <summary>单件重量（<c>ItemInfo.Weight</c>）。</summary>
+            public int Weight { get; init; }
+
+            /// <summary>收购价（<c>ItemInfo.Price</c>）。</summary>
+            public int Price { get; init; }
+
+            /// <summary>
+            /// 堆叠总重量（<c>Weight × Count</c>）。
+            /// <para>
+            /// 2026-11-18 用户反馈「重/价显示不正确」：原显示单件 Weight/Price，
+            /// 堆叠物品（如 10 瓶药水）显示「重1·价5」实际占了 10 重量、总价 50，
+            /// 与背包实际占用不符。页面改显示本字段（总量），单件值保留在 Weight/Price 供参考。
+            /// </para>
+            /// </summary>
+            public long TotalWeight { get; init; }
+
+            /// <summary>堆叠总收购价（<c>Price × Count</c>）。</summary>
+            public long TotalPrice { get; init; }
+
+            /// <summary>强化等级（<c>UserItem.Level</c>）。</summary>
+            public int EnhanceLevel { get; init; }
+
+            /// <summary>「绑定 / 锁定」这类提示，空串表示没有。</summary>
+            public string FlagsText { get; init; } = string.Empty;
+
+            /// <summary>基础属性（有中文名的条目）。</summary>
+            public IReadOnlyList<BotDetailLine> Stats { get; init; } = Array.Empty<BotDetailLine>();
         }
 
         public int Seq { get; init; }
@@ -127,6 +187,12 @@ namespace Server.Bots
 
         /// <summary>技能 tab 的行（角色已学技能 + 等级；过滤口径同 <see cref="BotSkills.KnownCount"/>）。</summary>
         public IReadOnlyList<BotDetailMagic> Magics { get; init; } = Array.Empty<BotDetailMagic>();
+
+        /// <summary>
+        /// 背包标签的物品列表（<c>PlayerObject.Inventory</c> 里的每一件）。
+        /// <para>按格子顺序排列，空格子跳过；离线/无角色对象时为空数组。</para>
+        /// </summary>
+        public IReadOnlyList<BotDetailBagItem> BagItems { get; init; } = Array.Empty<BotDetailBagItem>();
 
         /// <summary>取详情时的本地时间（页面显示「更新 hh:mm:ss」）。</summary>
         public DateTime SnapshotAt { get; init; }
@@ -238,8 +304,50 @@ namespace Server.Bots
                 Slots = slots,
                 Attributes = BuildAttributes(player),
                 Magics = BuildMagics(player),
+                BagItems = BuildBagItems(player),
                 SnapshotAt = Time.LocalNow,
             };
+        }
+
+        /// <summary>
+        /// 背包标签的物品列表：遍历 <c>PlayerObject.Inventory</c>，把每件非空物品转成
+        /// <see cref="BotDetailBagItem"/>。按格子顺序排列，空格子跳过。
+        /// </summary>
+        private static List<BotDetailBagItem> BuildBagItems(PlayerObject player)
+        {
+            List<BotDetailBagItem> list = new List<BotDetailBagItem>();
+
+            UserItem[] inventory = player.Inventory;
+
+            if (inventory == null) return list;
+
+            for (int i = 0; i < inventory.Length; i++)
+            {
+                UserItem item = inventory[i];
+
+                if (item?.Info == null) continue;
+
+                ItemInfo info = item.Info;
+
+                int count = (int)Math.Max(1, item.Count);
+
+                list.Add(new BotDetailBagItem
+                {
+                    Image = info.Image,
+                    ItemName = info.ItemName ?? string.Empty,
+                    TypeName = BotText.Item(info.ItemType),
+                    Count = count,
+                    Weight = info.Weight,
+                    Price = info.Price,
+                    TotalWeight = (long)info.Weight * count,
+                    TotalPrice = (long)info.Price * count,
+                    EnhanceLevel = item.Level,
+                    FlagsText = FlagsText(item.Flags),
+                    Stats = BuildItemStats(info),
+                });
+            }
+
+            return list;
         }
 
         private static BotDetailSlot ToSlot(EquipmentSlot slot, int x, int y, UserItem item)
@@ -279,6 +387,9 @@ namespace Server.Bots
                 Price = info.Price,
                 RequiredLevel = info.RequiredAmount,
                 FlagsText = FlagsText(item.Flags),
+                Count = (int)Math.Max(0, item.Count),
+                // 弹药槽必须显示（哪怕只剩 1 份也要看得到），其它装备只有堆叠 >1 才显示。
+                ShowCount = slot == EquipmentSlot.Amulet || slot == EquipmentSlot.Poison || item.Count > 1,
                 Stats = BuildItemStats(info),
             };
         }
