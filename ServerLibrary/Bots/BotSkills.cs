@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Library.SystemModels;
 using Server.DBModels;
 using Server.Envir;
@@ -450,6 +450,32 @@ namespace Server.Bots
                 default:
                     return Array.Empty<MagicType>();
             }
+        }
+
+        /// <summary>
+        /// K6 审计（2026-11-20）：列出「已学会、在攻击表里、但**没在形状表登记**」的技能。
+        /// <para>
+        /// 为什么要这个：以后引擎加新技能时，形状表不会自动跟上。
+        /// 有了这条日志，新技能一上线就能看见「未登记命中形状」，
+        /// 补一行 <see cref="BotMagicShapes"/> 即可，不用再像这次一样排查一整轮。
+        /// 未登记期间按 <see cref="MagicShapeKind.Single"/> 处理（= 当前行为，不会更差）。
+        /// </para>
+        /// </summary>
+        public static List<MagicType> AuditShapes(PlayerObject player)
+        {
+            List<MagicType> missing = new List<MagicType>();
+
+            if (player?.Character == null) return missing;
+
+            foreach (MagicType type in AttackSkillsOf(player.Class))
+            {
+                if (!player.GetMagic(type, out MagicObject _)) continue;
+                if (BotMagicShapes.IsRegistered(type)) continue;
+
+                missing.Add(type);
+            }
+
+            return missing;
         }
 
         /// <summary>
