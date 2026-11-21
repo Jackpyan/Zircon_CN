@@ -129,7 +129,25 @@ namespace Server.Bots
         {
             if (player == null || player.Dead) return false;
 
-            int slot = FindPotionSlot(player, restoreStat);
+            // G1（2026-11-20）：物品冷却没到就别发包。
+            //
+            // 服务端 `PlayerObject.ItemUse` 在 `SEnvir.Now < UseItemTime` 时**静默 return**，
+            // 而这里原来只发包就返回 true → 假人每 250ms 尝试一次（金创药冷却 2000ms），
+            // 87% 的尝试被丢弃，却全被算成「喝了一瓶」：
+            //   · 后台「喝红药」一直显示（LastDetail 从不重置）
+            //   · 「30 秒 117 瓶」虚高（真实上限 15 瓶）
+            //   · 「吃药补不赢」判据 `>= 6` 只要 1.5 秒就满足 → 回城 churn
+            if (!ItemUseCooldownReady(player)) return false;
+
+            // J1（2026-11-20）：**日常优先普通药，神水只在普通药耗尽时兜底**。
+            //
+            // 生产实测 BOT#34 一直喝 `生命神水（III）`：回 120、冷却 1s、**单价 5 万**；
+            // 而 `金创药（IV）` 回 170、冷却 2s、只要 1250 —— 差 40 倍价钱还回得更少。
+            // 原因是 `FindPotionSlot` 只取「背包里第一个回血物品」，不看性价比。
+            //
+            // allowEmergency 传 true 是安全的：`FindPotionSlot` **只要还有普通药就一定返回普通药**，
+            // 神水仅在普通药一瓶不剩时才被选中 —— 那种时候不喝就是等死。
+            int slot = FindPotionSlot(player, restoreStat, true);
 
             if (slot < 0) return false;
 
@@ -143,10 +161,31 @@ namespace Server.Bots
             return true;
         }
 
-        /// <summary>背包里找第一个「恢复指定属性」的消耗品格子，找不到返回 -1。</summary>
-        public static int FindPotionSlot(PlayerObject player, Stat restoreStat)
+        /// <summary>
+        /// 价格达到这个值的恢复品算「应急药」（神水一类），日常不喝（2026-11-20 J1）。
+        /// 生命神水 10000 起、金创药 2500 封顶，中间没有其它回血消耗品。
+        /// </summary>
+        private const int EmergencyPotionPrice = 10000;
+
+        /// <summary>
+        /// 背包里找「恢复指定属性」的消耗品格子，找不到返回 -1。
+        /// <para>
+        /// J2（2026-11-20）：普通药里**挑回血最多的那一档**（同价档内取第一个），
+        /// 而不是「背包顺序第一个」——否则背包前面压着一瓶低级药，就永远喝它。
+        /// </para>
+        /// <para>
+        /// J1：应急药（单价 ≥ <see cref="EmergencyPotionPrice"/>）只在
+        /// <paramref name="allowEmergency"/> 为真（濒死 / 普通药耗尽）时才用。
+        /// </para>
+        /// </summary>
+        public static int FindPotionSlot(PlayerObject player, Stat restoreStat, bool allowEmergency = false)
         {
             if (player?.Inventory == null) return -1;
+
+            int bestSlot = -1;
+            int bestAmount = 0;
+            int emergencySlot = -1;
+            int emergencyAmount = 0;
 
             for (int i = 0; i < player.Inventory.Length; i++)
             {
@@ -154,12 +193,32 @@ namespace Server.Bots
 
                 if (item?.Info == null) continue;
                 if (item.Info.ItemType != ItemType.Consumable) continue;
-                if (item.Info.Stats[restoreStat] <= 0) continue;
 
-                return i;
+                int amount = item.Info.Stats[restoreStat];
+
+                if (amount <= 0) continue;
+
+                if (item.Info.Price >= EmergencyPotionPrice)
+                {
+                    if (amount > emergencyAmount)
+                    {
+                        emergencyAmount = amount;
+                        emergencySlot = i;
+                    }
+
+                    continue;
+                }
+
+                if (amount > bestAmount)
+                {
+                    bestAmount = amount;
+                    bestSlot = i;
+                }
             }
 
-            return -1;
+            if (bestSlot >= 0) return bestSlot;
+
+            return allowEmergency ? emergencySlot : -1;
         }
 
         /// <summary>背包里指定恢复属性药水的总瓶数（按堆叠累加，不是格数）。</summary>
@@ -430,6 +489,55 @@ namespace Server.Bots
             player.NPCCall(npc.ObjectID);
 
             return player.NPC != null && player.NPCPage != null;
+        }
+
+        /// <summary>
+        /// 丢弃背包里的一格（2026-11-20）。
+        /// <para>
+        /// 用途：清掉「全服没有收购商」的材料（食人花果实/潘夜宝石/跳蚤壳…实测 9 种），
+        /// 它们在 11 倍爆率下很快堆满 17 格，挤占拾取空间并让假人反复「先补给」。
+        /// </para>
+        /// <para>
+        /// 走真人同一条路径 <c>PlayerObject.ItemDrop(C.ItemDrop)</c>：会校验 CanDrop / Locked，
+        /// 绑定或锁定的物品丢不掉，这里直接返回 false。
+        /// </para>
+        /// </summary>
+        public static bool TryDropItem(PlayerObject player, int slot, int count)
+        {
+            if (player?.Inventory == null) return false;
+            if (slot < 0 || slot >= player.Inventory.Length) return false;
+
+            UserItem item = player.Inventory[slot];
+
+            if (item?.Info == null || item.Count <= 0) return false;
+            if (!item.Info.CanDrop) return false;
+            if ((item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) return false;
+
+            player.ItemDrop(new C.ItemDrop
+            {
+                Link = new CellLinkInfo
+                {
+                    GridType = GridType.Inventory,
+                    Slot = slot,
+                    Count = Math.Min(count, item.Count)
+                },
+                Slot = slot
+            });
+
+            return true;
+        }
+
+        /// <summary>背包空格数（null 槽位）。</summary>
+        public static int FreeSlots(PlayerObject player)
+        {
+            if (player?.Inventory == null) return 0;
+
+            int free = 0;
+
+            foreach (UserItem item in player.Inventory)
+                if (item == null) free++;
+
+            return free;
         }
 
         /// <summary>在已打开的 NPC 对话里点一个按钮（真人走 <c>C.NPCButton</c>）。</summary>

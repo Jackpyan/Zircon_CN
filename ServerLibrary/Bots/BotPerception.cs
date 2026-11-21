@@ -16,6 +16,43 @@ namespace Server.Bots
     public static class BotPerception
     {
         /// <summary>
+        /// 选图/选怪窗口的等级上限：怪等级 ≤ 自身 + 这个值（2026-11-20 从 4 收到 2）。
+        /// <para>
+        /// 为什么收紧：生产实测 22~24 级假人在「潘夜峡谷南部」（25 级怪）被 6~13 只怪围殴，
+        /// 红药 32 瓶、30 秒喝 33 瓶（已到喝药冷却上限）仍掉到 1% 血 ——
+        /// 「+4」意味着可以打比自己高 4 级的怪，但实战里高 2 级以上就已经打不动、只能被围死。
+        /// 选图、选刷怪点、`HasHuntValue`、白名单生成共用这一个常量，避免口径漂移。
+        /// </para>
+        /// </summary>
+        /// <summary>
+        /// 选图/选怪窗口的等级上限（按自身等级分档，2026-11-20 定稿）。
+        /// <para>
+        /// 演变：4 →（上午）2 →（下午）1 → **按等级分档**。
+        /// 统一 +1 后探针实测 **1~3 级没有任何可打图**（低等级地图怪本来就稀，
+        /// 1 级号只能打 ≤2 级怪，而最低的刷怪区是 5 级）—— 新号会原地待机。
+        /// </para>
+        /// <para>
+        /// 分档依据（`huntmap` 探针验证 1~100 无空档）：
+        /// ① ≤10 级：+4（打 5~14 级怪，新手区只有 比奇城/失乐园/潘夜村/诺玛村落 四张图）
+        /// ② 11~20 级：+2（洞穴图起步，怪密度上来，不能再越 4 级）
+        /// ③ ≥21 级：+1（生产实测越 2 级就会被 25 级怪围死，红药喝到冷却上限也救不回来）
+        /// </para>
+        /// </summary>
+        public static int HuntLevelAboveFor(int level)
+        {
+            if (level <= 10) return 4;
+            if (level <= 20) return 2;
+
+            return 1;
+        }
+
+        /// <summary>按职业取窗口（2026-11-20 各职业统一，保留 cls 参数便于以后差异化）。</summary>
+        public static int HuntLevelAboveFor(MirClass cls, int level)
+        {
+            return HuntLevelAboveFor(level);
+        }
+
+        /// <summary>
         /// 找一只值得打的怪：优先残血/低血量，其次看距离。
         /// D1 实测 1 级号 52 点血打不动血厚的怪，按血量排序能显著提高存活率。
         /// <para>
@@ -76,7 +113,7 @@ namespace Server.Bots
 
                 // 等级压制超过 4 级的先放过，0 级号硬扛只会送死。
                 // 容差取 4 是有依据的：本服最低的怪就是 Lv5 的鸡，1 级号必须打得动它（D1 实测三只鸡可升 2 级）。
-                if (info.Level > player.Level + 4) continue;
+                if (info.Level > player.Level + HuntLevelAboveFor(player.Class, player.Level)) continue;
 
                 // 比自己低 8 级以上的怪经验少得可怜，打了纯浪费时间 —— 这条也是「等级上浮」的推力：
                 // 鸡是 Lv5，练到 13 级之后自动嫌弃，转去找 10~14 级的新图。
@@ -265,10 +302,28 @@ namespace Server.Bots
         /// </summary>
         public static int CountMonstersAround(PlayerObject player, int radius)
         {
-            Map map = player?.CurrentMap;
+            if (player?.CurrentMap == null) return 0;
 
+            return CountMonstersAround(player.CurrentMap, player.CurrentLocation, radius);
+        }
+
+        /// <summary>
+        /// 指定坐标半径内的活怪数（2026-11-20，K2 用）。
+        /// <para>
+        /// ⚠ 这是 **O(N)**（遍历整图对象），不要每帧调 —— 只在「真的要放 AoE 技能」时算一次
+        /// （AoE 施法约 2 秒一次，开销可忽略）。方向型技能走
+        /// <c>BotBrain</c> 的 8 方向直方图缓存（300ms 一次 O(N)，查询 O(1)）。
+        /// </para>
+        /// </summary>
+        public static int CountMonstersAround(Point center, int radius, Map map)
+        {
             if (map == null) return 0;
 
+            return CountMonstersAround(map, center, radius);
+        }
+
+        private static int CountMonstersAround(Map map, Point center, int radius)
+        {
             int count = 0;
 
             foreach (MapObject ob in map.Objects)
@@ -279,12 +334,240 @@ namespace Server.Bots
                 // 宠物不算「怪」（2026-11-18）：否则旁边有只骷髅就误判成群攻场景。
                 if (monster.PetOwner != null) continue;
 
-                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+                if (BotNavigator.Distance(center, monster.CurrentLocation) > radius) continue;
 
                 count++;
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// 一次性收集本图活怪坐标（P2，2026-11-21），最多 <paramref name="limit"/> 个。
+        /// <para>
+        /// 用途：选刷怪点前判断「这个点 30 格内到底有没有怪」。
+        /// **必须一次性收集**：如果对 40 个候选点各调一次 <see cref="CountMonstersAround(Point,int,Map)"/>，
+        /// 就是 40 次全图扫描（O(40N)）；收集一次再在内存里比距离，只有 O(N + 40×M)。
+        /// </para>
+        /// </summary>
+        public static List<Point> CollectMonsterPoints(Map map, int limit = 256)
+        {
+            List<Point> points = new List<Point>(Math.Min(limit, 128));
+
+            if (map == null) return points;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (points.Count >= limit) break;
+
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+                if (monster.PetOwner != null) continue;
+
+                points.Add(monster.CurrentLocation);
+            }
+
+            return points;
+        }
+
+        /// <summary>
+        /// 十字 5 格（目标点 + 上下左右）内的活怪数（2026-11-20，火墙用）。
+        /// <para>
+        /// **一次遍历搞定**：不能拆成「中心 + 4 个邻格」各调一次 <see cref="CountMonstersAround(Point,int,Map)"/>，
+        /// 那是 5 次全图扫描 —— 火墙是法师高频技能，会直接吃满主循环预算。
+        /// </para>
+        /// </summary>
+        public static int CountMonstersInCross(Map map, Point center)
+        {
+            if (map == null) return 0;
+
+            int count = 0;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+                if (monster.PetOwner != null) continue;
+
+                Point p = monster.CurrentLocation;
+
+                // 曼哈顿距离 ≤1 即十字 5 格
+                if (Math.Abs(p.X - center.X) + Math.Abs(p.Y - center.Y) > 1) continue;
+
+                count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 半径内活怪的最高等级（0 = 没有怪）。**不分配**，可每帧调用。
+        /// <para>
+        /// 用途（2026-11-20）：判断「是不是高等级/强怪场景」—— 怪等级 ≥ 自身时，
+        /// 法师/道士没蓝贴身平砍几乎必死，要把紧急回城的血线放宽。
+        /// </para>
+        /// </summary>
+        public static int MaxMonsterLevelAround(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return 0;
+
+            int max = 0;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+                if (monster.PetOwner != null) continue;
+
+                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                if (monster.Level > max) max = monster.Level;
+            }
+
+            return max;
+        }
+
+        /// <summary>
+        /// 半径内**正在锁定本假人**的 BOSS（无则 null）。**不分配**，可每帧调用。
+        /// <para>
+        /// 与 <see cref="FindBossNear"/> 的区别：那个只看「附近有没有 BOSS」，
+        /// 这个只认「BOSS 已经把我当目标」—— 后者必须立刻脱离，换点已经来不及。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindBossTargeting(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+                if (monster.PetOwner != null) continue;
+                if (monster.MonsterInfo == null || !monster.MonsterInfo.IsBoss) continue;
+                if (monster.Target != player) continue;
+
+                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                return monster;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 两张地图之间的最少「跳数」（走过多少个地图出口），无路可达返回 <see cref="int.MaxValue"/>。
+        /// <para>
+        /// 用途（2026-11-20 P2）：选跨图目标时按跳数升序，优先近图。
+        /// 生产实测跨图超时集中在潘夜峡谷南部（56 次）与沃玛神殿（28 次）——
+        /// 单趟要跨 3~4 张图、总路径 250+ 格，5 分钟根本走不完。
+        /// </para>
+        /// <para>
+        /// 只在「需要跨图」时调用（不是每帧），BFS 的临时集合可以接受。
+        /// </para>
+        /// </summary>
+        public static int MapHops(MapInfo from, MapInfo to, int maxHops = 10)
+        {
+            if (from == null || to == null) return int.MaxValue;
+            if (from == to) return 0;
+
+            HashSet<int> visited = new HashSet<int> { from.Index };
+            Queue<KeyValuePair<MapInfo, int>> queue = new Queue<KeyValuePair<MapInfo, int>>();
+
+            queue.Enqueue(new KeyValuePair<MapInfo, int>(from, 0));
+
+            while (queue.Count > 0)
+            {
+                KeyValuePair<MapInfo, int> node = queue.Dequeue();
+
+                if (node.Value >= maxHops) continue;
+                if (node.Key?.Regions == null) continue;
+
+                foreach (MapRegion region in node.Key.Regions)
+                {
+                    if (region.SourceMovements == null) continue;
+
+                    foreach (MovementInfo movement in region.SourceMovements)
+                    {
+                        MapInfo next = movement.DestinationRegion?.Map;
+
+                        if (next == null || !visited.Add(next.Index)) continue;
+
+                        if (next == to) return node.Value + 1;
+
+                        queue.Enqueue(new KeyValuePair<MapInfo, int>(next, node.Value + 1));
+                    }
+                }
+            }
+
+            return int.MaxValue;
+        }
+
+        /// <summary>
+        /// 这张图刷怪的最高等级（不含 BOSS；0 = 无刷怪区）。带缓存，可每帧调用。
+        /// <para>
+        /// 用途（2026-11-20）：假人跨图 A* 会**穿过**高于自身等级的地图 ——
+        /// 生产实测 23 级道士穿过 35 级怪的「沙漠」时被 24 只怪围死。
+        /// 路径规划要用它判断「这张图对当前等级是不是危险区」。
+        /// </para>
+        /// </summary>
+        public static int MaxRespawnLevel(MapInfo map)
+        {
+            if (map == null) return 0;
+
+            if (_respawnLevelCache.TryGetValue(map.Index, out int cached)) return cached;
+
+            int max = 0;
+
+            foreach (RespawnInfo respawn in SEnvir.RespawnInfoList.Binding)
+            {
+                if (respawn?.Region?.Map != map) continue;
+                if (respawn.Monster == null) continue;
+
+                // 不含 BOSS：城镇也刷低级怪 + 偶尔一只 BOSS（比奇城有 250B），
+                // 把 BOSS 算进去会导致「假人连回城都规划失败」。
+                if (respawn.Monster.IsBoss) continue;
+
+                if (respawn.Monster.Level > max) max = respawn.Monster.Level;
+            }
+
+            _respawnLevelCache[map.Index] = max;
+
+            return max;
+        }
+
+        private static readonly Dictionary<int, int> _respawnLevelCache = new Dictionary<int, int>();
+
+        /// <summary>
+        /// 半径内的 BOSS（无则 null）。**不分配**，可每帧调用。
+        /// <para>
+        /// 用途（2026-11-20）：<c>BotSkipBoss</c> 只让假人「不主动选 BOSS 当目标」，
+        /// 但 BOSS 会主动攻击 —— 生产实测 26 级道士在潘夜岛被 250 级 BOSS 打死。
+        /// 需要主动远离，而不是等它贴上来。
+        /// </para>
+        /// </summary>
+        public static MonsterObject FindBossNear(PlayerObject player, int radius)
+        {
+            Map map = player?.CurrentMap;
+
+            if (map == null) return null;
+
+            foreach (MapObject ob in map.Objects)
+            {
+                if (!(ob is MonsterObject monster)) continue;
+                if (monster.Dead || monster.Node == null) continue;
+                if (monster.PetOwner != null) continue;
+                if (monster.MonsterInfo == null || !monster.MonsterInfo.IsBoss) continue;
+
+                if (BotNavigator.Distance(player.CurrentLocation, monster.CurrentLocation) > radius) continue;
+
+                return monster;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -516,6 +799,37 @@ namespace Server.Bots
 
             return cell != null && cell.SafeZone != null;
         }
+
+        /// <summary>
+        /// 这张图有没有安全区（城镇/村庄）。
+        /// <para>
+        /// 用途（2026-11-20）：跨图**等级避让**要豁免城镇 —— 城镇也刷低级怪（比奇城 5~15 级），
+        /// 若按「怪等级 &gt; 自身+8 就禁行」一律处理，1 级假人连回比奇城补给都会被拦。
+        /// 城镇有安全区，被怪围也能进圈脱战，风险远低于野外高危图。
+        /// </para>
+        /// </summary>
+        public static bool HasSafeZone(MapInfo map)
+        {
+            if (map == null) return false;
+
+            if (_safeZoneCache.TryGetValue(map.Index, out bool cached)) return cached;
+
+            bool has = false;
+
+            foreach (SafeZoneInfo zone in SEnvir.SafeZoneInfoList.Binding)
+            {
+                if (zone?.Region?.Map != map) continue;
+
+                has = true;
+                break;
+            }
+
+            _safeZoneCache[map.Index] = has;
+
+            return has;
+        }
+
+        private static readonly Dictionary<int, bool> _safeZoneCache = new Dictionary<int, bool>();
 
         /// <summary>
         /// 找一个红名目标（P3-4）。只返回「名字红到会被系统标红」的玩家，白名一律不碰。
@@ -762,14 +1076,70 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 按钮页链上的条件检查，假人当前等级/金币能不能过。
+        /// <para>
+        /// **为什么必须有**（2026-11-20 生产事故）：潘夜岛按钮是「潘夜岛 10K且等级25+」，
+        /// 按钮页挂了 <c>NPCCheckType.Level = 25</c>；而 <c>MapInfo.MinimumLevel</c> 是 0。
+        /// 假人选图只看地图门槛，于是 22~24 级也把潘夜岛当目标，按按钮被服务端
+        /// <c>CheckPage</c> 静默拒绝（无日志），原地重按到 2 分钟超时 → 重选同一张图 → 死循环。
+        /// </para>
+        /// <para>
+        /// 只判 <see cref="NPCCheckType.Level"/> 与 <see cref="NPCCheckType.Gold"/>：
+        /// 这两类是「纯数值、假人能自证」的。职业/物品/武器/马等检查不判 ——
+        /// 判不准会误杀「自由传送员」这类靠通行证的二级页，宁可交给传送失败冷却兜底。
+        /// </para>
+        /// </summary>
+        private static bool PageChecksPass(NPCPage start, int level, long gold)
+        {
+            foreach (NPCPage page in PageChain(start))
+            {
+                if (page.Checks == null) continue;
+
+                foreach (NPCCheck check in page.Checks)
+                {
+                    switch (check.CheckType)
+                    {
+                        case NPCCheckType.Level:
+                            if (!CompareOperator(check.Operator, level, check.IntParameter1)) return false;
+                            break;
+
+                        case NPCCheckType.Gold:
+                            if (!CompareOperator(check.Operator, gold, check.IntParameter1)) return false;
+                            break;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>与服务端 <c>NPCObject.Compare</c> 同语义（那边是 private，这里复制一份）。</summary>
+        private static bool CompareOperator(Operator op, long value, long threshold)
+        {
+            switch (op)
+            {
+                case Operator.Equal: return value == threshold;
+                case Operator.NotEqual: return value != threshold;
+                case Operator.LessThan: return value < threshold;
+                case Operator.LessThanOrEqual: return value <= threshold;
+                case Operator.GreaterThan: return value > threshold;
+                case Operator.GreaterThanOrEqual: return value >= threshold;
+                default: return false;
+            }
+        }
+
+        /// <summary>
         /// 在传送石的入口页里找「通往 <paramref name="targetMapIndex"/> 的按钮」，返回 ButtonID；找不到返回 -1。
         /// <para>
         /// 只匹配**直达**按钮（按钮页 + 它的 SuccessPage 链里有指向目标图的 Teleport 动作）。
         /// 「自由传送员」这类二级页要先点一次父按钮再点子按钮，本版不处理 ——
         /// 高级图本来就有等级门槛，低级假人也去不了。
         /// </para>
+        /// <para>
+        /// <paramref name="level"/>=0 且 <paramref name="gold"/>=<see cref="long.MaxValue"/> 时不做条件过滤（旧行为）。
+        /// </para>
         /// </summary>
-        public static int FindTeleportButton(NPCInfo npc, int targetMapIndex)
+        public static int FindTeleportButton(NPCInfo npc, int targetMapIndex, int level = 0, long gold = long.MaxValue)
         {
             if (npc?.EntryPage?.Buttons == null) return -1;
             if (targetMapIndex <= 0) return -1;
@@ -777,6 +1147,7 @@ namespace Server.Bots
             foreach (NPCButton button in npc.EntryPage.Buttons)
             {
                 if (!HasTeleportTarget(button.DestinationPage, targetMapIndex)) continue;
+                if (level > 0 && !PageChecksPass(button.DestinationPage, level, gold)) continue;
 
                 return button.ButtonID;
             }
@@ -788,7 +1159,7 @@ namespace Server.Bots
         /// 传送这颗石头的**最便宜一档**要多少钱（0 = 免费 / 未知）。
         /// 用来判断「钱够不够传送」，不够就走 A* 跨图。
         /// </summary>
-        public static int CheapestTeleportCost(NPCInfo npc, int targetMapIndex)
+        public static int CheapestTeleportCost(NPCInfo npc, int targetMapIndex, int level = 0, long gold = long.MaxValue)
         {
             if (npc?.EntryPage?.Buttons == null) return 0;
             foreach (NPCButton button in npc.EntryPage.Buttons)
@@ -796,6 +1167,7 @@ namespace Server.Bots
                 NPCPage dest = button.DestinationPage;
 
                 if (!HasTeleportTarget(dest, targetMapIndex)) continue;
+                if (level > 0 && !PageChecksPass(dest, level, gold)) continue;
 
                 // 收费（TakeGold）在按钮页，传送（Teleport）在 SuccessPage ——
                 // 所以钱要沿整条链累加，不能只看按钮页。
@@ -832,9 +1204,13 @@ namespace Server.Bots
         /// 怪等级 ≤ 自己 +4（打得动）、≥ 自己 -8（还有经验价值）。
         /// </para>
         /// </summary>
-        public static bool HasHuntValue(MapInfo map, int level)
+        public static bool HasHuntValue(MapInfo map, int level, MirClass cls)
         {
             if (map == null) return false;
+
+            // 城镇只当补给点（2026-11-20）：≥20 级在城镇里不算「有练级价值」，
+            // 否则假人会在失乐园/比奇城打 10~16 级怪被怪群磨死（实测 24 级刺客）。
+            if (level >= 20 && HasSafeZone(map)) return false;
 
             foreach (RespawnInfo region in SEnvir.RespawnInfoList.Binding)
             {
@@ -844,7 +1220,7 @@ namespace Server.Bots
 
                 if (monster == null) continue;
 
-                if (monster.Level > level + 4) continue;
+                if (monster.Level > level + HuntLevelAboveFor(cls, level)) continue;
                 if (monster.Level < level - 8) continue;
 
                 return true;
@@ -948,7 +1324,7 @@ namespace Server.Bots
         /// <paramref name="from"/> 的六合石直达 <paramref name="target"/> 的最便宜票价（-1 = 没有直达）。
         /// 0 表示免费或未知（引擎里免费传送不带 TakeGold）。
         /// </summary>
-        public static int CheapestTeleportCostFrom(MapInfo from, int target)
+        public static int CheapestTeleportCostFrom(MapInfo from, int target, int level = 0, long gold = long.MaxValue)
         {
             if (from == null || target <= 0) return -1;
 
@@ -957,9 +1333,9 @@ namespace Server.Bots
             foreach (NPCInfo npc in SEnvir.NPCInfoList.Binding)
             {
                 if (npc?.Region?.Map != from) continue;
-                if (FindTeleportButton(npc, target) < 0) continue;
+                if (FindTeleportButton(npc, target, level, gold) < 0) continue;
 
-                int cost = CheapestTeleportCost(npc, target);
+                int cost = CheapestTeleportCost(npc, target, level, gold);
 
                 if (best < 0 || cost < best) best = cost;
             }
@@ -981,7 +1357,7 @@ namespace Server.Bots
         /// 中转图不能是自己、也不能是目标图本身。
         /// </para>
         /// </summary>
-        public static bool TryFindTwoHopRoute(MapInfo from, int target, out int viaIndex)
+        public static bool TryFindTwoHopRoute(MapInfo from, int target, out int viaIndex, int level = 0, long gold = long.MaxValue)
         {
             viaIndex = 0;
 
@@ -1005,8 +1381,9 @@ namespace Server.Bots
                 // 中转图本身得有石头，且能直达目标。
                 if (!TeleportTargetsFrom(viaInfo).Contains(target)) continue;
 
-                int cost1 = CheapestTeleportCostFrom(from, via);
-                int cost2 = CheapestTeleportCostFrom(viaInfo, target);
+                // 带等级过滤：按钮页有条件（如「等级25+」）过不了时返回 -1，这一跳直接作废。
+                int cost1 = CheapestTeleportCostFrom(from, via, level, gold);
+                int cost2 = CheapestTeleportCostFrom(viaInfo, target, level, gold);
 
                 if (cost1 < 0 || cost2 < 0) continue;
 
@@ -1140,7 +1517,7 @@ namespace Server.Bots
         /// 假人只能 A* 硬走 —— 2026-11-12 用诊断日志实测到的就是这一条。
         /// </para>
         /// </summary>
-        public static NPCObject FindTeleportStoneFor(Map map, int targetMapIndex)
+        public static NPCObject FindTeleportStoneFor(Map map, int targetMapIndex, int level = 0, long gold = long.MaxValue)
         {
             if (map?.NPCs == null) return null;
             if (targetMapIndex <= 0) return null;
@@ -1149,7 +1526,7 @@ namespace Server.Bots
             {
                 if (npc?.NPCInfo == null) continue;
                 if (!IsTeleportStone(npc.NPCInfo)) continue;
-                if (FindTeleportButton(npc.NPCInfo, targetMapIndex) < 0) continue;
+                if (FindTeleportButton(npc.NPCInfo, targetMapIndex, level, gold) < 0) continue;
 
                 return npc;
             }

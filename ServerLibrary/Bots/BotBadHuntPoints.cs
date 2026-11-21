@@ -57,6 +57,31 @@ namespace Server.Bots
         }
 
         /// <summary>
+        /// 标记「一个刷怪点 + 周围 <paramref name="radius"/> 格」都走不到（2026-11-21）。
+        /// <para>
+        /// <b>为什么需要按片拉黑</b>：原来只按精确坐标标记，假人下一次选到**隔壁 1 格**的刷怪点
+        /// （实测 BOT#21：112,23 → 111,24）就不在黑名单里，于是「绕圈 → 拉黑 → 换个相邻点 → 又绕圈」
+        /// 无限重复，35 分钟刷出 360 次「原地绕圈」。
+        /// </para>
+        /// <para>
+        /// 不可达通常是**一小片地形**（隔墙、河岸、死角）的属性，按片标记才符合实际情况。
+        /// 仍走 3 分钟 TTL，过期后重新验算。
+        /// </para>
+        /// </summary>
+        public static void MarkArea(int mapIndex, Point point, int radius = 3)
+        {
+            if (radius < 0) radius = 0;
+
+            long expire = Environment.TickCount64 + TtlMs;
+
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                for (int dy = -radius; dy <= radius; dy++)
+                    _points[(mapIndex, point.X + dx, point.Y + dy)] = expire;
+            }
+        }
+
+        /// <summary>
         /// 该刷怪点是否在共享黑名单里（<see cref="BotBrain.TryPickHuntPoint"/> 选点时调用）。
         /// 顺带清掉过期的条目 —— 表只有几十项，遍历成本可忽略。
         /// </summary>
