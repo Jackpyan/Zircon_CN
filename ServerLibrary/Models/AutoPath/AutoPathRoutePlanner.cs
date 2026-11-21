@@ -1,5 +1,6 @@
 ﻿using Library;
 using Library.SystemModels;
+using Server.Bots;
 using Server.Envir;
 using System;
 using System.Collections.Generic;
@@ -127,6 +128,18 @@ namespace Server.Models.AutoPath
             if (!startMap.CanAutoPath) return Fail($"起点图 {startMap.Description} 未开自动寻路");
             if (!destination.Map.CanAutoPath) return Fail($"目标图 {destination.Map.Description} 未开自动寻路");
 
+            // 假人高危地图黑名单（2026-11-20，用户要求）：幽灵船全系连路过都不许。
+            // 只拦假人，真人玩家的自动寻路不受影响。
+            if (actor is PlayerObject botPlayer && botPlayer.Bot != null
+                && BotMapBlacklist.Contains(destination.Map.Index))
+                return Fail($"目标图 {destination.Map.Description} 在假人高危黑名单");
+
+            // 目标图等级避让（同上）：怪等级 > 自身+8 的**野外图**，假人不去；城镇豁免。
+            if (actor is PlayerObject levelBot && levelBot.Bot != null
+                && BotPerception.MaxRespawnLevel(destination.Map) > levelBot.Level + 8
+                && !BotPerception.HasSafeZone(destination.Map))
+                return Fail($"目标图 {destination.Map.Description} 怪等级过高（{BotPerception.MaxRespawnLevel(destination.Map)} 级）");
+
             MapInfo destinationMapInfo = destination.Map;
             long startedAt = Stopwatch.GetTimestamp();
             long mapsDoneAt = startedAt;
@@ -203,6 +216,33 @@ namespace Server.Models.AutoPath
                     if (!CanUseMovement(actor, movement, startMap)) { blockedByRules++; continue; }
 
                     MapInfo nextMapInfo = movement.DestinationRegion?.Map;
+
+                    // 假人高危地图黑名单（2026-11-20）：**中途跳板也不许**。
+                    // 生产事故：22 级法师被跨图路径带进「幽灵船入口」，卡在入口点被 30 只怪围死。
+                    if (nextMapInfo != null && actor is PlayerObject botActor && botActor.Bot != null
+                        && BotMapBlacklist.Contains(nextMapInfo.Index))
+                    {
+                        blockedByRules++;
+                        continue;
+                    }
+
+                    // 跨图路径**等级避让**（2026-11-20）：假人不穿过「怪等级 > 自身+8」的图。
+                    // 生产实测：23 级道士跨图路径穿过 35 级怪的「沙漠」，被 24 只怪围死；
+                    // 22 级法师被带进幽灵船入口。选图窗口本来就只认 [自身-8, 自身+4]，
+                    // 路上穿过的图也必须守住同一个上限，否则等于把低级号丢进高级怪区。
+                    if (nextMapInfo != null && actor is PlayerObject levelActor && levelActor.Bot != null)
+                    {
+                        int mapMaxLevel = BotPerception.MaxRespawnLevel(nextMapInfo);
+
+                        // 城镇豁免：城镇有安全区（被围可进圈脱战），且也刷低级怪，
+                        // 一律禁行会让低级假人连回城补给都规划不出来。
+                        if (mapMaxLevel > levelActor.Level + 8 && !BotPerception.HasSafeZone(nextMapInfo))
+                        {
+                            blockedByRules++;
+                            continue;
+                        }
+                    }
+
                     if (nextMapInfo == null ||
                         !mapDistances.TryGetValue(nextMapInfo, out int nextDistance) ||
                         nextDistance != startDistance - 1)

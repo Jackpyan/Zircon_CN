@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Library.SystemModels;
 using Server.Envir;
 using System;
@@ -32,8 +32,6 @@ namespace Server.Bots
     /// </summary>
     public static class BotHuntMapPlanner
     {
-        /// <summary>选图窗口：怪等级上限（自身 +4）。改这里必须同步 <c>BotBrain.TryPickHuntPoint</c>。</summary>
-        private const int LevelAbove = 4;
 
         /// <summary>选图窗口：怪等级下限（自身 -8）。</summary>
         private const int LevelBelow = 8;
@@ -58,14 +56,24 @@ namespace Server.Bots
                 if (map == null || monster == null) continue;
                 if (monster.IsBoss) continue;
 
+                // 高危地图黑名单（2026-11-20）：幽灵船全系不进白名单，连「名单里有」都不要。
+                if (BotMapBlacklist.Contains(map.Index)) continue;
+
                 // 这张图的刷怪区能在哪些等级被「打得动」：
                 //   monster.Level <= 自身 + 4  →  自身 >= monster.Level - 4
                 //   monster.Level >= 自身 - 8  →  自身 <= monster.Level + 8
-                int from = Math.Max(1, Math.Max(monster.Level - LevelAbove, map.MinimumLevel));
-                int to = Math.Min(maxLevel, monster.Level + LevelBelow);
+                // 这张图的刷怪区能在哪些等级被「打得动」：
+                //   上界：怪等级 ≤ 自身 + HuntLevelAboveFor(自身)（按等级分档，2026-11-20）
+                //   下界：怪等级 ≥ 自身 - LevelBelow（太低没经验价值）
+                //   另需满足地图自身等级门槛。
+                for (int level = 1; level <= maxLevel; level++)
+                {
+                    if (level < map.MinimumLevel) continue;
+                    if (monster.Level > level + BotPerception.HuntLevelAboveFor(level)) continue;
+                    if (monster.Level < level - LevelBelow) continue;
 
-                for (int level = from; level <= to; level++)
                     perLevel[level].Add(map);
+                }
             }
 
             List<HuntMapBand> bands = new();

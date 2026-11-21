@@ -1,6 +1,7 @@
 ﻿using Library;
 using Library.Network;
 using Library.SystemModels;
+using Server.Bots;
 using Server.DBModels;
 using Server.Envir;
 using Server.Models.Magics;
@@ -941,6 +942,14 @@ namespace Server.Models
 
         public virtual bool Teleport(Map map, Point location, bool leaveEffect = true, bool enterEffect = true)
         {
+            // 假人高危地图硬闸（2026-11-20，用户要求「连路过、中转都不能经过」）。
+            // 放在引擎传送入口：AutoPath、逐格走位踩到地图传送点、NPC 传送、六合石
+            // 全部走这里 —— 只靠规划器拦不住「走位时误踩传送点」这条路（实测仍会进幽灵船）。
+            // 只拦假人，真人玩家不受影响。
+            if (this is PlayerObject botCheck && botCheck.Bot != null
+                && map?.Info != null && BotMapBlacklist.Contains(map.Info.Index))
+                return false;
+
             if (Race == ObjectType.Player && map.Info.MinimumLevel > Level && !((PlayerObject)this).Character.Account.TempAdmin) return false;
             if (Race == ObjectType.Player && map.Info.MaximumLevel > 0 && map.Info.MaximumLevel < Level && !((PlayerObject)this).Character.Account.TempAdmin) return false;
 
