@@ -277,6 +277,19 @@ namespace Server.Envir
         public static int BotLevelCap { get; set; } = 0;
         /// <summary>允许练级的 MapInfo.Index，逗号分隔；留空 = 不限制（P0 建议填 3~5 张低级图）。</summary>
         public static string BotHuntMaps { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 假人**绝对不进**的高危地图（MapInfo.Index，逗号分隔），2026-11-20 用户要求。
+        /// <para>
+        /// 默认幽灵船全系：入口 68、4层 69、3层 70、2层 71、1层 72、飞行甲板 73。
+        /// 这些图怪等级 75、还有 250 级 BOSS，单人进去必死 —— 连**路过/中转都不许**。
+        /// </para>
+        /// <para>
+        /// 生效点：① 跨图 A* 规划（既不作为目标，也不作为中途跳板）；
+        /// ② 练级图候选；③ 六合石传送目标；④ 若假人已在图内 → 上线时直接传回绑定点。
+        /// </para>
+        /// </summary>
+        public static string BotAvoidMaps { get; set; } = "68,69,70,71,72,73";
         /// <summary>
         /// 日志级别：0=Debug 1=Info 2=Warn 3=Error。
         /// <para>
@@ -544,7 +557,7 @@ namespace Server.Envir
         /// 所以一次回城要跑两趟：先药店买药，再杂货商买卷。
         /// </para>
         /// </summary>
-        public static int BotRestockBuyTownScroll { get; set; } = 2;
+        public static int BotRestockBuyTownScroll { get; set; } = 12;
 
         public static void LoadVersion()
         {

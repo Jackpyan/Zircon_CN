@@ -1,4 +1,4 @@
-using Library.SystemModels;
+﻿using Library.SystemModels;
 using Server.Envir;
 using System;
 using System.Collections.Generic;
@@ -57,8 +57,15 @@ namespace Server.Models.AutoPath
             return Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
         }
 
-        /// <summary>同类失败在这个间隔内只打一行（热循环时否则会一秒刷几十行）。</summary>
-        private const int FailureLogIntervalMs = 10000;
+        /// <summary>
+        /// 同类失败在这个间隔内只打一行（热循环时否则会一秒刷几十行）。
+        /// <para>
+        /// P4（2026-11-21）：10 秒 → **60 秒**。5 小时实测 `AUTO PATH FAIL` 有 146,364 行，
+        /// 占窗口日志总量 26.6% —— 全是「潘夜岛到不了跳蚤洞穴」这类同一原因重复刷屏，
+        /// 把真正的异常淹掉了。折叠后的计数仍保留在「此前同类失败 N 次」里，信息不丢。
+        /// </para>
+        /// </summary>
+        private const int FailureLogIntervalMs = 60000;
 
         /// <summary>节流表的安全上限 —— 原因是带坐标的字符串，不设上限会随地图探索无限长。</summary>
         private const int FailureKeyLimit = 2000;
