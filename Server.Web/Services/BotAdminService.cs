@@ -62,6 +62,11 @@ public sealed record BotPerf(
     long ConnectionDelayMs,
     long SaveDelayMs,
     long MapChanges,
+    long TravelStarted,
+    long TravelInFlight,
+    long TravelInterrupted,
+    long TravelArrived,
+    long TravelAborted,
     long Chats,
     bool BreakerEnabled,
     bool BreakerOpen,
@@ -74,7 +79,13 @@ public sealed record BotPerf(
     int BreakerRecoverSeconds)
 {
     /// <summary>首屏还没取到数据时的占位值。</summary>
-    public static BotPerf Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, -1, 0, 0, DateTime.MinValue, 25, 60, 60);
+    public static BotPerf Empty { get; } = new(
+        0, 0, 0, 0, 0, 0, 0,      // 帧耗时 5 项 + 帧率 + 占比
+        0, 0,                     // 连接/存库延迟
+        0, 0, 0, 0, 0, 0, 0,      // 换图 / 启动 / 在途 / 打断 / 到达 / 放弃 / 发言
+        false, false,             // 熔断开关 / 状态
+        -1, 0, 0, DateTime.MinValue, // 上限 / 超载秒 / 触发次数 / 触发时刻
+        25, 60, 60);              // 占比 / 触发秒 / 恢复秒
 
     /// <summary>熔断状态文本。</summary>
     public string BreakerText
@@ -284,6 +295,11 @@ public sealed class BotAdminService(AdminAuditService audit, RuntimeDataService 
                 SEnvir.ConDelay,
                 SEnvir.SaveDelay,
                 BotMetrics.MapChanges,
+                BotMetrics.TravelStarted,
+                BotMetrics.TravelInFlight,
+                BotMetrics.TravelInterrupted,
+                BotMetrics.TravelArrived,
+                BotMetrics.TravelAborted,
                 BotMetrics.Chats,
                 Config.BotBreakerEnabled,
                 BotBreaker.Open,

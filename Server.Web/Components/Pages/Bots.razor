@@ -143,7 +143,19 @@
         <div class="config-field">
             <span>跨图次数 <em>本次进程</em></span>
             <strong>@Perf.MapChanges.ToString("N0")</strong>
-            <span class="field-note">真的换了地图才算，不是「决定要走」的次数</span>
+            <span class="field-note" style="display:block; margin-top:2px;">
+                只算赶路途中的换图（回城卷/复活不算；一次跨图可能经过多张图，故会多于「启动」）
+                <br />
+                启动 @Perf.TravelStarted.ToString("N0") 趟 =
+                在途 @Perf.TravelInFlight.ToString("N0") +
+                到达 @Perf.TravelArrived.ToString("N0") +
+                放弃 @Perf.TravelAborted.ToString("N0")（已结算）
+                ；打断 @Perf.TravelInterrupted.ToString("N0") 次（打断后会接续，不结算这一趟）
+                @if (Perf.TravelAborted > Perf.TravelArrived * 3 && Perf.TravelAborted > 20)
+                {
+                    <text>（⚠ 放弃远多于到达，可能在空转折返）</text>
+                }
+            </span>
         </div>
         <div class="config-field">
             <span>发言条数 <em>本次进程</em></span>
@@ -296,6 +308,10 @@
                                     else
                                     {
                                         @row.Detail
+                                        @if (row.IsOnline && row.DetailAgeSeconds >= 5)
+                                        {
+                                            <span class="field-note">（@row.DetailAgeSeconds 秒前）</span>
+                                        }
                                     }
                                 </td>
                                 <td @onclick:stopPropagation="true">

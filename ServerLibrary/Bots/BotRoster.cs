@@ -20,7 +20,10 @@ namespace Server.Bots
         public int ExpPercent { get; init; }
         public string Phase { get; init; } = string.Empty;
         public string State { get; init; } = string.Empty;
-        public string Detail { get; init; } = string.Empty;
+        public string Detail { get; init; }
+
+        /// <summary>「最后动作」距今秒数（G3，2026-11-20）。</summary>
+        public int DetailAgeSeconds { get; init; }
         public string MapName { get; init; } = string.Empty;
         public int MapIndex { get; init; }
         public int X { get; init; }
@@ -756,6 +759,7 @@ namespace Server.Bots
                 Phase = PhaseName(session.Phase),
                 State = session.Brain?.State.ToString() ?? "-",
                 Detail = session.Brain?.LastDetail ?? string.Empty,
+                DetailAgeSeconds = session.Brain?.LastDetailAgeSeconds ?? 0,
                 MapName = holder.MapName,
                 MapIndex = holder.MapIndex,
                 X = holder.X,
