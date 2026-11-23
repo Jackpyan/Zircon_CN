@@ -349,7 +349,25 @@ namespace Client.Scenes.Views
 
             if (PickFilter == null) return false;
 
-            int radius = scene.User.Stats[Stat.PickUpRadius];
+            // 2026-11-23：扫描半径 = 角色拾取范围 + Globals.AutoPickExtraRadius（默认 +4）。
+            // 服务端 PickUpAt 用同一个常量校验，两边必须一致，否则会「一直发、一直拒」。
+            int radius = scene.User.Stats[Stat.PickUpRadius] + Globals.AutoPickExtraRadius;
+
+            // 背包满时**只捡货币**（金币不占背包格子）。
+            // 不加这个判断的话，pass 0 会一直去捡地上那件捡不起来的装备，
+            // 服务端拒绝 → 下一帧还是它 → 金币永远排不上（用户实测）。
+            bool bagFull = true;
+
+            if (scene.Inventory != null)
+            {
+                foreach (ClientUserItem slot in scene.Inventory)
+                {
+                    if (slot != null) continue;
+
+                    bagFull = false;
+                    break;
+                }
+            }
             Point user = scene.User.CurrentLocation;
 
             int minX = Math.Max(user.X - radius, 0);
@@ -357,26 +375,42 @@ namespace Client.Scenes.Views
             int minY = Math.Max(user.Y - radius, 0);
             int maxY = Math.Min(user.Y + radius, scene.MapControl.Height - 1);
 
-            for (int x = minX; x <= maxX; x++)
+            // 2026-11-23（用户要求）：**先捡非金币物品，捡完了再捡金币**。
+            // 金币在地面上数量多、格子分散，先扫金币会把真正值钱的装备/碎片挤到后面，
+            // 走位来回跑浪费时间。两遍扫描：pass 0 跳过货币类，pass 1 只捡货币类。
+            for (int pass = 0; pass < 2; pass++)
             {
-                for (int y = minY; y <= maxY; y++)
+                for (int x = minX; x <= maxX; x++)
                 {
-                    Cell cell = scene.MapControl.Cells[x, y];
-
-                    if (cell?.Objects == null) continue;
-
-                    foreach (MapObject ob in cell.Objects)
+                    for (int y = minY; y <= maxY; y++)
                     {
-                        if (ob == null || ob.Race != ObjectType.Item) continue;
+                        Cell cell = scene.MapControl.Cells[x, y];
 
-                        if (!ShouldPick((ItemObject)ob)) continue;
+                        if (cell?.Objects == null) continue;
 
-                        CEnvir.Enqueue(new C.PickUp { Location = new Point(x, y) });
+                        foreach (MapObject ob in cell.Objects)
+                        {
+                            if (ob == null || ob.Race != ObjectType.Item) continue;
 
-                        // 节流：服务端一次只捡一件，给一点间隔避免刷包
-                        scene.PickUpTime = CEnvir.Now.AddMilliseconds(300);
+                            ItemObject itemObject = (ItemObject)ob;
 
-                        return true;
+                            bool isCurrency = itemObject.Item?.Info?.ItemType == ItemType.Currency;
+
+                            if (pass == 0 && isCurrency) continue;
+                            if (pass == 1 && !isCurrency) continue;
+
+                            // 背包满 → 非货币物品跳过，先把金币捡了
+                            if (bagFull && !isCurrency) continue;
+
+                            if (!ShouldPick(itemObject)) continue;
+
+                            CEnvir.Enqueue(new C.PickUp { Location = new Point(x, y) });
+
+                            // 节流：服务端一次只捡一件，给一点间隔避免刷包
+                            scene.PickUpTime = CEnvir.Now.AddMilliseconds(300);
+
+                            return true;
+                        }
                     }
                 }
             }
@@ -3690,7 +3724,13 @@ namespace Client.Scenes.Views
                     switch (field)
                     {
                         case 0: set.hint = source.Checked; break;
-                        case 1: set.pick = source.Checked; break;
+                        case 1:
+                            set.pick = source.Checked;
+                            // 2026-11-23：**勾选后立即落盘**。
+                            // 原来只有宠物列（case 2）会走 SendPickupFilters→Save，
+                            // 角色拾取列勾完不保存 → 重登配置全丢（用户实测）。
+                            ItemFilter.Save();
+                            break;
                         case 2:
                             set.picks = source.Checked;
                             SendPickupFilters();

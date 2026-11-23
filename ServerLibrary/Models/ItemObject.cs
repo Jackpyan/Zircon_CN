@@ -173,6 +173,11 @@ namespace Server.Models
                 return true;
             }
 
+            // 2026-11-23：**背包满要给提示**。
+            // 原来这里静默 return false —— 玩家点拾取、或者自动拾取扫到物品，
+            // 屏幕上什么反应都没有，完全不知道是背包满了。
+            ob?.NotifyBagFull();
+
             //Get Max Carry of type
             //Reduce Amount by type.
             //Send updated floor counts

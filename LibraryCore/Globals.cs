@@ -42,8 +42,41 @@ namespace Library
 
         public static readonly Regex EMailRegex = new Regex(@"\w+([-+.]\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*", RegexOptions.Compiled);
         public static readonly Regex PasswordRegex = new Regex(@"^[\S]{" + MinPasswordLength + "," + MaxPasswordLength + "}$", RegexOptions.Compiled);
+        /// <summary>
+        /// 过滤自动拾取的**额外半径**（2026-11-23）。
+        /// <para>
+        /// 自动拾取（辅助页的过滤拾取）原来只扫 <c>Stat.PickUpRadius</c> 一圈（约 8 格），
+        /// 打完一圈怪地上散落的物品要来回走好几趟。这里给自动拾取加一点范围。
+        /// </para>
+        /// <para>
+        /// <b>必须放 LibraryCore</b>：客户端按这个半径扫描、服务端按同样半径校验
+        /// （<c>PlayerObject.PickUpAt</c>）；两边不一致会出现「客户端一直发、服务端一直拒」的死循环。
+        /// </para>
+        /// <para>只作用于**指定格子**的自动拾取路径，不影响手动点击拾取的距离。</para>
+        /// </summary>
+        public const int AutoPickExtraRadius = 4;
+
         public static readonly Regex CharacterReg = new Regex(@"^[A-Za-z0-9]{" + MinCharacterNameLength + "," + MaxCharacterNameLength + @"}$", RegexOptions.Compiled);
-        public static readonly Regex GuildNameRegex = new Regex(@"^[A-Za-z0-9]{" + MinGuildNameLength + "," + MaxGuildNameLength + "}$", RegexOptions.Compiled);
+        /// <summary>
+        /// 行会名合法性：**允许中文**（2026-11-22）。
+        /// <para>
+        /// 原来是 <c>^[A-Za-z0-9]{n,m}$</c> —— 只认字母数字，中文名直接建不出来
+        /// （服务端 <c>PlayerObject.GuildCreate</c> 会回「行会名不合法」，
+        /// 假人社交也因此只能配英文会名）。
+        /// </para>
+        /// <para>
+        /// 现在放开 CJK 统一表意文字（<c>一-龥</c>）+ 全角字符区常用符号，
+        /// 长度仍按**字符数**算（<see cref="MinGuildNameLength"/>~<see cref="MaxGuildNameLength"/>），
+        /// 中文一字算一个字符。
+        /// </para>
+        /// <para>
+        /// 客户端 <c>GuildDialog</c> 与服务端 <c>GuildCreate</c>/<c>CreateGuild</c> 命令共用本正则，
+        /// 改这一处两端同时生效。
+        /// </para>
+        /// </summary>
+        public static readonly Regex GuildNameRegex = new Regex(
+            @"^[A-Za-z0-9\u4e00-\u9fa5]{" + MinGuildNameLength + "," + MaxGuildNameLength + "}$",
+            RegexOptions.Compiled);
         public static readonly Regex GuildTaxReg = new Regex(@"^(0|[1-9][0-9]?|100)$", RegexOptions.Compiled);
         public static readonly Regex CaptionReg = new Regex(@"^[A-Za-z0-9]{" + MinCaptionLength + "," + MaxCaptionLength + @"}$", RegexOptions.Compiled);
 

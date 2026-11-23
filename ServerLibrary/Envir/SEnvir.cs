@@ -68,6 +68,41 @@ namespace Server.Envir
         public static ConcurrentQueue<string> DisplayChatLogs = new ConcurrentQueue<string>();
         public static ConcurrentQueue<string> ChatLogs = new ConcurrentQueue<string>();
         private static readonly ConcurrentQueue<Action> AdminActions = new ConcurrentQueue<Action>();
+        /// <summary>
+        /// 把异常写进 <c>Errors.txt</c>（2026-11-23）。
+        /// <para>
+        /// 原来三处都只写 <c>ex.StackTrace</c> —— 没有时间、没有异常类型、没有消息，
+        /// 事后只能看到一串 <c>at ...</c>，既不知道什么时候发生的，也不知道是什么错。
+        /// 现在统一带：时间戳 / 来源 / 异常类型 / 消息 / 内层异常 / 堆栈，条目之间用分隔线隔开。
+        /// </para>
+        /// <para>写文件本身失败不能影响主流程，所以整体包在 try 里。</para>
+        /// </summary>
+        public static void WriteErrorFile(string source, Exception ex)
+        {
+            try
+            {
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+                sb.AppendLine(string.Format("===== [{0:yyyy-MM-dd HH:mm:ss}] 来源={1} 类型={2} =====",
+                    Time.LocalNow, source, ex?.GetType().Name ?? "Unknown"));
+                sb.AppendLine("消息：" + (string.IsNullOrEmpty(ex?.Message) ? "(无)" : ex.Message));
+
+                if (ex?.InnerException != null)
+                    sb.AppendLine(string.Format("内层：{0}: {1}",
+                        ex.InnerException.GetType().Name, ex.InnerException.Message));
+
+                sb.AppendLine("堆栈：");
+                sb.AppendLine(string.IsNullOrEmpty(ex?.StackTrace) ? "(无)" : ex.StackTrace);
+                sb.AppendLine();
+
+                File.AppendAllText(PlatformPath.Resolve(@".\Errors.txt"), sb.ToString());
+            }
+            catch
+            {
+                // 写错误日志失败就算了，不能再把主流程带崩
+            }
+        }
+
         /// <summary>停服阶段直接落盘：此时日志队列线程已退出，普通 Log 会丢失。</summary>
         public static void LogShutdown(string log)
         {
@@ -1686,7 +1721,7 @@ namespace Server.Envir
 
                             Log(ex.Message);
                             Log(ex.StackTrace);
-                            File.AppendAllText(PlatformPath.Resolve(@".\Errors.txt"), ex.StackTrace + Environment.NewLine);
+                            WriteErrorFile("对象处理（StartProcess）", ex);
                         }
                     }
 
@@ -1853,7 +1888,7 @@ namespace Server.Envir
 
                     Log(ex.Message);
                     Log(ex.StackTrace);
-                    File.AppendAllText(PlatformPath.Resolve(@".\Errors.txt"), ex.StackTrace + Environment.NewLine);
+                    WriteErrorFile("主循环（EnvirLoop）", ex);
 
                     Packet p = new G.Disconnect { Reason = DisconnectReason.Crashed };
                     for (int i = Connections.Count - 1; i >= 0; i--)
