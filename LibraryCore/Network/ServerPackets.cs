@@ -887,6 +887,19 @@ namespace Library.Network.ServerPackets
         public int StartIndex { get; set; }
     }
 
+    public sealed class RecycleResult : Packet
+    {
+        public int SoldCount { get; set; }     // 本次出售件数
+        public long GoldAdded { get; set; }    // 本次获得金币总数
+        public int StoredCount { get; set; }   // 本次存仓件数（好装备）
+    }
+
+    public sealed class RecycleSet : Packet
+    {
+        public bool Enabled { get; set; }
+        public string Settings { get; set; }   // 勾选保留清单（物品标识，逗号分隔）
+    }
+
     public sealed class StartObserver : Packet
     {
         public StartInformation StartInformation { get; set; }

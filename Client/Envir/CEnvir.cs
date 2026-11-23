@@ -70,6 +70,15 @@ namespace Client.Envir
 
         public static bool TestServer;
 
+        /// <summary>一键回收：是否启用（服务端 <c>S.RecycleSet</c> 下发，2026-11-23）。</summary>
+        public static bool RecycleEnabled;
+
+        /// <summary>
+        /// 一键回收原始设置串（`store=0/1;物品名,物品名`），由服务端下发。
+        /// 客户端只负责编辑和回传，解析规则在服务端 <c>PlayerObject</c> 里。
+        /// </summary>
+        public static string RecycleSettings = string.Empty;
+
         public static StringMessages Language { get; set; }
 
         /// <summary>物品「职业要求」显示名（RequiredClass 单值原本无 Description，会显示英文）。</summary>

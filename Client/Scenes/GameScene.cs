@@ -247,6 +247,9 @@ namespace Client.Scenes
         public DXConfigWindow ConfigBox;
         public HelpDialog HelpBox;
         public CaptionDialog CaptionBox;
+
+        /// <summary>一键回收设置（2026-11-23）。</summary>
+        public RecycleDialog RecycleBox;
         public InventoryDialog InventoryBox;
         public CharacterDialog CharacterBox;
         public FilterDropDialog FilterDropBox;
@@ -617,6 +620,13 @@ namespace Client.Scenes
                 Parent = this,
                 Visible = false,
             };
+
+            RecycleBox = new RecycleDialog
+            {
+                Parent = this,
+                Visible = false,
+            };
+            RecycleBox.Location = Point.Empty;
 
             CaptionBox = new CaptionDialog
             {
@@ -4647,7 +4657,10 @@ namespace Client.Scenes
         }
         public void SafeZoneChanged()
         {
-
+            // 一键回收按钮（2026-11-22 回收功能）：仅在安全区内启用，
+            // 与服务端 InSafeZone 校验双保险；非安全区点击会被服务端拒绝。
+            if (User != null && InventoryBox?.RecycleButton != null)
+                InventoryBox.RecycleButton.Enabled = User.InSafeZone;
         }
         public void WeightChanged()
         {

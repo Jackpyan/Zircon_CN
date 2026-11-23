@@ -470,6 +470,22 @@ namespace Library.Network.ClientPackets
         public string Name { get; set; }
     }
 
+    public sealed class RecycleGet : Packet
+    {
+    }
+
+    public sealed class RecycleNow : Packet
+    {
+        public bool Confirm { get; set; }
+        public int PotionLevel { get; set; }   // 当前补给药水需求等级；0=不启用药品特殊规则
+    }
+
+    public sealed class RecycleSet : Packet
+    {
+        public bool Enabled { get; set; }
+        public string Settings { get; set; }   // 勾选保留清单（物品标识，逗号分隔）
+    }
+
     public sealed class ObserverRequest : Packet
     {
         public string Name { get; set; }

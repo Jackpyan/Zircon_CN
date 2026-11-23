@@ -12,8 +12,10 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using C = Library.Network.ClientPackets;
 using S = Library.Network.ServerPackets;
 
@@ -33,6 +35,9 @@ namespace Server.Models
         /// </para>
         private DateTime _lastPickUpDeniedTime;
 
+        /// <summary>「背包已满」提示的节流时间（2026-11-23）。</summary>
+        private DateTime _lastBagFullTime;
+
         /// <summary>
         /// 拾取被拒（物品归属他人）时给客户端发系统提示（2026-11-15）。
         /// <para>
@@ -44,6 +49,20 @@ namespace Server.Models
         /// 发包路径被 <c>Enqueue</c> 的 IsBot 短路，发出去也是空操作，无需空发。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 背包满导致捡不起来时的提示（2026-11-23），1 秒节流避免自动拾取刷屏。
+        /// </summary>
+        public void NotifyBagFull()
+        {
+            if (Connection == null || Connection.IsBot) return;
+
+            if ((SEnvir.Now - _lastBagFullTime).TotalMilliseconds < 1000) return;
+
+            _lastBagFullTime = SEnvir.Now;
+
+            Connection.ReceiveChat("背包已满，无法拾取物品。", MessageType.System);
+        }
+
         public void NotifyPickUpDenied()
         {
             if (Connection == null || Connection.IsBot) return;
@@ -212,6 +231,13 @@ namespace Server.Models
 
         /// <summary>辅助功能（自动战斗）各开关的持久化配置。</summary>
         public List<AutoFightConfig> AutoFights = new List<AutoFightConfig>();
+
+        /// <summary>回收功能（一键出售）角色级状态。</summary>
+        public bool RecycleEnabled;
+        /// <summary>勾选保留清单（物品标识，逗号分隔），随 S.RecycleSet 下发/回显。</summary>
+        public string RecycleSettings = string.Empty;
+        /// <summary>是否已加载过本角色回收设置（区分「未设置」与「未加载」）。</summary>
+        public bool RecycleLoaded;
 
         /// <summary>
         /// 挂机到期时刻（内存值）。由 <see cref="CharacterInfo.Account"/> 的
@@ -1278,6 +1304,14 @@ namespace Server.Models
 
             Enqueue(new S.StartGame { Result = StartGameResult.Success, StartInformation = GetStartInformation() });
             //Send Items
+
+            // 回收功能：加载角色级保留清单并下发（登录下发 + 未设置提示）
+            RecycleLoad();
+            Enqueue(new S.RecycleSet { Enabled = RecycleEnabled, Settings = RecycleSettings });
+            if (!RecycleEnabled || string.IsNullOrWhiteSpace(RecycleSettings))
+            {
+                Connection.ReceiveChatWithObservers(con => "本角色尚未设置回收保留清单，暂时不会自动回收。", MessageType.System);
+            }
 
             // 挂机剩余时长（按账号持久化），客户端用于在「辅助」页显示
             Enqueue(new S.AutoTimeChanged { AutoTime = Character.AutoTime });
@@ -9058,7 +9092,9 @@ namespace Server.Models
 
             if (location.X < 0 || location.Y < 0 || location.X >= CurrentMap.Width || location.Y >= CurrentMap.Height) return;
 
-            if (Functions.Distance(CurrentLocation, location) > range) return;
+            // 2026-11-23：指定格子的拾取（辅助页过滤自动拾取）放宽
+            // Globals.AutoPickExtraRadius 格；客户端扫描半径用的是同一个常量。
+            if (Functions.Distance(CurrentLocation, location) > range + Globals.AutoPickExtraRadius) return;
 
             Cell cell = CurrentMap.Cells[location.X, location.Y];
 
@@ -10801,6 +10837,434 @@ namespace Server.Models
                 GainItem(item);
             }
         }
+
+        #region 回收功能（一键出售，2026-11-22）
+
+        /// <summary>回收设置文件路径：datas/角色回收/<账号邮箱>__<角色名>.txt。</summary>
+        private string RecycleFilePath
+        {
+            get
+            {
+                if (Character == null) return null;
+
+                string name = $"{Character.Account?.EMailAddress ?? "unknown"}__{Character.CharacterName}";
+
+                foreach (char c in Path.GetInvalidFileNameChars())
+                    name = name.Replace(c, '_');
+
+                // 2026-11-23（用户要求）：目录从 `datas/角色回收/` 改为 `Database/Character_Recycling/`
+                // —— 回收设置属于玩家数据，跟着 Database 目录一起备份更合理。
+                return PlatformPath.Resolve(@".\Database\Character_Recycling\" + name + ".txt");
+            }
+        }
+
+        /// <summary>加载本角色回收设置（登录时调用）。</summary>
+        public void RecycleLoad()
+        {
+            if (Character == null) return;
+
+            RecycleLoaded = true;
+
+            string path = RecycleFilePath;
+            if (path == null || !File.Exists(path))
+            {
+                RecycleEnabled = false;
+                RecycleSettings = string.Empty;
+                return;
+            }
+
+            try
+            {
+                foreach (string line in File.ReadAllLines(path))
+                {
+                    string[] parts = line.Split('=');
+                    if (parts.Length < 2) continue;
+
+                    switch (parts[0].Trim())
+                    {
+                        case "启用":
+                            RecycleEnabled = parts[1].Trim() == "1";
+                            break;
+                        case "保留":
+                            RecycleSettings = parts[1].Trim();
+                            break;
+                    }
+                }
+            }
+            catch
+            {
+                RecycleEnabled = false;
+                RecycleSettings = string.Empty;
+            }
+        }
+
+        /// <summary>保存回收设置到文件。</summary>
+        private void RecycleSave()
+        {
+            string path = RecycleFilePath;
+            if (path == null) return;
+
+            try
+            {
+                string dir = Path.GetDirectoryName(path);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("启用=" + (RecycleEnabled ? "1" : "0"));
+                sb.AppendLine("保留=" + (RecycleSettings ?? string.Empty));
+                File.WriteAllText(path, sb.ToString());
+            }
+            catch
+            {
+                // 落盘失败不影响内存状态
+            }
+        }
+
+        /// <summary>
+        /// 不纳入回收的物品：回城卷、道士的符、道士的毒药。
+        /// 始终保留在背包（不出售、不存仓、不装备）。
+        /// </summary>
+        private static bool 不纳入回收(UserItem item)
+        {
+            if (item?.Info == null) return false;
+
+            ItemInfo info = item.Info;
+
+            // 回城卷：Consumable 且 Shape==2（与引擎 ItemUse 的 Town Teleport 分支一致）
+            if (info.ItemType == ItemType.Consumable && info.Shape == 2) return true;
+
+            // 道士的符：Book 类型且名称含「符」（灵魂火符/灭魂火符/强化灵魂火符）
+            if (info.ItemType == ItemType.Book && info.ItemName != null && info.ItemName.Contains("符")) return true;
+
+            // 道士的毒药：Poison 类型
+            if (info.ItemType == ItemType.Poison) return true;
+
+            return false;
+        }
+
+        /// <summary>是否为蓝红药（恢复药水）：Consumable 且恢复生命或魔法。</summary>
+        private static bool 是蓝红药(UserItem item)
+        {
+            if (item?.Info == null) return false;
+            if (item.Info.ItemType != ItemType.Consumable) return false;
+
+            return item.Info.Stats[Stat.Health] > 0 || item.Info.Stats[Stat.Mana] > 0;
+        }
+
+        /// <summary>
+        /// 蓝红药补给适配判定：potionLevel&gt;0 时，等级 ≥ 当前补给需求等级 → 保留；低于 → 可售。
+        /// </summary>
+        private static bool 蓝红药保留(UserItem item, int potionLevel)
+        {
+            return potionLevel > 0 && 是蓝红药(item) && item.Level >= potionLevel;
+        }
+
+        /// <summary>
+        /// 可售判定（出售扫描用）：排除绑定/锁定/垃圾/结婚物品（与假人 BotItemRules 同口径）。
+        /// </summary>
+        private static bool IsSellBlocked(UserItemFlags flags)
+        {
+            const UserItemFlags blocked =
+                UserItemFlags.Bound | UserItemFlags.Locked | UserItemFlags.Worthless | UserItemFlags.Marriage;
+
+            return (flags & blocked) != UserItemFlags.None;
+        }
+
+        /// <summary>
+        /// 保留判定（核心）：不纳入回收 → 蓝红药补给适配 → 勾选保留清单。
+        /// 未启用或清单为空 → 不保留。
+        /// </summary>
+        /// <summary>
+        /// 背包保护（2026-11-23 用户要求）：**既不卖、也不存仓，原样留在背包**。
+        /// <para>
+        /// 覆盖两类：① 回城卷 / 道士的符 / 道士的毒药（<see cref="不纳入回收"/>）；
+        /// ② **所有恢复红/蓝的药品**。
+        /// </para>
+        /// <para>
+        /// 药品以前是走「保留清单 → 存仓」，用户实测后要求改成直接留背包 ——
+        /// 药是消耗品，存进仓库等于白存，还得手动搬出来。
+        /// </para>
+        /// </summary>
+        private static bool 背包保护(UserItem item)
+        {
+            if (item?.Info == null) return false;
+
+            if (不纳入回收(item)) return true;
+
+            return 是蓝红药(item);
+        }
+
+        /// <summary>
+        /// 保留清单匹配（要存仓库的「好装备」）。清单来自 <see cref="RecycleKeepListText"/>。
+        /// </summary>
+        private bool 清单保留(UserItem item)
+        {
+            string list = RecycleKeepListText;
+
+            if (string.IsNullOrWhiteSpace(list)) return false;
+
+            return list.Split(',').Any(x => string.Equals(x.Trim(), item.Info.ItemName, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 保留清单正文（2026-11-23）：`RecycleSettings` 用 `;` 分段，
+        /// `store=0/1` 是选项段，其余段拼起来才是物品名清单（逗号分隔）。
+        /// <para>
+        /// 为什么编码进同一个字段：<c>C.RecycleSet</c> 只有 (Enabled, Settings) 两个字段，
+        /// 加新字段会让包表再偏移一次、客户端/服务端都得重编；用分段编码可以零协议改动。
+        /// 用 `;` 而不是换行，是因为 <see cref="RecycleSave"/> 把设置写成「保留=」单行文本，
+        /// 换行会把存档文件结构撑坏。
+        /// </para>
+        /// </summary>
+        private string RecycleKeepListText
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(RecycleSettings)) return string.Empty;
+
+                return string.Join(",", RecycleSettings
+                    .Split(';')
+                    .Select(x => x.Trim())
+                    .Where(x => x.Length > 0 && !x.StartsWith("store=", StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        /// <summary>保留物品是否存仓库（`store=1` 存、`store=0` 留背包；缺省=存）。</summary>
+        private bool RecycleStoreToWarehouse
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(RecycleSettings)) return true;
+
+                foreach (string segment in RecycleSettings.Split(';'))
+                {
+                    string text = segment.Trim();
+
+                    if (text.StartsWith("store=", StringComparison.OrdinalIgnoreCase))
+                        return text.Substring(6).Trim() == "1";
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>保存回收保留清单并回显（C.RecycleSet）。</summary>
+        public void RecycleSet(bool enabled, string settings)
+        {
+            RecycleEnabled = enabled;
+            RecycleSettings = settings ?? string.Empty;
+            RecycleLoaded = true;
+            RecycleSave();
+
+            Enqueue(new S.RecycleSet { Enabled = RecycleEnabled, Settings = RecycleSettings });
+        }
+
+        /// <summary>查询当前回收设置（C.RecycleGet）。</summary>
+        public void RecycleGet()
+        {
+            Enqueue(new S.RecycleSet { Enabled = RecycleEnabled, Settings = RecycleSettings });
+        }
+
+        /// <summary>
+        /// 一键出售请求（C.RecycleNow）：安全区校验后调用 OneKeySell（真人端，好装备存仓）。
+        /// </summary>
+        public void RecycleNow(bool confirm, int potionLevel)
+        {
+            if (!confirm) return;
+
+            if (!InSafeZone)
+            {
+                Connection?.ReceiveChatWithObservers(con => "未在安全区，无法使用一键回收。", MessageType.System);
+                return;
+            }
+
+            // 2026-11-23：存仓由玩家设置（`store=0/1`）决定，不再写死 true
+            OneKeySell(RecycleStoreToWarehouse, potionLevel);
+        }
+
+        /// <summary>
+        /// 一键出售核心处理（④⑤⑥ 三端共用）。
+        /// storeToWarehouse：true=真人客户端（勾选保留的好装备存仓），false=假人（好装备不处理，留背包）。
+        /// </summary>
+        public void OneKeySell(bool storeToWarehouse, int potionLevel)
+        {
+            // 1. 安全区校验（三端统一，最高优先）
+            if (!InSafeZone)
+            {
+                Connection?.ReceiveChatWithObservers(con => "未在安全区，无法使用一键回收。", MessageType.System);
+                return;
+            }
+
+            // 2. 校验保留清单生效
+            if (!RecycleEnabled)
+            {
+                Connection?.ReceiveChatWithObservers(con => "尚未启用一键回收，请先在回收设置里勾选「启用」。", MessageType.System);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(RecycleKeepListText))
+            {
+                Connection?.ReceiveChatWithObservers(con => "尚未设置回收保留清单，无法一键出售。", MessageType.System);
+                return;
+            }
+
+            int soldCount = 0;
+            long goldAdded = 0;
+            int storedCount = 0;
+            List<CellLinkInfo> changedLinks = new List<CellLinkInfo>();
+
+            // 3. 扫描出售背包（Inventory，只扫背包）
+            for (int i = 0; i < Inventory.Length; i++)
+            {
+                UserItem item = Inventory[i];
+                if (item == null) continue;
+
+                // 3-1 背包保护：回城卷/符/毒药 + 所有红蓝药 —— 不卖也不存仓，原样留背包
+                if (背包保护(item)) continue;
+
+                // 不可售：绑定/锁定/垃圾/结婚
+                if (IsSellBlocked(item.Flags)) continue;
+
+                // 4. 逐件判定
+                if (清单保留(item))
+                {
+                    // 勾选保留的物品（好装备）
+                    if (storeToWarehouse)
+                    {
+                        // 存仓库（仓库满则留背包，不售不存）
+                        if (StoreToWarehouse(item, i, changedLinks))
+                            storedCount++;
+                    }
+                    // false=假人：不处理，留背包（装备动作由假人原有逻辑负责）
+                    continue;
+                }
+
+                // 未勾选的可售物品 → 出售
+                long price = (long)(item.Info.Price * Config.OneKeySellMultiplier);
+                if (price <= 0) continue;
+
+                goldAdded += price;
+                soldCount++;
+
+                RemoveItem(item);
+                Inventory[i] = null;
+                item.Delete();
+                // Count = item.Count：客户端按「Link.Count == 格子物品 Count」判定整件清空，
+                // 写 0 会导致 Count>0 的物品走「部分扣除」分支而不清空格子。
+                changedLinks.Add(new CellLinkInfo { GridType = GridType.Inventory, Slot = i, Count = item.Count });
+            }
+
+            if (changedLinks.Count > 0)
+            {
+                Enqueue(new S.ItemsChanged { Links = changedLinks });
+                RefreshWeight();
+            }
+            else if (storedCount > 0)
+            {
+                // 只存仓、没卖出时也要刷负重（物品离开背包，负重变了）。
+                RefreshWeight();
+            }
+
+            if (soldCount > 0)
+            {
+                GameGold.Amount += goldAdded;
+                GameGoldChanged();
+            }
+
+            // 6. 结果回包（出售件数/金币/存仓件数）
+            Enqueue(new S.RecycleResult { SoldCount = soldCount, GoldAdded = goldAdded, StoredCount = storedCount });
+        }
+
+        /// <summary>
+        /// 存仓：Inventory → Storage（参考 ItemMove 存仓逻辑）。
+        /// 仓库满或物品为部件则返回 false（该件留背包，不售不存）。
+        /// </summary>
+        private bool StoreToWarehouse(UserItem item, int fromSlot, List<CellLinkInfo> changedLinks)
+        {
+            // 2026-11-23：碎片不进主仓库，改存**碎片仓库**（PartsStorage）。
+            // 原来直接 return false → 碎片既没卖掉也没存仓，玩家看到的是「凭空消失」。
+            if (item.Info.ItemEffect == ItemEffect.ItemPart)
+            {
+                int partSlot = -1;
+
+                for (int i = 0; i < PartsStorage.Length; i++)
+                {
+                    if (PartsStorage[i] != null) continue;
+
+                    partSlot = i;
+                    break;
+                }
+
+                if (partSlot < 0)
+                {
+                    Connection?.ReceiveChatWithObservers(con => "碎片仓库已满，碎片未能存入。", MessageType.System);
+                    return false;
+                }
+
+                Inventory[fromSlot] = null;
+                PartsStorage[partSlot] = item;
+                item.Slot = partSlot;
+                item.Character = Character;
+                item.StorageOwner = Character;
+
+                // 2026-11-23：**必须用 S.ItemMove 同步**，不能用 S.ItemsChanged。
+                // S.ItemsChanged 的处理是「按 Count 扣减 fromCell.Item」，
+                // 而目标格（仓库）原本是空的 → fromCell.Item 为 null → 客户端取 .Info 直接 NRE，
+                // 整包后续 link 全部丢弃 —— 表现就是「背包没清空、仓库也看不到」。
+                // S.ItemMove(Success=true) 才是引擎给「物品换格子」用的包，客户端自己搬。
+                Enqueue(new S.ItemMove
+                {
+                    FromGrid = GridType.Inventory,
+                    FromSlot = fromSlot,
+                    ToGrid = GridType.PartsStorage,
+                    ToSlot = partSlot,
+                    Success = true,
+                });
+
+                return true;
+            }
+
+            int toSlot = -1;
+            int limit = Math.Min(Character.StorageSize, Storage.Length);
+            for (int i = 0; i < limit; i++)
+            {
+                if (Storage[i] == null)
+                {
+                    toSlot = i;
+                    break;
+                }
+            }
+
+            if (toSlot < 0)
+            {
+                // 2026-11-23：**仓库满要给提示**。原来静默 return false，
+                // 玩家看到的是「一键回收没存任何东西」，完全不知道是仓库满了
+                // （实测：100 格仓库被占满时，只有可堆叠的药/卷能合并进去，
+                //  装备/碎片一律存不进 —— 表现就是「只有药品能存」）。
+                Connection?.ReceiveChatWithObservers(con => "仓库已满，保留物品未能存入仓库。", MessageType.System);
+                return false;
+            }
+
+            Inventory[fromSlot] = null;
+            Storage[toSlot] = item;
+            item.Slot = toSlot;
+            item.Character = Character;
+            item.StorageOwner = Character;
+
+            // 同上：换格子必须走 S.ItemMove，走 S.ItemsChanged 会因为目标格为空而 NRE。
+            Enqueue(new S.ItemMove
+            {
+                FromGrid = GridType.Inventory,
+                FromSlot = fromSlot,
+                ToGrid = GridType.Storage,
+                ToSlot = toSlot,
+                Success = true,
+            });
+
+            return true;
+        }
+
+        #endregion
 
         public void NPCSell(List<CellLinkInfo> links)
         {

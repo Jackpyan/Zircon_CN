@@ -65,7 +65,7 @@ namespace Server.Envir
                 SEnvir.Log(string.Format("连接崩溃：账号：{0}，角色：{1}。", Account?.EMailAddress, Player?.Name));
                 SEnvir.Log(e.ToString());
                 SEnvir.Log(e.StackTrace.ToString());
-                File.AppendAllText(PlatformPath.Resolve(@".\Errors.txt"), e.StackTrace + Environment.NewLine);
+                SEnvir.WriteErrorFile(string.Format("连接崩溃（账号 {0}）", Account?.EMailAddress ?? "?"), e);
             };
 
             SEnvir.Log(string.Format("[连接] IP 地址：{0}", IPAddress));
@@ -740,6 +740,24 @@ namespace Server.Envir
             if (Stage != GameStage.Game) return;
 
             Player.NPCSell(p.Links);
+        }
+        public void Process(C.RecycleSet p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RecycleSet(p.Enabled, p.Settings);
+        }
+        public void Process(C.RecycleNow p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RecycleNow(p.Confirm, p.PotionLevel);
+        }
+        public void Process(C.RecycleGet p)
+        {
+            if (Stage != GameStage.Game) return;
+
+            Player.RecycleGet();
         }
         public void Process(C.NPCRepair p)
         {

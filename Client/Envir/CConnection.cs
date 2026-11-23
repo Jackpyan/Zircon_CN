@@ -3734,6 +3734,22 @@ namespace Client.Envir
             MapObject.User.InSafeZone = p.InSafeZone;
         }
 
+        public void Process(S.RecycleResult p)
+        {
+            // 一键回收结果回显（2026-11-22 回收功能）：
+            // 服务端完成出售后回包，这里在聊天框提示本次结果。
+            GameScene.Game.ReceiveChat(string.Format(
+                "一键回收完成：出售 {0} 件，获得 {1} 金币，存仓 {2} 件。",
+                p.SoldCount, p.GoldAdded, p.StoredCount), MessageType.System);
+        }
+
+        public void Process(S.RecycleSet p)
+        {
+            // 回收设置回显（2026-11-23）：存到 CEnvir，背包窗口的「回收设置」对话框直接读它。
+            CEnvir.RecycleEnabled = p.Enabled;
+            CEnvir.RecycleSettings = p.Settings ?? string.Empty;
+        }
+
         public void Process(S.CombatTime p)
         {
             GameScene.Game.User.CombatTime = CEnvir.Now;

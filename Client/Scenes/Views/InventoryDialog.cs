@@ -1,4 +1,4 @@
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.UserModels;
@@ -20,7 +20,7 @@ namespace Client.Scenes.Views
         public DXItemGrid Grid;
 
         public DXLabel TitleLabel, PrimaryCurrencyLabel, SecondaryCurrencyLabel, WeightLabel, WalletLabel, PrimaryCurrencyTitle, SecondaryCurrencyTitle;
-        public DXButton CloseButton, SortButton, TrashButton, SellButton;
+        public DXButton CloseButton, SortButton, TrashButton, SellButton, RecycleButton, RecycleSetButton;
 
         public List<DXItemCell> SelectedItems = new();
 
@@ -195,6 +195,11 @@ namespace Client.Scenes.Views
                 Parent = this,
             };
 
+            // 2026-11-23：标题**靠左**，把中间到右侧的空间腾出来给按钮，
+            // 原来居中时和「回收设置 / 丢弃」挤在一起（用户反馈太丑）。
+            TitleLabel.AutoSize = true;
+            TitleLabel.Location = new Point(DisplayArea.Location.X + 8, TitleLabel.Location.Y);
+
             Grid = new DXItemGrid
             {
                 GridSize = new Size(6, 8),
@@ -311,7 +316,9 @@ namespace Client.Scenes.Views
                 LibraryFile = LibraryFile.GameInter,
                 Index = 358,
                 Parent = this,
-                Location = new Point(218, 384),
+                // 2026-11-23：**丢弃挪到标题栏**（关闭按钮左边），底部那一行让给「一键回收」。
+                // 有回收之后丢弃用得少，标题栏足够放。
+                Location = new Point(CloseButton.Location.X - 30, 4),
                 Hint = CEnvir.Language.InventoryDialogTrashButtonHint
             };
             TrashButton.MouseClick += TrashButton_MouseClick;
@@ -327,6 +334,51 @@ namespace Client.Scenes.Views
                 Visible = false
             };
             SellButton.MouseClick += SellButton_MouseClick;
+
+            // 一键回收（2026-11-22 回收功能）：安全区内启用，点击后服务端执行
+            // 未勾选保留的可售物品一键出售（联动仓库存仓），结果通过 S.RecycleResult 回显。
+            // 2026-11-23：**默认启用**。
+            // 原来 Enabled = false 且只有 SafeZoneChanged 会置 true —— 玩家在城里登录时
+            // 那个事件不一定触发，按钮就一直灰着，看起来像「没有这个按钮」。
+            // 安全区校验在点击时已经做了（未在安全区直接提示、不发包），不必靠 Enabled 卡。
+            RecycleButton = new DXButton
+            {
+                LibraryFile = LibraryFile.GameInter,
+                // 2026-11-23：**356 是竖分隔条**（用户实测：按钮位置显示一条竖黑条），
+                // 换成 354（出售图标，方形）。354 原本给 SellButton 用，但两个按钮
+                // 分属不同模式（Normal 显示回收 / Sell 显示出售），不会同屏出现。
+                Index = 354,
+                Parent = this,
+                // 2026-11-23：**占原「丢弃」的位置**（218,384）。
+                // 窗口是固定尺寸的图片控件（Interface 图 130），x=256 贴右边缘会被裁掉；
+                // 218 是底部一行能完整显示的最右位置，丢弃挪去标题栏后这里正好空出来。
+                Location = new Point(218, 384),
+                Hint = "一键回收（安全区内可用）",
+                Enabled = true
+            };
+            RecycleButton.MouseClick += RecycleButton_MouseClick;
+
+            // 回收设置入口（2026-11-23）：标题栏、丢弃按钮左边。
+            // 用**文字按钮**而不是图标 —— 图库里没有合适的「齿轮」索引，
+            // 之前给回收按钮挑图标就因为索引是分隔条踩过坑。
+            RecycleSetButton = new DXButton
+            {
+                ButtonType = ButtonType.SmallButton,
+                Parent = this,
+                Size = new Size(46, SmallButtonHeight),
+                Label = { Text = "回收设置" },
+                Hint = "启用开关 / 保留清单 / 是否存仓库"
+            };
+            RecycleSetButton.Location = new Point(CloseButton.Location.X - 30 - 52, 5);
+            RecycleSetButton.MouseClick += (o, e) =>
+            {
+                if (GameScene.Game.RecycleBox == null) return;
+
+                GameScene.Game.RecycleBox.Refresh();
+                GameScene.Game.RecycleBox.Visible = true;
+            };
+
+
 
             WalletLabel = new DXLabel
             {
@@ -444,6 +496,21 @@ namespace Client.Scenes.Views
             {
                 CEnvir.Enqueue(new C.NPCSell { Links = links });
             }
+        }
+
+        private void RecycleButton_MouseClick(object sender, MouseEventArgs e)
+        {
+            if (GameScene.Game.Observer) return;
+
+            // 安全区限定（与服务端校验双保险）：未在安全区不发包，直接提示。
+            if (MapObject.User == null || !MapObject.User.InSafeZone)
+            {
+                GameScene.Game.ReceiveChat("未在安全区，无法使用一键回收。", MessageType.System);
+                return;
+            }
+
+            // PotionLevel=0：完整客户端真人手动回收，不启用药品特殊规则，按保留清单判定。
+            CEnvir.Enqueue(new C.RecycleNow { Confirm = true, PotionLevel = 0 });
         }
 
         private void PrimaryCurrencyLabel_MouseClick(object sender, MouseEventArgs e)
@@ -568,6 +635,7 @@ namespace Client.Scenes.Views
         {
             TrashButton.Visible = false;
             SellButton.Visible = false;
+            RecycleButton.Visible = false;
 
             DXItemCell.SelectedCell = null;
 
@@ -578,6 +646,7 @@ namespace Client.Scenes.Views
                         RefreshCurrency();
 
                         TrashButton.Visible = true;
+                        RecycleButton.Visible = true;
 
                         TitleLabel.Text = CEnvir.Language.InventoryDialogTitle;
                     }
@@ -706,6 +775,22 @@ namespace Client.Scenes.Views
                         SellButton.Dispose();
 
                     SellButton = null;
+                }
+
+                if (RecycleSetButton != null)
+                {
+                    if (!RecycleSetButton.IsDisposed)
+                        RecycleSetButton.Dispose();
+
+                    RecycleSetButton = null;
+                }
+
+                if (RecycleButton != null)
+                {
+                    if (!RecycleButton.IsDisposed)
+                        RecycleButton.Dispose();
+
+                    RecycleButton = null;
                 }
 
                 if (PrimaryCurrencyTitle != null)
