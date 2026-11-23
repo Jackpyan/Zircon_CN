@@ -35,6 +35,12 @@ namespace Server.Bots
         public long Gold { get; init; }
         public int MagicCount { get; init; }
         public string OnlineFor { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 行会显示文本：`行会名/职位`，没有行会就是「无」（2026-11-22）。
+        /// 职位直接取 <c>GuildMemberInfo.Rank</c>（引擎里是字符串，如「会长」「成员」）。
+        /// </summary>
+        public string GuildText { get; init; } = "无";
         public string LastError { get; init; } = string.Empty;
         public bool Broken { get; init; }
 
@@ -407,6 +413,9 @@ namespace Server.Bots
 
             // 社交（行会 / 组队 / 交易 / PK）：内部有 20 秒节流，每帧调也只是一次时间比较。
             BotSocial.Process();
+
+            // 战斗效率统计（W12）：10 分钟一窗口，内部自带节流。
+            BotFightStats.Process(Sessions);
 
             if (SEnvir.Now >= _nextEvaluateTime)
             {
@@ -793,6 +802,7 @@ namespace Server.Bots
                 RedPotions = holder.RedPotions,
                 BluePotions = holder.BluePotions,
                 OnlineFor = session.IsOnline ? FormatDuration(SEnvir.Now - session.OnlineSince) : string.Empty,
+                GuildText = BuildGuildText(session.Character),
                 LastError = session.LastError,
                 Broken = session.Phase == BotPhase.Broken,
                 IsOnline = session.IsOnline,
@@ -1002,6 +1012,35 @@ namespace Server.Bots
                 case BotPhase.Broken: return "故障";
                 default: return phase.ToString();
             }
+        }
+
+        /// <summary>
+        /// 行会显示文本（2026-11-22）：`行会名/职位`；没行会返回「无」。
+        /// <para>
+        /// 假人默认没有行会，只有被真人拉进去或运营手工加过才有 —— 所以「无」是常态，
+        /// 不要为了显示好看而编造职位。
+        /// </para>
+        /// </summary>
+        private static string BuildGuildText(CharacterInfo character)
+        {
+            GuildMemberInfo member = character?.GuildMember;
+
+            string guildName = member?.Guild?.GuildName;
+
+            if (string.IsNullOrWhiteSpace(guildName)) return "无";
+
+            string rank = member.Rank;
+
+            // 会长头衔由 AssignRanks 设置；万一还没轮到（新会刚建），
+            // 用权限位兜底显示「会长」，避免显示成「行会名」光秃秃一个。
+            if (string.IsNullOrWhiteSpace(rank))
+            {
+                rank = (member.Permission & GuildPermission.Leader) == GuildPermission.Leader
+                    ? "会长"
+                    : string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(rank) ? guildName : guildName + "/" + rank;
         }
 
         private static string FormatDuration(TimeSpan span)

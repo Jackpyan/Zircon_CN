@@ -332,7 +332,15 @@ namespace Server.Envir
         public static int BotBreakerRecoverSeconds { get; set; } = 60;
 
         /// <summary>同一张地图上最多放几个假人练级，超了就跨图分流（防止一堆人抢一片刷怪区）。</summary>
-        public static int BotMapCapacity { get; set; } = 8;
+        /// <summary>
+        /// 同一张地图上最多放几个假人练级（2026-11-22 由 12 调到 18）。
+        /// <para>
+        /// 依据：W7 诊断日志显示「选点失败」里 **同图满员占 50.6%**（519/1025），
+        /// 一半的选点尝试撞在容量上，进而触发跨图（Travel 34.6%）。
+        /// 容量本身是**软上限**（满员时会忽略容量再选一次），但频繁触发说明 12 对 100 个假人太紧。
+        /// </para>
+        /// </summary>
+        public static int BotMapCapacity { get; set; } = 18;
 
         /// <summary>
         /// 真人优先：已经被真人打过的怪（引擎的 <c>MonsterObject.EXPOwner</c> = 谁先打谁拥有）假人不再抢。
@@ -434,24 +442,33 @@ namespace Server.Envir
         public static bool BotGuildEnabled { get; set; } = true;
 
         /// <summary>要建几个假人行会（不超过 <see cref="BotGuildNames"/> 的条数）。</summary>
-        public static int BotGuildCount { get; set; } = 2;
+        public static int BotGuildCount { get; set; } = 5;
 
         /// <summary>
-        /// 行会名，逗号分隔。
+        /// 假人要建的行会名，逗号（或分号）分隔。
         /// <para>
-        /// <b>只能是字母数字</b>：<c>Globals.GuildNameRegex</c> 是 <c>^[A-Za-z0-9]{n,m}$</c>，中文名建不出来。
+        /// <b>⚠ 已停用（2026-11-22）</b>：行会名**唯一来源是 <c>Bots/guilds.txt</c>**，
+        /// 本配置不再参与逻辑，保留字段只为兼容旧 ini 文件、不报未知键。
+        /// 名单文件用后台「服务器配置 → 初始化行会名单」创建；文件缺失时行会流程全部暂停。
+        /// </para>
+        /// <para>
+        /// 2026-11-22 起**支持中文**：<c>Globals.GuildNameRegex</c> 已放开 CJK 字符，
+        /// 2~15 个字符（中文一字算一个）。名字重复会被引擎拒绝，所以列表里别写重复项。
         /// </para>
         /// </summary>
-        public static string BotGuildNames { get; set; } = "MoonLight,OldTimes";
+        public static string BotGuildNames { get; set; } = "明月楼,旧时光,铁血同盟,听雨轩,长安城";
 
         /// <summary>建会资格等级（真人客户端也是 30 级才能建会）。</summary>
         public static int BotGuildMinLevel { get; set; } = 30;
 
         /// <summary>
         /// 建会时额外买多少「成员格」（每格 100 万金币）。
-        /// <para>成员上限 = 10 + 这个值。默认 5 → 15 个位置，两个会能装下 30 个假人。</para>
+        /// <para>
+        /// 成员上限 = 10 + 这个值。默认 20 → **30 个位置/会**（20 假人 + 10 真人位），
+        /// 建会成本 = 750 万 + 20 × 100 万 = **2750 万**（见 <see cref="BotGuildGrantGold"/>）。
+        /// </para>
         /// </summary>
-        public static int BotGuildMembers { get; set; } = 5;
+        public static int BotGuildMembers { get; set; } = 20;
 
         /// <summary>
         /// 建会注资上限（金币）。0 = 不注资（假人只能靠自己攒，基本建不起来）。
@@ -460,7 +477,29 @@ namespace Server.Envir
         /// <b>这是往经济里注水</b>：两个会约 2500 万，开之前先想清楚。
         /// </para>
         /// </summary>
-        public static long BotGuildGrantGold { get; set; } = 13000000;
+        public static long BotGuildGrantGold { get; set; } = 27500000;
+
+        /// <summary>
+        /// 每个假人行会最多放几个**假人**（2026-11-22）。
+        /// <para>
+        /// 引擎的 <c>MemberLimit</c> 是「10 + <see cref="BotGuildMembers"/>」= 30，
+        /// 这个值只限制假人数量，剩下的位置留给真人玩家。
+        /// 默认 20 → 每会 20 假人 + 10 真人位；5 个会正好装下 100 个假人。
+        /// </para>
+        /// </summary>
+        public static int BotGuildBotLimit { get; set; } = 20;
+
+        /// <summary>
+        /// 换会时相邻两次退会的最小间隔（分钟，2026-11-22）。
+        /// <para>
+        /// 退会要向全会广播 <c>GuildKick</c> / <c>GuildChanged</c>，100 个假人同时退会
+        /// 会顶住主循环、客户端也会刷出一片「XX 离开了行会」。用户要求「间隔退会」。
+        /// </para>
+        /// </summary>
+        public static int BotGuildLeaveMinMinutes { get; set; } = 10;
+
+        /// <summary>换会时相邻两次退会的最大间隔（分钟，2026-11-22）。</summary>
+        public static int BotGuildLeaveMaxMinutes { get; set; } = 60;
 
         /// <summary>
         /// 红名 PK（P3-4）。<b>会主动攻击真人红名</b>，是整个假人系统里唯一这么做的功能。
@@ -558,6 +597,43 @@ namespace Server.Envir
         /// </para>
         /// </summary>
         public static int BotRestockBuyTownScroll { get; set; } = 12;
+
+        /// <summary>
+        /// 一键出售倍数（回收功能，2026-11-22）。
+        /// 出售单价 = ItemInfo.Price（数据库价格）× OneKeySellMultiplier。
+        /// 服务端直接改此配置即生效，无需改代码、无需重新编译。
+        /// </summary>
+        public static double OneKeySellMultiplier { get; set; } = 1.0;
+
+        /// <summary>
+        /// 假人补给药水需求等级（回收功能蓝红药适配，2026-11-22）。
+        /// 假人 OneKeySell 时作为 potionLevel 传入：等级 ≥ 此值的蓝红药保留，低于的出售。
+        /// <para>
+        /// <b>默认 1 = 保留所有蓝红药</b>（2026-11-22 晚调整）。
+        /// 原来默认 0 表示「不启用药品特殊规则」，而 0 会让 `蓝红药保留` 恒为 false ——
+        /// 假人每轮补给会把身上的红蓝药**全部一键卖掉再买回来**：
+        /// 买价高于卖价（×OneKeySellMultiplier）→ 净亏差价；金币不够时买不回来 → 裸奔打怪。
+        /// 设 1 后「等级 ≥ 1 的药」全部保留，等价于「药不参与回收」。
+        /// </para>
+        /// </summary>
+        public static int BotRestockPotionLevel { get; set; } = 1;
+
+        /// <summary>
+        /// 假人金币援助开关（2026-11-22）。**只对假人有效**，真人玩家完全不受影响。
+        /// <para>
+        /// 触发点：回城补给进门时（在「一键出售」之后、记基线之前）。
+        /// 自身金币 &lt; <see cref="BotGoldAidTarget"/> → 补齐到该值；≥ 该值 → 不援助，流程照常。
+        /// </para>
+        /// <para>
+        /// 为什么需要：法师 25~26 级会掉进「死亡→没钱→买不起蓝药→不能施法→平砍无伤害
+        /// →收入≈0」的死循环（实测一个法师从 17.5 万掉到 75 金币，
+        /// 同期战士 588 万、道士 572 万、刺客 4842 万）。
+        /// </para>
+        /// </summary>
+        public static bool BotGoldAidEnabled { get; set; } = true;
+
+        /// <summary>金币援助目标金额（默认 50 万）。低于它才补，补到这个数为止。</summary>
+        public static long BotGoldAidTarget { get; set; } = 500000;
 
         public static void LoadVersion()
         {

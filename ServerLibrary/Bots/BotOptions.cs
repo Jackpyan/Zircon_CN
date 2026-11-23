@@ -74,6 +74,13 @@ namespace Server.Bots
         /// <summary>每次补给顺路买多少张回城卷（0 = 不买）。</summary>
         public int RestockBuyTownScroll { get; private init; }
 
+        /// <summary>
+        /// 假人补给药水需求等级（回收功能蓝红药适配）。
+        /// 假人 OneKeySell 时作为 potionLevel 传入：等级 ≥ 此值的蓝红药保留，低于的出售。
+        /// 0 = 不启用药品特殊规则（蓝红药按保留清单判定）。
+        /// </summary>
+        public int RestockPotionLevel { get; private init; }
+
         public int LevelCap { get; private init; }
         public int LogLevel { get; private init; }
         public int MaxFailures { get; private init; }
@@ -125,6 +132,7 @@ namespace Server.Bots
                 RestockBuyRed = Math.Max(0, Config.BotRestockBuyRed),
                 RestockBuyBlue = Math.Max(0, Config.BotRestockBuyBlue),
                 RestockBuyTownScroll = Math.Max(0, Config.BotRestockBuyTownScroll),
+                RestockPotionLevel = Math.Max(0, Config.BotRestockPotionLevel),
                 LevelCap = Math.Max(0, Config.BotLevelCap),
                 LogLevel = Config.BotLogLevel,
                 MaxFailures = Math.Max(1, Config.BotMaxFailures),

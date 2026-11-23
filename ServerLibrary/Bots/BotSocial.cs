@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Library.Network.ClientPackets;
 using C = Library.Network.ClientPackets;
 using Library.SystemModels;
@@ -25,6 +25,25 @@ namespace Server.Bots
     public static class BotSocial
     {
         private static DateTime _nextGuildSweep = DateTime.MinValue;
+
+        /// <summary>
+        /// 下一次允许「退会」的时间（2026-11-22）。
+        /// <para>
+        /// 用户要求：换会**不要一次全执行**，前一人退会后下一人随机间隔 10~60 分钟再退。
+        /// 退会会向全会成员广播 <c>GuildKick</c> + <c>GuildChanged</c>，
+        /// 100 个假人同时退会会把主循环顶住，也会在客户端刷出一片「XX 离开了行会」。
+        /// </para>
+        /// </summary>
+        private static DateTime _nextGuildLeave = DateTime.MinValue;
+
+        /// <summary>行会职位名（与引擎的 Rank 字符串一致，客户端直接显示）。</summary>
+        private const string RankLeader = "会长";
+
+        private const string RankViceLeader = "副会长";
+
+        private const string RankTreasurer = "财政部长";
+
+        private const string RankMember = "成员";
         private static DateTime _nextGroupSweep = DateTime.MinValue;
 
         /// <summary>每轮社交扫描的入口（由 BotRoster 调用）。</summary>
@@ -115,13 +134,47 @@ namespace Server.Bots
         #region 行会（P3-1）
 
         /// <summary>配置里的行会名列表（逗号分隔）。</summary>
+        /// <summary>
+        /// 假人行会名清单，**唯一来源是 <c>Bots/guilds.txt</c>**（2026-11-22 二次调整）。
+        /// <para>
+        /// 文件不存在 → 返回空列表并打一条告警，调用方全部提前返回：
+        /// 建会 / 入会 / 换会 / 退会**全部暂停**。
+        /// 这是安全阀 —— 否则误删文件会被当成「清单为空」，所有假人所在会都算「不在清单」，
+        /// 一次误删就把行会系统清空。
+        /// </para>
+        /// <para>
+        /// 文件存在时按内容走，最多取前 5 个（见 <see cref="EffectiveGuildNames"/>）。
+        /// </para>
+        /// </summary>
         private static List<string> GuildNames()
         {
-            return (Config.BotGuildNames ?? string.Empty)
-                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .ToList();
+            List<string> names = BotData.Guilds();
+
+            if (names.Count == 0)
+            {
+                BotData.WarnGuildsMissing();
+                return names;
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// 实际要建的行会清单（2026-11-22）：**最多 5 个**，超出只取前 5 个。
+        /// <para>
+        /// 名单里只有 3 个就建 3 个；有 8 个也只建前 5 个 —— 避免运维往里塞一堆名字
+        /// 把 <c>BotGuildCount</c> 的语义搞乱。
+        /// </para>
+        /// </summary>
+        private static List<string> EffectiveGuildNames()
+        {
+            const int MaxGuilds = 5;
+
+            List<string> names = GuildNames();
+
+            if (names.Count <= MaxGuilds) return names;
+
+            return names.GetRange(0, MaxGuilds);
         }
 
         /// <summary>
@@ -141,15 +194,24 @@ namespace Server.Bots
 
             EnsureGuilds();
             JoinGuilds();
+
+            // 2026-11-22 追加三步（顺序有讲究）：
+            //   ① 先给在会的人排职位（新入会的人才有 Rank）
+            //   ② 再把「会名不在清单里」的假人逐个退会（10~60 分钟节流）
+            //   ③ 最后清理空掉的旧会，避免新假人又被塞进废弃行会
+            AssignRanks();
+            MigrateGuilds();
+            CleanupStaleGuilds();
         }
 
         /// <summary>行会数量不够就建一个（每轮最多建一个，避免同一帧连着建）。</summary>
         private static void EnsureGuilds()
         {
-            List<string> names = GuildNames();
+            List<string> names = EffectiveGuildNames();
 
             if (names.Count == 0) return;
 
+            // 名单有 3 个就建 3 个；名单有 8 个也只建前 5 个（EffectiveGuildNames 已截断）。
             int want = Math.Clamp(Config.BotGuildCount, 0, names.Count);
 
             for (int i = 0; i < want; i++)
@@ -252,6 +314,12 @@ namespace Server.Bots
                 if (bot?.Character == null) continue;
                 if (bot.Character.GuildMember != null) continue;
 
+                // 2026-11-22：**退会冷却内不要邀请**。
+                // 引擎规定退会后 GuildTime = 现在 + 1 天，冷却内 GuildJoin 一定失败；
+                // 不跳过的话，换会的假人会在这一整天里每 20 秒刷一条「入会失败」，
+                // 而且邀请对象会一直挂在 GuildInvitation 上。
+                if (bot.Character.GuildTime > SEnvir.Now) continue;
+
                 // 上一轮发过邀请但没接受（比如中间被打断），先把它接受掉。
                 if (bot.GuildInvitation != null)
                 {
@@ -286,9 +354,197 @@ namespace Server.Bots
             }
         }
 
+        /// <summary>
+        /// 给假人行会排职位（2026-11-22）：会长 1 / 副会长 1 / 财政部长 1 / 其余成员。
+        /// <para>
+        /// <b>每轮只处理一个行会</b>：每次 <c>GuildEditMember</c> 都会向全会广播一次
+        /// <c>GuildUpdate</c>，20 人的会改一遍就是 20 次广播；5 个会一起改会把主循环顶住。
+        /// </para>
+        /// <para>
+        /// 引擎的两个细节：① 只有会长能调 <c>GuildEditMember</c>；
+        /// ② 改自己时引擎会跳过 Permission、但 <c>Rank</c> 照样生效 —— 所以会长自己的
+        /// 「会长」头衔也设得上。
+        /// </para>
+        /// </summary>
+        private static void AssignRanks()
+        {
+            List<string> names = GuildNames();
+
+            if (names.Count == 0) return;
+
+            foreach (string name in names)
+            {
+                GuildInfo guild = FindGuild(name);
+
+                if (guild == null) continue;
+
+                GuildMemberInfo leader = guild.Members.FirstOrDefault(
+                    x => (x.Permission & GuildPermission.Leader) == GuildPermission.Leader);
+
+                PlayerObject leaderPlayer = leader?.OnlinePlayer;
+
+                // 会长不在线就改不了（引擎要求由会长本人发指令），下轮再说。
+                if (leaderPlayer == null) continue;
+
+                // 稳定排序：按成员索引排，保证「副会长 / 财政部长」不会每轮换人。
+                List<GuildMemberInfo> ordered = guild.Members
+                    .Where(x => x.Character != null)
+                    .OrderBy(x => x.Index)
+                    .ToList();
+
+                if (ordered.Count == 0) continue;
+
+                bool changed = false;
+
+                for (int i = 0; i < ordered.Count; i++)
+                {
+                    GuildMemberInfo member = ordered[i];
+
+                    string rank = i == 0 ? RankLeader
+                        : i == 1 ? RankViceLeader
+                        : i == 2 ? RankTreasurer
+                        : RankMember;
+
+                    GuildPermission permission = i == 0 ? GuildPermission.Leader
+                        : i == 1 ? GuildPermission.AddMember | GuildPermission.RemoveMember
+                                   | GuildPermission.EditNotice | GuildPermission.StartWar
+                        : i == 2 ? GuildPermission.Storage | GuildPermission.FundsRepair
+                                   | GuildPermission.FundsMerchant | GuildPermission.FundsMarket
+                        : GuildPermission.None;
+
+                    if (string.Equals(member.Rank, rank, StringComparison.Ordinal)) continue;
+
+                    leaderPlayer.GuildEditMember(new C.GuildEditMember
+                    {
+                        Index = member.Index,
+                        Rank = rank,
+                        Permission = permission,
+                    });
+
+                    changed = true;
+                }
+
+                // 一轮只动一个会，改完就返回，剩下的下一轮（20 秒后）继续。
+                if (changed) return;
+            }
+        }
+
+        /// <summary>
+        /// 换会（2026-11-22）：假人所在行会名**不在清单里** → 退会，之后由
+        /// <see cref="JoinGuilds"/> 按「加入未满的会」或「新建清单里的会」重新安置。
+        /// <para>
+        /// <b>节流</b>：全局一次只退一个，前一人退会后随机等 10~60 分钟再退下一个
+        /// （<c>BotGuildLeaveMinMinutes</c> / <c>BotGuildLeaveMaxMinutes</c>）。
+        /// </para>
+        /// <para>
+        /// <b>会长最后退</b>：引擎 <c>GuildLeave</c> 只在「会内 >1 人 且 没有其他会长」时拒绝，
+        /// 所以先退普通成员，等会里只剩会长一人时他就能退了（空会交给
+        /// <see cref="CleanupStaleGuilds"/> 删掉）。
+        /// </para>
+        /// <para>
+        /// ⚠ 引擎规定退会后 <c>Character.GuildTime = 现在 + 1 天</c>，这一天内加入不了新会
+        /// （<c>GuildJoin</c> 会拒绝）。用户已确认接受这个冷却，所以这里**不清**它。
+        /// </para>
+        /// </summary>
+        private static void MigrateGuilds()
+        {
+            if (SEnvir.Now < _nextGuildLeave) return;
+
+            List<string> names = GuildNames();
+
+            if (names.Count == 0) return;
+
+            foreach (BotSession session in BotRoster.AllSessions)
+            {
+                if (!session.IsOnline) continue;
+
+                PlayerObject player = session.Connection?.Player;
+
+                GuildMemberInfo member = player?.Character?.GuildMember;
+
+                if (member?.Guild == null) continue;
+
+                // 会名还在清单里 → 不用动。
+                if (names.Exists(x => string.Compare(x, member.Guild.GuildName, StringComparison.OrdinalIgnoreCase) == 0))
+                    continue;
+
+                bool isLeader = (member.Permission & GuildPermission.Leader) == GuildPermission.Leader;
+
+                // 会长必须最后走：会里还有别人时先退成员。
+                if (isLeader && member.Guild.Members.Count > 1) continue;
+
+                string guildName = member.Guild.GuildName;
+                int left = member.Guild.Members.Count - 1;
+
+                player.GuildLeave();
+
+                if (player.Character.GuildMember != null)
+                {
+                    BotLog.Warn(session.Profile.Seq, string.Format("退会失败：{0}", guildName));
+                    continue;
+                }
+
+                int minMinutes = Math.Max(1, Config.BotGuildLeaveMinMinutes);
+                int maxMinutes = Math.Max(minMinutes, Config.BotGuildLeaveMaxMinutes);
+
+                _nextGuildLeave = SEnvir.Now.AddMinutes(SEnvir.Random.Next(minMinutes, maxMinutes + 1));
+
+                BotLog.Info(session.Profile.Seq, string.Format(
+                    "已退出行会「{0}」（会内还剩 {1} 人，{2} 分钟后才允许下一个人退会）",
+                    guildName, left, (int)(_nextGuildLeave - SEnvir.Now).TotalMinutes));
+
+                return;
+            }
+        }
+
+        /// <summary>
+        /// 清理废弃行会（2026-11-22）：**空会 且 名字不在清单里** → 删除。
+        /// <para>
+        /// 不删的话，空会会一直挂在 <c>GuildInfoList</c> 里占着名字，
+        /// 而 <see cref="JoinGuilds"/> 只看「有没有空位」，会把新假人又塞进这个废弃行会。
+        /// </para>
+        /// <para>
+        /// 三道保险：① 有成员的会不删；② 清单里的会不删（等着被重新填满）；
+        /// ③ 有城堡/有仓库物品的会不删（删除会破坏关联数据）。
+        /// </para>
+        /// </summary>
+        private static void CleanupStaleGuilds()
+        {
+            List<string> names = GuildNames();
+
+            if (names.Count == 0) return;
+
+            List<GuildInfo> stale = null;
+
+            foreach (GuildInfo guild in SEnvir.GuildInfoList.Binding)
+            {
+                if (guild == null || guild.StarterGuild) continue;
+                if (guild.Members.Count > 0) continue;
+                if (guild.Conquest != null) continue;
+                if (guild.Items.Count > 0) continue;
+
+                if (names.Exists(x => string.Compare(x, guild.GuildName, StringComparison.OrdinalIgnoreCase) == 0))
+                    continue;
+
+                (stale ??= new List<GuildInfo>()).Add(guild);
+            }
+
+            if (stale == null) return;
+
+            foreach (GuildInfo guild in stale)
+            {
+                BotLog.Info(0, string.Format("清理废弃行会：{0}（空会且不在清单里）", guild.GuildName));
+                guild.Delete();
+            }
+        }
+
         private static GuildInfo PickJoinableGuild()
         {
             List<string> names = GuildNames();
+
+            if (names.Count == 0) return null;
+
+            HashSet<string> botNames = BotNameSet();
 
             foreach (string name in names)
             {
@@ -297,10 +553,47 @@ namespace Server.Bots
                 if (guild == null) continue;
                 if (guild.Members.Count >= guild.MemberLimit) continue;
 
+                // 2026-11-22：**每会只放 BotGuildBotLimit 个假人**，剩下的位置留给真人。
+                // 引擎的 MemberLimit 是「10 + 成员格」= 30，但假人不能把 30 个位置占满，
+                // 否则真人玩家永远进不了会。
+                if (CountBotsInGuild(guild, botNames) >= Config.BotGuildBotLimit) continue;
+
                 return guild;
             }
 
             return null;
+        }
+
+        /// <summary>当前所有假人的角色名集合（用于区分「会里哪些成员是假人」）。</summary>
+        private static HashSet<string> BotNameSet()
+        {
+            HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (BotSession session in BotRoster.AllSessions)
+            {
+                string name = session.Character?.CharacterName ?? session.Profile?.CharacterName;
+
+                if (!string.IsNullOrEmpty(name)) names.Add(name);
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// 会里的假人数量（离线成员也算 —— 它们仍然是行会成员，占着位置）。
+        /// </summary>
+        private static int CountBotsInGuild(GuildInfo guild, HashSet<string> botNames)
+        {
+            int count = 0;
+
+            foreach (GuildMemberInfo member in guild.Members)
+            {
+                string name = member.Character?.CharacterName;
+
+                if (name != null && botNames.Contains(name)) count++;
+            }
+
+            return count;
         }
 
         #endregion
