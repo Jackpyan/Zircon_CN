@@ -872,7 +872,8 @@ namespace Client.Envir.Translations
         public override string StorageDialogFilterItemLabel { get; set; } = "物品:";
         public override string StorageDialogFilterClearButtonLabel { get; set; } = "清理";
         public override string StorageDialogStorageTab { get; set; } = "仓库";
-        public override string StorageDialogPartsTab { get; set; } = "部件";
+        // 2026-11-23：原名「部件」，玩家根本认不出这是放碎片的地方（用户反馈「没看见过」）。
+        public override string StorageDialogPartsTab { get; set; } = "碎片仓库";
 
         public override string TradeDialogTitle { get; set; } = "交易窗口";
         public override string TradeDialogUserLabel { get; set; } = "用户";

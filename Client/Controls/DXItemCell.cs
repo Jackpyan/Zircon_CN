@@ -1,4 +1,4 @@
-using Client.Envir;
+﻿using Client.Envir;
 using Client.Models;
 using Shared.Rendering;
 using Client.Scenes;
@@ -1246,7 +1246,12 @@ namespace Client.Controls
                     if ((Item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) return false;
                     if (!MapObject.User.InSafeZone) return false;
                     if (GridType != GridType.Inventory && GridType != GridType.Equipment) return false;
-                    if (!Item.Info.CanStore) return false;
+                    // 2026-11-23：**去掉 `CanStore` 拦截**。
+                    // 用户实测：仓库没满、安全区内，装备仍然放不进去 —— 因为本库 System.db 里
+                    // 装备类物品的 `CanStore` 是 false（引擎默认 true，这批数据不是按默认生成的）。
+                    // 服务端 `ItemMove` 根本不校验这个字段（只拦 ItemPart），
+                    // 所以客户端拦下来等于「客户端比服务端更严格」，表现就是「点了没反应」。
+                    // 绑定/结婚/锁定等真正的限制在下面和上面的 Flags 判断里，不受影响。
                     if (Item.Info.ItemEffect == ItemEffect.ItemPart) return false;
                     break;
 
