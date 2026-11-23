@@ -649,3 +649,15 @@ input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px #54
     .bot-detail-body { grid-template-columns: 1fr; }
     .item-card { width: 100%; }
 }
+
+/* 日志过滤条（2026-11-22）：四维过滤 + 条数上限，避免几千条日志刷不动页面 */
+.log-filter { flex-wrap: wrap; margin-bottom: 10px; }
+.log-filter input, .log-filter select {
+    min-height: 34px; padding: 0 10px; border: 1px solid var(--line);
+    background: #0b1013; color: var(--text); font: 12px var(--mono); border-radius: 4px;
+}
+.log-filter input { min-width: 220px; }
+.log-filter input::placeholder { color: #4c5b60; }
+.log-filter-count { margin-left: auto; color: #6d7f85; font: 11px var(--mono); white-space: nowrap; }
+/* 有过滤条时日志区让出高度，避免撑出滚动条 */
+.log-filter + .log-console { height: calc(100vh - 250px); }

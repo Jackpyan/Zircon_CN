@@ -30,6 +30,10 @@
         {
             <RadzenButton Text="转换数据库加密" Icon="enhanced_encryption" ButtonStyle="ButtonStyle.Light" Click="Reencrypt" />
         }
+        @if (_canOwner)
+        {
+            <RadzenButton Text="初始化行会名单" Icon="groups" ButtonStyle="ButtonStyle.Light" Click="InitBotGuildList" />
+        }
         <RadzenButton Text="保存配置" Icon="save" ButtonStyle="ButtonStyle.Primary" Click="Save" />
     </div>
 </div>
@@ -135,6 +139,22 @@
         bool changed = await ConfigurationManager.CheckClientVersionAsync(user);
         HasError = false;
         Message = changed ? "客户端版本哈希已变化，在线玩家已收到更新公告。" : "客户端版本哈希没有变化。";
+    }
+
+    /// <summary>
+    /// 初始化假人行会名单（2026-11-22）：在运行目录 <c>Bots/guilds.txt</c> 建一份模板。
+    /// 文件已存在时提示失败、不覆盖 —— 误点按钮不能把已有清单冲掉。
+    /// </summary>
+    private async Task InitBotGuildList()
+    {
+        if (!_canOwner) { HasError = true; Message = "权限不足：该操作仅限主密码登录的管理员。"; return; }
+
+        string user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "unknown";
+
+        (bool ok, string message) = ConfigurationManager.InitializeBotGuildList(user);
+
+        HasError = !ok;
+        Message = message;
     }
 
     private Task LocalSync() => RunOwner(ConfigurationManager.LocalSyncAsync, "System.db 已同步到客户端 Data 目录。");

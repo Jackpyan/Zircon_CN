@@ -176,7 +176,59 @@ public static class UiText
         ["BotNightMinHour"] = "夜间作息开始（点）",
         ["BotNightMaxHour"] = "夜间作息结束（点）",
         ["BotNightScalePercent"] = "夜间在线比例（%）",
-        ["BotNightEnabled"] = "启用夜间作息"
+        ["BotNightEnabled"] = "启用夜间作息",
+        ["BotEnabled"] = "启用假人系统",
+        ["BotTargetOnline"] = "目标在线人数",
+        ["BotMinOnline"] = "在线人数下限",
+        ["BotMaxOnline"] = "在线人数上限",
+        ["BotMaxChangePerTick"] = "每轮最多增减人数",
+        ["BotAutoSkill"] = "按等级自动补技能",
+        ["BotLevelCap"] = "假人等级上限（0=不封顶）",
+        ["BotHuntMaps"] = "允许练级的地图索引（逗号分隔）",
+        ["BotAvoidMaps"] = "禁止进入的地图索引（逗号分隔）",
+        ["BotMaxFailures"] = "连续上线失败上限（超过标记故障）",
+        ["BotMapCapacity"] = "同图假人上限",
+        ["BotRespectRealPlayerTags"] = "尊重真人标记（不抢真人认领的怪）",
+        ["BotSkipBoss"] = "跳过 BOSS（留给真人）",
+        ["BotChatEnabled"] = "启用假人聊天",
+        ["BotChatIntervalMinSeconds"] = "同一假人说话最小间隔（秒）",
+        ["BotChatIntervalMaxSeconds"] = "同一假人说话最大间隔（秒）",
+        ["BotChatWorldEnabled"] = "允许上世界频道",
+        ["BotChatWorldMinLevel"] = "世界频道最低等级",
+        ["BotChatWorldPercent"] = "上世界频道概率（%）",
+        ["BotChatWorldCooldownSeconds"] = "全服世界频道最小间隔（秒）",
+        ["BotWalkPauseEnabled"] = "启用走路停顿",
+        ["BotRunEnabled"] = "启用跑步",
+        ["BotTownStrollEnabled"] = "启用城里闲逛",
+        ["BotTownStrollPercent"] = "闲逛概率（%）",
+        ["BotMistakeEnabled"] = "启用拟人失误",
+        ["BotMistakePerHour"] = "每小时最多失误次数",
+        ["BotMapRotateEnabled"] = "启用定时换图",
+        ["BotSocialEnabled"] = "启用假人社交",
+        ["BotGuildEnabled"] = "启用假人行会",
+        ["BotGuildCount"] = "建几个假人行会",
+        ["BotGuildNames"] = "假人行会名称（逗号分隔）",
+        ["BotGuildMinLevel"] = "建会资格等级",
+        ["BotGuildMembers"] = "每个行会成员数",
+        ["BotGuildGrantGold"] = "建会注资金币",
+        ["BotGoldAidEnabled"] = "启用假人金币援助（补给前补齐）",
+        ["BotGoldAidTarget"] = "金币援助目标金额（低于此值补齐）",
+        ["BotGuildBotLimit"] = "每会最多假人数（其余留给真人）",
+        ["BotGuildLeaveMinMinutes"] = "换会退会最小间隔（分钟）",
+        ["BotGuildLeaveMaxMinutes"] = "换会退会最大间隔（分钟）",
+        ["BotPkEnabled"] = "启用假人 PK",
+        ["BotPkIntervalMinutes"] = "PK 最小间隔（分钟）",
+        ["BotPkRadius"] = "发现红名半径（格）",
+        ["BotGroupEnabled"] = "启用假人组队",
+        ["BotGroupMinLevel"] = "组队最低等级",
+        ["BotGroupLevelGap"] = "组队最大等级差",
+        ["BotTopSlowEnabled"] = "启用占榜降速",
+        ["BotTopRankLimit"] = "占榜名次上限",
+        ["BotTopHoldMinutes"] = "连续占榜多少分钟后降速",
+        ["BotTopSlowMinutes"] = "降速持续分钟数",
+        ["BotTopSlowMinLevel"] = "参与降速的最低等级",
+        ["BotRebirthMinLevel"] = "转生最低等级",
+        ["BotRebirthMaxLevel"] = "转生最高等级",
     };
 
     private static readonly IReadOnlyDictionary<string, string> EnumLabels = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -281,7 +333,19 @@ public static class UiText
 
     public static string GameDataField(string field) => GameDataFields.GetValueOrDefault(field, SplitIdentifier(field));
     public static string ConfigSection(string section) => ConfigSections.GetValueOrDefault(section, section);
-    public static string ConfigField(string field) => ConfigFields.GetValueOrDefault(field, SplitIdentifier(field));
+    /// <summary>
+    /// 配置项标题（2026-11-22）：假人配置统一显示成 <c>中文(BotXxx)</c>。
+    /// <para>
+    /// 假人有 67 个配置项，纯中文标题仍然容易和引擎原有配置混在一起，
+    /// 也对不上 <c>Server.ini</c> 里的键名；带出英文原键，运维改 ini 时能直接对照。
+    /// </para>
+    /// </summary>
+    public static string ConfigField(string field)
+    {
+        string text = ConfigFields.GetValueOrDefault(field, SplitIdentifier(field));
+
+        return field.StartsWith("Bot", StringComparison.Ordinal) ? text + "(" + field + ")" : text;
+    }
     public static string AuditAction(string action) => AuditActions.GetValueOrDefault(action, LocalizeAuditPrefix(action));
     public static string AuditRole(string? role) => role switch
     {

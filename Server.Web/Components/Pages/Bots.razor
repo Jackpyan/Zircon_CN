@@ -222,6 +222,7 @@
                             <th style="width:92px;">角色</th>
                             <th style="width:44px;">职业</th>
                             <th style="width:52px;">等级</th>
+                            <th style="width:120px;">行会</th>
                             <th style="width:78px;">HP</th>
                             <th style="width:72px;">MP</th>
                             <th style="width:86px;">地图</th>
@@ -256,6 +257,7 @@
                                         <small>@(row.ExpPercent)%</small>
                                     </div>
                                 </td>
+                                <td title="@row.GuildText">@GuildShort(row.GuildText)</td>
                                 <td>
                                     <div class="cell-stack">
                                         <b>@row.CurrentHealth / @row.MaxHealth</b>
@@ -2428,6 +2430,17 @@
     };
 
     /// <summary>状态胶囊配色：打怪绿、赶路/补给琥珀、死亡红、待机灰。</summary>
+    /// <summary>
+    /// 行会列显示（2026-11-22）：`行会名/职位`，超长截断，完整内容放 title。
+    /// 没有行会时显示「无」。
+    /// </summary>
+    private static string GuildShort(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "无";
+
+        return text.Length <= 10 ? text : text.Substring(0, 9) + "…";
+    }
+
     private static string StatePillClass(BotSnapshot row)
     {
         if (row.Broken) return "broken";

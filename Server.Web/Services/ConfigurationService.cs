@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -24,6 +24,22 @@ public sealed class ConfigurationService(AdminAuditService audit, IGameServerCon
         nameof(Config.MasterPassword), nameof(Config.SyncKey), nameof(Config.MailPassword),
         nameof(Config.EncryptionKey), nameof(Config.ReceiverEMail)
     };
+
+    /// <summary>
+    /// 初始化假人行会名单文件（2026-11-22）。
+    /// <para>
+    /// 文件已存在时**直接失败**，不覆盖 —— 运维点错按钮不能把已有的行会清单冲掉。
+    /// 文件缺失期间假人的建会/入会/换会/退会全部暂停（<see cref="Server.Bots.BotData"/> 有安全阀）。
+    /// </para>
+    /// </summary>
+    public (bool Ok, string Message) InitializeBotGuildList(string user)
+    {
+        bool ok = Server.Bots.BotData.TryCreateGuildsFile(out string message);
+
+        audit.Record(user, ok ? "初始化假人行会名单" : "初始化假人行会名单（失败）", message);
+
+        return (ok, message);
+    }
 
     public IReadOnlyList<ConfigurationSectionModel> Read()
     {
