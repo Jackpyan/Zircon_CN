@@ -198,7 +198,7 @@ namespace Client.Scenes.Views
             // 2026-11-23：标题**靠左**，把中间到右侧的空间腾出来给按钮，
             // 原来居中时和「回收设置 / 丢弃」挤在一起（用户反馈太丑）。
             TitleLabel.AutoSize = true;
-            TitleLabel.Location = new Point(DisplayArea.Location.X + 8, TitleLabel.Location.Y);
+            TitleLabel.Location = new Point(DisplayArea.Location.X + 8, TitleLabel.Location.Y + 4);
 
             Grid = new DXItemGrid
             {
@@ -311,14 +311,15 @@ namespace Client.Scenes.Views
             };
             SortButton.MouseClick += SortButton_MouseClick;
 
+            // 2026-11-23（用户要求）：丢弃改成**文字按钮「移除」**，
+            // 原来的箱子图标让给「一键回收」——有回收之后丢弃用得少，图标给更常用的功能。
             TrashButton = new DXButton
             {
-                LibraryFile = LibraryFile.GameInter,
-                Index = 358,
+                ButtonType = ButtonType.SmallButton,
                 Parent = this,
-                // 2026-11-23：**丢弃挪到标题栏**（关闭按钮左边），底部那一行让给「一键回收」。
-                // 有回收之后丢弃用得少，标题栏足够放。
-                Location = new Point(CloseButton.Location.X - 30, 4),
+                Size = new Size(46, SmallButtonHeight),
+                Label = { Text = "移除" },
+                Location = new Point(CloseButton.Location.X - 46 - 3, CloseButton.Location.Y + 7),
                 Hint = CEnvir.Language.InventoryDialogTrashButtonHint
             };
             TrashButton.MouseClick += TrashButton_MouseClick;
@@ -344,14 +345,11 @@ namespace Client.Scenes.Views
             RecycleButton = new DXButton
             {
                 LibraryFile = LibraryFile.GameInter,
-                // 2026-11-23：**356 是竖分隔条**（用户实测：按钮位置显示一条竖黑条），
-                // 换成 354（出售图标，方形）。354 原本给 SellButton 用，但两个按钮
-                // 分属不同模式（Normal 显示回收 / Sell 显示出售），不会同屏出现。
-                Index = 354,
+                // 2026-11-23：用原来「丢弃」的箱子图标（358），方形、辨识度高。
+                Index = 358,
                 Parent = this,
-                // 2026-11-23：**占原「丢弃」的位置**（218,384）。
-                // 窗口是固定尺寸的图片控件（Interface 图 130），x=256 贴右边缘会被裁掉；
-                // 218 是底部一行能完整显示的最右位置，丢弃挪去标题栏后这里正好空出来。
+                // 2026-11-23（用户要求）：图标保持箱子（358），位置**排到「整理」图标后面**
+                // （底部行：排序 180 / 回收 218）。标题栏只保留：回收设置 / 移除 / 关闭。
                 Location = new Point(218, 384),
                 Hint = "一键回收（安全区内可用）",
                 Enabled = true
@@ -365,11 +363,13 @@ namespace Client.Scenes.Views
             {
                 ButtonType = ButtonType.SmallButton,
                 Parent = this,
-                Size = new Size(46, SmallButtonHeight),
+                Size = new Size(68, SmallButtonHeight),
                 Label = { Text = "回收设置" },
                 Hint = "启用开关 / 保留清单 / 是否存仓库"
             };
-            RecycleSetButton.Location = new Point(CloseButton.Location.X - 30 - 52, 5);
+            // 2026-11-23：靠右紧贴「移除」，并与关闭按钮同一水平线（原来 y=5 偏高、左边留白太多）
+            // 2026-11-23：y 再下移 4px（y=3 时用户反馈仍偏上，标题栏比按钮高）
+            RecycleSetButton.Location = new Point(CloseButton.Location.X - 46 - 3 - 68 - 3, CloseButton.Location.Y + 7);
             RecycleSetButton.MouseClick += (o, e) =>
             {
                 if (GameScene.Game.RecycleBox == null) return;
