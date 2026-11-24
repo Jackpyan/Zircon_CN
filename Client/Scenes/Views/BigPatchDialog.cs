@@ -358,14 +358,24 @@ namespace Client.Scenes.Views
             // 服务端拒绝 → 下一帧还是它 → 金币永远排不上（用户实测）。
             bool bagFull = true;
 
+            // 背包满时**还能合并**的物品种类：地上物品如果能叠进背包里同名的未满堆叠，
+            // 依然捡得起来（2026-11-23 用户实测：背包满但堆叠没到上限，捡不起来是错的）。
+            HashSet<ItemInfo> mergeable = new HashSet<ItemInfo>();
+
             if (scene.Inventory != null)
             {
                 foreach (ClientUserItem slot in scene.Inventory)
                 {
-                    if (slot != null) continue;
+                    if (slot == null)
+                    {
+                        bagFull = false;
+                        continue;
+                    }
 
-                    bagFull = false;
-                    break;
+                    ItemInfo info = slot.Info;
+
+                    if (info != null && info.StackSize > 1 && slot.Count < info.StackSize)
+                        mergeable.Add(info);
                 }
             }
             Point user = scene.User.CurrentLocation;
@@ -399,8 +409,9 @@ namespace Client.Scenes.Views
                             if (pass == 0 && isCurrency) continue;
                             if (pass == 1 && !isCurrency) continue;
 
-                            // 背包满 → 非货币物品跳过，先把金币捡了
-                            if (bagFull && !isCurrency) continue;
+                            // 背包满 → 非货币物品跳过（先把金币捡了）；
+                            // 例外：能叠进已有堆叠的物品照捡。
+                            if (bagFull && !isCurrency && !mergeable.Contains(itemObject.Item?.Info)) continue;
 
                             if (!ShouldPick(itemObject)) continue;
 
