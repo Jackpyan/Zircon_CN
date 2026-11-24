@@ -1,4 +1,4 @@
-using Library;
+﻿using Library;
 using Server.Envir;
 using Server.Models;
 using Server.Models.AutoPath;
@@ -230,7 +230,19 @@ namespace Server.Bots
 
             if (targets == null || targets.Count == 0) return false;
 
-            if (!AutoPathRoutePlanner.TryBuildCurrentPathTo(player, targets, false, out List<Point> path)) return false;
+            // 2026-11-24：**刷怪点本身可能站在不可走格上**（石刻墓穴这类迷宫图尤其明显，
+            // 刷怪区按区域刷点，点经常落在墙里/边缘）。
+            // A* 的 `Cells[x,y]` 只有可走格才非 null，目标在 null 格上就永远走不到
+            // → 所有候选全部失败 → 全部拉黑 → 整张图变成「黑洞」。
+            // 实测：79/100 假人一小时内在石刻墓穴系列撞「候选 40 个全部走不到（40 个被拉黑）」。
+            //
+            // 修法：把目标**扩展成它周围的可走格**（半径 1，不够再半径 2），
+            // 语义变成「走到这个点附近」，和 `TryGetNextStepNear` 一致。
+            HashSet<Point> reachable = ExpandToWalkable(player.CurrentMap, targets);
+
+            if (reachable.Count == 0) return false;
+
+            if (!AutoPathRoutePlanner.TryBuildCurrentPathTo(player, reachable, false, out List<Point> path)) return false;
 
             if (path == null || path.Count < 2) return false;
 
@@ -264,6 +276,61 @@ namespace Server.Bots
             next = path[1];
 
             return true;
+        }
+
+        /// <summary>
+        /// 把目标集合扩展成「目标本身 + 周围可走格」（2026-11-24）。
+        /// <para>
+        /// 刷怪点落在墙里/不可走格上时，A* 永远到不了 → 全部候选失败 → 整图拉黑。
+        /// 这里按半径 1、再半径 2 逐层扩展，只要能站到旁边就算到达。
+        /// </para>
+        /// </summary>
+        private static HashSet<Point> ExpandToWalkable(Map map, HashSet<Point> targets)
+        {
+            HashSet<Point> result = new HashSet<Point>();
+
+            if (map == null) return result;
+
+            // 目标本身可走 → 收；**同时收它周围 8 个可走格**。
+            // 只收「本身可走」是不够的：迷宫图里刷怪点常常是「可走但被地形围死」
+            // （A* 仍然到不了），扩到邻格后能落在它旁边，同样算到达。
+            foreach (Point target in targets)
+            {
+                if (map.GetCell(target) != null) result.Add(target);
+
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+
+                        Point neighbour = new Point(target.X + dx, target.Y + dy);
+
+                        if (map.GetCell(neighbour) != null) result.Add(neighbour);
+                    }
+                }
+            }
+
+            if (result.Count > 0) return result;
+
+            // 目标全在不可走格上：向外扩两圈找可走格
+            for (int radius = 1; radius <= 2 && result.Count == 0; radius++)
+            {
+                foreach (Point target in targets)
+                {
+                    for (int dx = -radius; dx <= radius; dx++)
+                    {
+                        for (int dy = -radius; dy <= radius; dy++)
+                        {
+                            Point point = new Point(target.X + dx, target.Y + dy);
+
+                            if (map.GetCell(point) != null) result.Add(point);
+                        }
+                    }
+                }
+            }
+
+            return result;
         }
 
         /// <summary>收集目标周围的**可走**格子。</summary>
