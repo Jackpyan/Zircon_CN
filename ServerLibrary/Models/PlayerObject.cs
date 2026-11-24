@@ -38,6 +38,21 @@ namespace Server.Models
         /// <summary>「背包已满」提示的节流时间（2026-11-23）。</summary>
         private DateTime _lastBagFullTime;
 
+        /// <summary>一键回收的统计结构（2026-11-23），供假人打诊断日志用。</summary>
+        public struct RecycleSummary
+        {
+            public int Sold;
+            public int Stored;
+            public int BagItems;
+            public int SkippedProtected;
+            public int SkippedNoPrice;
+        }
+
+        /// <summary>最近一次 <see cref="OneKeySell"/> 的统计。</summary>
+        public RecycleSummary LastRecycleSummary => _lastRecycleSummary;
+
+        private RecycleSummary _lastRecycleSummary;
+
         /// <summary>
         /// 拾取被拒（物品归属他人）时给客户端发系统提示（2026-11-15）。
         /// <para>
@@ -839,6 +854,7 @@ namespace Server.Models
             {
                 UserItem item = Inventory[i];
                 if (item == null) continue;
+
                 if ((item.Flags & UserItemFlags.Expirable) != UserItemFlags.Expirable) continue;
 
 
@@ -11086,31 +11102,49 @@ namespace Server.Models
         /// 一键出售核心处理（④⑤⑥ 三端共用）。
         /// storeToWarehouse：true=真人客户端（勾选保留的好装备存仓），false=假人（好装备不处理，留背包）。
         /// </summary>
-        public void OneKeySell(bool storeToWarehouse, int potionLevel)
+        /// <param name="botMode">
+        /// 假人模式（2026-11-23）：**跳过「是否启用」与「保留清单是否为空」两道校验**。
+        /// <para>
+        /// 假人角色从来没有设置过回收（<c>RecycleEnabled</c> 默认 false、设置文件也不存在），
+        /// 所以原来的校验会让假人每次都在第一句 return —— 表现就是「回城完全不卖货」，
+        /// 而旧的 needClear 卖货流程已经在回收改造里删掉了。
+        /// 假人不需要保留清单：好装备走「打到就穿」，背包里剩下的本来就该卖。
+        /// </para>
+        /// </param>
+        public int OneKeySell(bool storeToWarehouse, int potionLevel, bool botMode = false)
         {
             // 1. 安全区校验（三端统一，最高优先）
             if (!InSafeZone)
             {
                 Connection?.ReceiveChatWithObservers(con => "未在安全区，无法使用一键回收。", MessageType.System);
-                return;
+                return 0;
             }
 
             // 2. 校验保留清单生效
-            if (!RecycleEnabled)
+            if (!botMode)
             {
-                Connection?.ReceiveChatWithObservers(con => "尚未启用一键回收，请先在回收设置里勾选「启用」。", MessageType.System);
-                return;
-            }
+                if (!RecycleEnabled)
+                {
+                    Connection?.ReceiveChatWithObservers(con => "尚未启用一键回收，请先在回收设置里勾选「启用」。", MessageType.System);
+                    return 0;
+                }
 
-            if (string.IsNullOrWhiteSpace(RecycleKeepListText))
-            {
-                Connection?.ReceiveChatWithObservers(con => "尚未设置回收保留清单，无法一键出售。", MessageType.System);
-                return;
+                if (string.IsNullOrWhiteSpace(RecycleKeepListText))
+                {
+                    Connection?.ReceiveChatWithObservers(con => "尚未设置回收保留清单，无法一键出售。", MessageType.System);
+                    return 0;
+                }
             }
 
             int soldCount = 0;
             long goldAdded = 0;
             int storedCount = 0;
+
+            // 诊断用（2026-11-23）：统计被跳过的件数与原因，假人补给时会打进日志，
+            // 用来回答「为什么这次一件都没卖」。
+            int bagItems = 0;
+            int skippedNoPrice = 0;
+            int skippedProtected = 0;
             List<CellLinkInfo> changedLinks = new List<CellLinkInfo>();
 
             // 3. 扫描出售背包（Inventory，只扫背包）
@@ -11119,8 +11153,10 @@ namespace Server.Models
                 UserItem item = Inventory[i];
                 if (item == null) continue;
 
+                bagItems++;
+
                 // 3-1 背包保护：回城卷/符/毒药 + 所有红蓝药 —— 不卖也不存仓，原样留背包
-                if (背包保护(item)) continue;
+                if (背包保护(item)) { skippedProtected++; continue; }
 
                 // 不可售：绑定/锁定/垃圾/结婚
                 if (IsSellBlocked(item.Flags)) continue;
@@ -11141,22 +11177,29 @@ namespace Server.Models
 
                 // 未勾选的可售物品 → 出售
                 long price = (long)(item.Info.Price * Config.OneKeySellMultiplier);
-                if (price <= 0) continue;
+                if (price <= 0) { skippedNoPrice++; continue; }
 
                 goldAdded += price;
                 soldCount++;
 
+                // Count 必须在 Delete() **之前**取：删除后对象字段可能被重置，
+                // 读到 0 会让客户端走「部分扣除」分支，格子永远清不空。
+                int soldCountInSlot = (int)item.Count;
+
                 RemoveItem(item);
                 Inventory[i] = null;
                 item.Delete();
-                // Count = item.Count：客户端按「Link.Count == 格子物品 Count」判定整件清空，
-                // 写 0 会导致 Count>0 的物品走「部分扣除」分支而不清空格子。
-                changedLinks.Add(new CellLinkInfo { GridType = GridType.Inventory, Slot = i, Count = item.Count });
+
+                changedLinks.Add(new CellLinkInfo { GridType = GridType.Inventory, Slot = i, Count = soldCountInSlot });
             }
 
             if (changedLinks.Count > 0)
             {
-                Enqueue(new S.ItemsChanged { Links = changedLinks });
+                // 2026-11-23：**必须带 Success = true**。
+                // 客户端 Process(S.ItemsChanged) 第一句就是 `if (!p.Success) continue;`，
+                // 不写这个字段（默认 false）→ 整包被跳过 → 卖掉的东西还留在背包里，
+                // 要点「整理」重新拉数据才消失（用户实测）。
+                Enqueue(new S.ItemsChanged { Links = changedLinks, Success = true });
                 RefreshWeight();
             }
             else if (storedCount > 0)
@@ -11173,6 +11216,17 @@ namespace Server.Models
 
             // 6. 结果回包（出售件数/金币/存仓件数）
             Enqueue(new S.RecycleResult { SoldCount = soldCount, GoldAdded = goldAdded, StoredCount = storedCount });
+
+            _lastRecycleSummary = new RecycleSummary
+            {
+                Sold = soldCount,
+                Stored = storedCount,
+                BagItems = bagItems,
+                SkippedProtected = skippedProtected,
+                SkippedNoPrice = skippedNoPrice,
+            };
+
+            return soldCount;
         }
 
         /// <summary>

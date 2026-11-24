@@ -5422,41 +5422,53 @@ namespace Server.Bots
             // 进门先记下「进门前有多少药 / 多少卷」——
             // 收尾时用**增量**判定成功，而不是看存量。
             // 存量判定会误报：进门前本来就剩 2 瓶药，买不到新的也照样算「成功」。
-            if (_restockBaselinePotions < 0)
+            // 2026-11-23 重构：**卖货 + 金币援助挪到基线块外面**，并且要求「已在安全区」。
+            // <para>
+            // 原来写在「进门第一帧」的基线块里 —— 但进门那一刻假人可能还在城外
+            // （"跨图途中血线告急，回城补给"），服务端 `OneKeySell` 第一句就是安全区校验，
+            // 直接 return 0 → 这一轮补给再也不会卖货（标记已置 true）。
+            // 实测 BOT#13 背包里 200 个可卖材料，连续多轮补给一件没卖。
+            // 现在每帧重试，`InSafeZone` 一满足就卖，卖完置标记，本轮不再重复。
+            // </para>
+            if (!_restockSoldOnce && _player.InSafeZone)
             {
-                // 2026-11-22 回收功能（假人三触发点适配）：
-                // 回城补给前 / 背包满回城后 / 死亡复活后 —— 三个触发点全部汇聚到本方法，
-                // 每轮补给仅在进门时执行一次一键出售（先卖货腾格子、再记基线、再买药）。
-                // 必须在基线记录**之前**执行：低等级蓝红药会被卖掉，若先记基线再卖，
-                // 卖出的药会污染收尾的增量判定。
-                // 假人不存仓（storeToWarehouse: false），好装备沿用原有「打到就穿」逻辑，不在回收中处理。
-                if (!_restockSoldOnce)
+                _restockSoldOnce = true;
+
+                // botMode: true —— 假人跳过「启用/保留清单」校验，否则一句 return 什么都不卖
+                _player.OneKeySell(storeToWarehouse: false, potionLevel: Options.RestockPotionLevel, botMode: true);
+
+                // 诊断日志（2026-11-23）：不只记出售件数，也记「为什么没卖」——
+                // 背包里有货但全被跳过时，一眼能看出是被保护（卷/药）还是无价。
+                PlayerObject.RecycleSummary recycle = _player.LastRecycleSummary;
+
+                if (recycle.BagItems > 0)
                 {
-                    _restockSoldOnce = true;
-                    _player.OneKeySell(storeToWarehouse: false, potionLevel: Options.RestockPotionLevel);
-
-                    // 金币援助（2026-11-22，用户要求）：**只对假人有效**，补给前补齐到目标金额。
-                    //
-                    // 背景：法师 25~26 级会陷入「死亡→没钱→买不起蓝药→不能施法→平砍无伤害
-                    // →收入≈0」的死循环（实测 BOT#65 从 17.5 万一路掉到 75 金币，
-                    // 而同期战士 588 万、道士 572 万、刺客 4842 万）。
-                    //
-                    // 放在 OneKeySell **之后**：先把背包里的货卖掉算进收入，
-                    // 真的还不够才补 —— 避免「刚卖了几十万又白送 50 万」。
-                    // 超过阈值不援助，流程完全不变。
-                    if (Config.BotGoldAidEnabled && _player.Gold.Amount < Config.BotGoldAidTarget)
-                    {
-                        long grant = Config.BotGoldAidTarget - _player.Gold.Amount;
-
-                        _player.Gold.Amount = Config.BotGoldAidTarget;
-                        _player.GoldChanged();
-
-                        BotLog.Info(Profile.Seq, string.Format(
-                            "金币援助：{0:N0} → {1:N0}（补 {2:N0}，仅假人，补给前触发）",
-                            Config.BotGoldAidTarget - grant, Config.BotGoldAidTarget, grant));
-                    }
+                    BotLog.Debug(Profile.Seq, string.Format(
+                        "一键回收：出售 {0} 件、存仓 {1} 件｜背包 {2} 件，保护 {3}、无价 {4}",
+                        recycle.Sold, recycle.Stored, recycle.BagItems,
+                        recycle.SkippedProtected, recycle.SkippedNoPrice));
                 }
 
+                // 金币援助（2026-11-22，用户要求）：**只对假人有效**，补给前补齐到目标金额。
+                // 放在 OneKeySell 之后：先卖货算收入，真不够才补，避免「刚卖几十万又白送 50 万」。
+                if (Config.BotGoldAidEnabled && _player.Gold.Amount < Config.BotGoldAidTarget)
+                {
+                    long grant = Config.BotGoldAidTarget - _player.Gold.Amount;
+
+                    _player.Gold.Amount = Config.BotGoldAidTarget;
+                    _player.GoldChanged();
+
+                    BotLog.Info(Profile.Seq, string.Format(
+                        "金币援助：{0:N0} → {1:N0}（补 {2:N0}，仅假人，补给前触发）",
+                        Config.BotGoldAidTarget - grant, Config.BotGoldAidTarget, grant));
+                }
+            }
+
+            // 进门先记下「进门前有多少药 / 多少卷」——
+            // 收尾时用**增量**判定成功，而不是看存量。
+            // 存量判定会误报：进门前本来就剩 2 瓶药，买不到新的也照样算「成功」。
+            if (_restockBaselinePotions < 0)
+            {
                 _restockBaselinePotions = BotActions.CountPotion(_player, Stat.Health) + BotActions.CountPotion(_player, Stat.Mana);
                 _restockBaselineScrolls = BotActions.CountTownScroll(_player);
 
@@ -9048,6 +9060,16 @@ namespace Server.Bots
         {
             if (State != state)
             {
+                // 2026-11-23：**每次进入补给状态都重置卖货/基线标记**。
+                // 原来只在 FinishRestock 里复位；补给途中被打断（被怪追、死亡、状态被抢）
+                // 时 FinishRestock 不会跑，两个标记就一直卡着 →
+                // 下一次补给直接跳过「一键出售」，表现就是「这个假人从来不卖货」。
+                if (state == BotState.Restock)
+                {
+                    _restockBaselinePotions = -1;
+                    _restockSoldOnce = false;
+                }
+
                 // 赶路被打断：记下 Travel，战斗结束后自动接续（2026-11-20）。
                 if (State == BotState.Travel && state == BotState.Fight)
                 {
